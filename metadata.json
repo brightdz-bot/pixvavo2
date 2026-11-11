@@ -1,0 +1,8 @@
+{
+  "name": "دكاني | منصة التجارة الإلكترونية الجزائرية",
+  "description": "منصة ساس متعددة المستأجرين لإنشاء وإدارة المتاجر الإلكترونية في الجزائر مع الدفع عند الاستلام والتوصيل عبر الولايات.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

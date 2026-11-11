@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "Store": {
+      "title": "Store",
+      "description": "Multi-tenant merchant store definition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "subdomain": { "type": "string", "maxLength": 60, "pattern": "^[a-z0-9-]+$" },
+        "planId": { "type": "string", "maxLength": 50 },
+        "brandColor": { "type": "string", "maxLength": 20 },
+        "freeShippingThreshold": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "suspended", "trial"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "ownerId", "name", "subdomain", "planId", "status"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Store product with stock and pricing in Algerian Dinar (DZD)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "price": { "type": "number" },
+        "comparePrice": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "category": { "type": "string", "maxLength": 80 },
+        "stock": { "type": "number" },
+        "imageUrl": { "type": "string", "maxLength": 500 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "storeId", "title", "price", "stock", "isActive"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Store customer order with Cash On Delivery (COD) in Algeria",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "orderNumber": { "type": "string", "maxLength": 30 },
+        "storeId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 100 },
+        "customerPhone": { "type": "string", "maxLength": 20 },
+        "wilayaId": { "type": "string", "maxLength": 10 },
+        "wilayaName": { "type": "string", "maxLength": 50 },
+        "address": { "type": "string", "maxLength": 250 },
+        "subtotal": { "type": "number" },
+        "shippingFee": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["new", "confirmed", "shipping", "delivered", "cancelled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "orderNumber", "storeId", "customerName", "customerPhone", "wilayaId", "total", "status"]
+    }
+  },
+  "firestore": {
+    "/stores/{storeId}": {
+      "schema": "Store",
+      "description": "Stores collection isolated by storeId and owned by merchant ownerId"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Products partitioned by storeId with public read and merchant-only write"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders partitioned by storeId; public creation via checkout and merchant-only management"
+    }
+  }
+}

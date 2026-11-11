@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isPlatformAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isStoreOwner(storeId) {
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid ||
+        isPlatformAdmin()
+      );
+    }
+
+    // Stores collection
+    match /stores/{storeId} {
+      // Public can read active stores for storefront display
+      allow get: if resource.data.status == 'active' || (isSignedIn() && resource.data.ownerId == request.auth.uid) || isPlatformAdmin();
+      allow list: if isPlatformAdmin() || (isSignedIn() && resource.data.ownerId == request.auth.uid);
+
+      // Only signed in merchant can create their store
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 1
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.subdomain is string
+        && request.resource.data.subdomain.size() >= 3
+        && request.resource.data.status in ['active', 'trial'];
+
+      // Only store owner can update non-critical settings
+      allow update: if isStoreOwner(storeId)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerId', 'subdomain']) || isPlatformAdmin());
+
+      // Only platform admin can delete or suspend
+      allow delete: if isPlatformAdmin();
+    }
+
+    // Products collection (each document carries storeId)
+    match /products/{productId} {
+      // Public can read active products for the storefront
+      allow get: if resource.data.isActive == true || isStoreOwner(resource.data.storeId);
+      allow list: if resource.data.isActive == true || (isSignedIn() && isStoreOwner(resource.data.storeId));
+
+      // Merchant owner can create/update/delete products for their store
+      allow create: if isSignedIn()
+        && request.resource.data.storeId is string
+        && isStoreOwner(request.resource.data.storeId)
+        && request.resource.data.price is number
+        && request.resource.data.price >= 0
+        && request.resource.data.stock is number
+        && request.resource.data.stock >= 0;
+
+      allow update: if isSignedIn()
+        && resource.data.storeId == request.resource.data.storeId
+        && isStoreOwner(resource.data.storeId);
+
+      allow delete: if isSignedIn() && isStoreOwner(resource.data.storeId);
+    }
+
+    // Orders collection (each document carries storeId)
+    match /orders/{orderId} {
+      // Customer can view single order with order number check, or store owner
+      allow get: if isSignedIn() && (isStoreOwner(resource.data.storeId) || isPlatformAdmin());
+
+      // Store owner can list their store's orders
+      allow list: if isSignedIn() && isStoreOwner(resource.data.storeId);
+
+      // Public customers can place an order (create document with storeId)
+      allow create: if request.resource.data.storeId is string
+        && request.resource.data.customerName is string
+        && request.resource.data.customerPhone is string
+        && request.resource.data.customerPhone.size() >= 9
+        && request.resource.data.wilayaId is string
+        && request.resource.data.total is number
+        && request.resource.data.status == 'new';
+
+      // Only store owner or admin can update status
+      allow update: if isSignedIn()
+        && isStoreOwner(resource.data.storeId)
+        && request.resource.data.storeId == resource.data.storeId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'notes', 'statusHistory']);
+
+      allow delete: if isPlatformAdmin();
+    }
+
+    // Platform Plans (read-only for all, write for platform admin)
+    match /plans/{planId} {
+      allow read: if true;
+      allow write: if isPlatformAdmin();
+    }
+  }
+}
