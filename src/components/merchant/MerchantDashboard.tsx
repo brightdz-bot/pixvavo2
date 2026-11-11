@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
+import { SAAS_PLANS } from '../../data/plans';
 import { Product, Order, OrderStatus, Store } from '../../types';
 import { OverviewTab } from './OverviewTab';
 import { ProductsTab } from './ProductsTab';
@@ -47,6 +48,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
   };
 
   const handleSaveProduct = (prod: Product) => {
+    const isNew = !products.some(p => p.id === prod.id);
+    const plan = SAAS_PLANS.find(p => p.id === store.planId);
+    if (isNew && plan && products.length >= plan.maxProducts) {
+      showToast(`وصلت للحد الأقصى لخطتك (${plan.maxProducts} منتج). رقّ خطتك لإضافة المزيد`);
+      return;
+    }
     storage.saveProduct(prod);
     setProducts(storage.getProducts(store.id));
     showToast('تم حفظ المنتج وتحديث بيانات المخزون بنجاح');
@@ -66,7 +73,16 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
       const found = updatedOrders.find(o => o.id === orderId);
       if (found) setSelectedOrder(found);
     }
-    showToast(`تم تحديث حالة الطلب إلى "${newStatus}"`);
+    const statusLabels: Record<OrderStatus, string> = {
+      new: 'جديد',
+      confirmed: 'مؤكد',
+      shipping: 'قيد التوصيل',
+      delivered: 'تم التسليم',
+      cancelled: 'ملغي'
+    };
+    // Cancelling or re-opening an order changes stock, so refresh products too
+    setProducts(storage.getProducts(store.id));
+    showToast(`تم تحديث حالة الطلب إلى "${statusLabels[newStatus]}"`);
   };
 
   const handleRestockProduct = (prodId: string, addCount: number) => {

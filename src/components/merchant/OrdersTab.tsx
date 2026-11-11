@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Order, OrderStatus } from '../../types';
 import { formatDZD } from '../../data/wilayas';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 import {
   Search,
   Filter,
@@ -35,6 +36,7 @@ export const OrdersTab: React.FC<Props> = ({
   const [search, setSearch] = useState<string>('');
   const [printSlipOrder, setPrintSlipOrder] = useState<Order | null>(null);
   const [statusChangeNote, setStatusChangeNote] = useState<string>('');
+  const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
 
   const statusConfigs: Record<OrderStatus, { label: string; color: string; badgeClass: string; icon: any }> = {
     new: {
@@ -105,14 +107,26 @@ export const OrdersTab: React.FC<Props> = ({
   };
 
   const handleCancelOrder = (order: Order) => {
-    const reason = prompt('يرجى كتابة سبب إلغاء الطلب (مثال: الزبون لا يجيب، ألغى رغبته):', 'الزبون غير مهتم');
-    if (reason !== null) {
-      onUpdateStatus(order.id, 'cancelled', reason);
-    }
+    setOrderToCancel(order);
   };
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        isOpen={!!orderToCancel}
+        danger
+        title="إلغاء الطلب"
+        message={orderToCancel ? `سيتم إلغاء الطلب #${orderToCancel.orderNumber} وإرجاع الكميات إلى المخزون.` : ''}
+        reasonLabel="سبب الإلغاء (مثال: الزبون لا يجيب)"
+        reasonDefault="الزبون غير مهتم"
+        confirmLabel="تأكيد الإلغاء"
+        cancelLabel="تراجع"
+        onConfirm={reason => {
+          if (orderToCancel) onUpdateStatus(orderToCancel.id, 'cancelled', reason || 'تم إلغاء الطلب');
+          setOrderToCancel(null);
+        }}
+        onCancel={() => setOrderToCancel(null)}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
-import { UserRole } from '../../types';
+import { ConfirmDialog } from './ConfirmDialog';
 import { ShieldCheck, Store as StoreIcon, Globe, LayoutDashboard, RotateCcw } from 'lucide-react';
 
 interface Props {
@@ -11,7 +11,7 @@ interface Props {
 
 export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentView }) => {
   const { switchRole, currentStore, setCurrentSubdomain } = useAuth();
-  const stores = storage.getStores();
+  const [resetOpen, setResetOpen] = useState(false);
 
   const handleSelectView = (view: 'visitor' | 'merchant' | 'storefront' | 'admin') => {
     setCurrentView(view);
@@ -28,13 +28,21 @@ export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentVie
   };
 
   const handleResetData = () => {
-    if (window.confirm('هل تريد إعادة تعيين البيانات التجريبية للمنصة؟')) {
-      storage.resetDemoData();
-      window.location.reload();
-    }
+    storage.resetDemoData();
+    window.location.reload();
   };
 
   return (
+    <>
+    <ConfirmDialog
+      isOpen={resetOpen}
+      danger
+      title="إعادة تعيين البيانات التجريبية؟"
+      message="سيتم حذف كل المتاجر والمنتجات والطلبات التي أضفتها والعودة إلى البيانات الأولية."
+      confirmLabel="نعم، أعد التعيين"
+      onConfirm={handleResetData}
+      onCancel={() => setResetOpen(false)}
+    />
     <header className="bg-slate-900 text-slate-100 text-xs px-3 sm:px-6 py-2 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shadow-inner">
       <div className="flex items-center gap-2">
         <span className="font-bold text-emerald-400 flex items-center gap-1.5 text-sm">
@@ -109,7 +117,7 @@ export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentVie
 
         {/* Reset Demo Data */}
         <button
-          onClick={handleResetData}
+          onClick={() => setResetOpen(true)}
           className="text-slate-400 hover:text-slate-200 p-1 rounded hover:bg-slate-800 transition-colors mr-1"
           title="إعادة تعيين البيانات الأولية"
         >
@@ -117,5 +125,6 @@ export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentVie
         </button>
       </div>
     </header>
+    </>
   );
 };

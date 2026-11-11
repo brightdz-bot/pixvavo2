@@ -41,30 +41,30 @@ export const OverviewTab: React.FC<Props> = ({
   const shippingOrders = orders.filter(o => o.status === 'shipping');
   const lowStockProducts = products.filter(p => p.stock <= 5);
 
-  // Generate 7-day sales data
-  const daysOfWeek = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
-  // Calculate mock daily values based on orders or realistic distributed amounts
-  const today = new Date().getDay(); // 0 is Sunday, 6 is Saturday
+  // Real last-7-days sales from this store's non-cancelled orders (local calendar days)
+  const daysOfWeek = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']; // matches Date.getDay()
+  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const salesByDay = new Map<string, number>();
+  orders
+    .filter(o => o.status !== 'cancelled')
+    .forEach(o => {
+      const k = dayKey(new Date(o.createdAt));
+      salesByDay.set(k, (salesByDay.get(k) || 0) + o.total);
+    });
   const last7DaysData = Array.from({ length: 7 }).map((_, i) => {
-    const dayIndex = (today - (6 - i) + 7) % 7;
-    // Algerian week usually maps to days
-    const dayName = daysOfWeek[dayIndex];
-    // Filter actual orders for this day or simulate proportional
-    const isToday = i === 6;
-    const isYesterday = i === 5;
-    let amount = 0;
-    if (isToday) amount = 42000;
-    else if (isYesterday) amount = 28500;
-    else if (i === 4) amount = 36900;
-    else if (i === 3) amount = 18500;
-    else if (i === 2) amount = 54000;
-    else if (i === 1) amount = 22000;
-    else amount = 15000;
-
-    return { dayName, amount, isToday };
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - i));
+    return {
+      dayName: daysOfWeek[date.getDay()],
+      amount: salesByDay.get(dayKey(date)) || 0,
+      isToday: i === 6
+    };
   });
 
-  const maxDailyAmount = Math.max(...last7DaysData.map(d => d.amount), 60000);
+  const maxDailyAmount = Math.max(...last7DaysData.map(d => d.amount), 1);
+  const pendingValue = orders
+    .filter(o => o.status === 'new' || o.status === 'confirmed' || o.status === 'shipping')
+    .reduce((sum, o) => sum + o.total, 0);
 
   const handleConfirmRestock = () => {
     if (restockModalProduct && restockAmount > 0) {
@@ -88,11 +88,11 @@ export const OverviewTab: React.FC<Props> = ({
             </div>
           </div>
           <div className="text-2xl font-black text-slate-900 dark:text-white font-mono">
-            {formatDZD(totalSales > 0 ? totalSales : 74800)}
+            {formatDZD(totalSales)}
           </div>
           <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>+18.5% مقارنة بالأسبوع الماضي</span>
+            <span>قيد التحصيل: {formatDZD(pendingValue)}</span>
           </div>
         </div>
 
@@ -174,7 +174,7 @@ export const OverviewTab: React.FC<Props> = ({
           <div className="pt-6 pb-2">
             <div className="h-48 flex items-end justify-between gap-3 sm:gap-6 px-2">
               {last7DaysData.map((day, idx) => {
-                const heightPercent = Math.max((day.amount / maxDailyAmount) * 100, 10);
+                const heightPercent = day.amount > 0 ? Math.max((day.amount / maxDailyAmount) * 100, 8) : 2;
                 return (
                   <div key={idx} className="flex-1 flex flex-col items-center gap-2 group relative">
                     {/* Tooltip */}

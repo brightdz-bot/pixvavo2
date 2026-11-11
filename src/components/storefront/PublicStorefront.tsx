@@ -41,9 +41,9 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
   const [selectedCat, setSelectedCat] = useState('الكل');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
-  // Selected variants for modal
-  const [selectedSize, setSelectedSize] = useState<string>('');
-  const [selectedColor, setSelectedColor] = useState<string>('');
+  // Variant choices in the product modal, keyed by variant name (e.g. { 'المقاس': 'M', 'اللون': 'أسود' })
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Order Tracking
   const [trackingNumber, setTrackingNumber] = useState('');
@@ -84,19 +84,45 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
   }
   const cartGrandTotal = cartSubtotal + shippingFee;
 
-  const handleAddToCart = (product: Product, quantity = 1, size = '', color = '') => {
-    let variantText = '';
-    const parts = [];
-    if (size) parts.push(`المقاس: ${size}`);
-    if (color) parts.push(`اللون: ${color}`);
-    if (parts.length > 0) variantText = parts.join(' | ');
+  const showNotice = (msg: string) => {
+    setNotice(msg);
+    setTimeout(() => setNotice(null), 3000);
+  };
+
+  // Units of a product already in the cart (across all its variants)
+  const unitsInCart = (productId: string) =>
+    cart.filter(it => it.productId === productId).reduce((sum, it) => sum + it.quantity, 0);
+
+  const openProduct = (product: Product) => {
+    setSelectedVariants({});
+    setSelectedProduct(product);
+  };
+
+  const handleAddToCart = (product: Product, quantity = 1, selections: Record<string, string> = {}) => {
+    const variants = product.variants || [];
+    const missing = variants.find(v => !selections[v.name]);
+    if (missing) {
+      showNotice(`يرجى اختيار ${missing.name} أولاً`);
+      return;
+    }
+
+    // Always check against the latest stock, not the copy rendered earlier
+    const fresh = storage.getProductById(product.id) || product;
+    if (fresh.stock <= 0) {
+      showNotice('نفدت كمية هذا المنتج');
+      return;
+    }
+    if (unitsInCart(product.id) + quantity > fresh.stock) {
+      showNotice(`المتوفر في المخزن ${fresh.stock} قطعة فقط`);
+      return;
+    }
+
+    const variantText = variants.map(v => `${v.name}: ${selections[v.name]}`).join(' | ');
 
     setCart(prev => {
-      const existingIdx = prev.findIndex(item => item.productId === product.id && item.variantText === variantText);
+      const existingIdx = prev.findIndex(item => item.productId === product.id && (item.variantText || '') === variantText);
       if (existingIdx >= 0) {
-        const copy = [...prev];
-        copy[existingIdx].quantity += quantity;
-        return copy;
+        return prev.map((item, i) => (i === existingIdx ? { ...item, quantity: item.quantity + quantity } : item));
       }
       return [...prev, {
         productId: product.id,
@@ -113,16 +139,20 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
   };
 
   const handleUpdateQuantity = (idx: number, delta: number) => {
-    setCart(prev => {
-      const copy = [...prev];
-      const newQty = copy[idx].quantity + delta;
-      if (newQty <= 0) {
-        copy.splice(idx, 1);
-      } else {
-        copy[idx].quantity = newQty;
+    const item = cart[idx];
+    if (!item) return;
+    if (delta > 0) {
+      const fresh = storage.getProductById(item.productId);
+      if (fresh && unitsInCart(item.productId) + delta > fresh.stock) {
+        showNotice(`المتوفر في المخزن ${fresh.stock} قطعة فقط`);
+        return;
       }
-      return copy;
-    });
+    }
+    setCart(prev =>
+      prev
+        .map((it, i) => (i === idx ? { ...it, quantity: it.quantity + delta } : it))
+        .filter(it => it.quantity > 0)
+    );
   };
 
   const handleTrackOrder = (e: React.FormEvent) => {
@@ -163,10 +193,25 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
       return;
     }
 
+    // Final stock check against the latest data before accepting the order
+    for (const it of cart) {
+      const fresh = storage.getProductById(it.productId);
+      const available = fresh ? fresh.stock : 0;
+      const wanted = unitsInCart(it.productId);
+      if (!fresh || !fresh.isActive || wanted > available) {
+        setCheckoutError(
+          available > 0
+            ? `الكمية المتوفرة من "${it.title}" هي ${available} فقط، يرجى تعديل السلة`
+            : `نفدت كمية "${it.title}"، يرجى إزالته من السلة`
+        );
+        return;
+      }
+    }
+
     setIsSubmittingOrder(true);
 
     setTimeout(() => {
-      const newOrderNumber = 'DZ-' + Math.floor(1000 + Math.random() * 9000);
+      const newOrderNumber = storage.generateOrderNumber();
       const newOrder: Order = {
         id: 'ord_' + Math.random().toString(36).substring(2, 9),
         orderNumber: newOrderNumber,
@@ -208,8 +253,37 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
 
   const brandColor = store.brandColor || '#059669';
 
+  if (store.status === 'suspended') {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md space-y-3">
+          <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+          <h1 className="text-xl font-black text-slate-900 dark:text-white">هذا المتجر غير متاح حالياً</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            تم تعليق متجر «{store.name}» مؤقتاً من إدارة المنصة. يرجى المحاولة لاحقاً.
+          </p>
+          <button
+            onClick={onGoToLanding}
+            className="px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-bold"
+          >
+            العودة إلى المنصة
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col transition-colors">
+      {notice && (
+        <div
+          role="status"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[70] px-4 py-3 rounded-xl bg-slate-900 text-white text-xs font-bold shadow-2xl border border-slate-700"
+        >
+          {notice}
+        </div>
+      )}
+
       {/* Free Shipping Alert Bar */}
       {store.freeShippingThreshold > 0 && (
         <div
@@ -333,7 +407,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/80 dark:border-emerald-800 pb-2">
                   <div className="font-bold text-slate-900 dark:text-white font-mono">
-                    طلب #{trackedOrder.orderNumber} ({trackedOrder.customerName} - {trackedOrder.wilayaName})
+                    طلب #{trackedOrder.orderNumber} ({trackedOrder.customerName.split(' ')[0]} - {trackedOrder.wilayaName})
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
                     الحالة الحالية: {trackedOrder.status === 'new' ? 'جديد' : trackedOrder.status === 'confirmed' ? 'مؤكد' : trackedOrder.status === 'shipping' ? 'قيد التوصيل' : trackedOrder.status === 'delivered' ? 'تم التسليم' : 'ملغي'}
@@ -344,7 +418,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                   {trackedOrder.statusHistory.map((h, i) => (
                     <div key={i} className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      <span className="font-mono text-[10px]">{new Date(h.timestamp).toLocaleTimeString('ar-DZ')}</span>
+                      <span className="font-mono text-[10px]">{new Date(h.timestamp).toLocaleString('ar-DZ', { dateStyle: 'short', timeStyle: 'short' })}</span>
                       <span>— {h.note || h.status}</span>
                     </div>
                   ))}
@@ -413,7 +487,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                     {/* Image */}
                     <div
                       className="relative h-56 bg-slate-100 dark:bg-slate-800 overflow-hidden cursor-pointer"
-                      onClick={() => setSelectedProduct(p)}
+                      onClick={() => openProduct(p)}
                     >
                       <img
                         src={p.imageUrl}
@@ -435,7 +509,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                     {/* Content */}
                     <div className="p-4 space-y-2">
                       <h3
-                        onClick={() => setSelectedProduct(p)}
+                        onClick={() => openProduct(p)}
                         className="font-bold text-sm text-slate-900 dark:text-white line-clamp-1 cursor-pointer hover:underline"
                       >
                         {p.title}
@@ -464,7 +538,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                       disabled={isOutOfStock}
                       onClick={() => {
                         if (p.variants && p.variants.length > 0) {
-                          setSelectedProduct(p);
+                          openProduct(p);
                         } else {
                           handleAddToCart(p);
                         }
@@ -493,7 +567,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                 <div className="flex items-center gap-2">
                   <ShoppingBag className="w-5 h-5" style={{ color: brandColor }} />
                   <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                    سلة المشتريات ({cart.length})
+                    سلة المشتريات ({cart.reduce((sum, it) => sum + it.quantity, 0)})
                   </h3>
                 </div>
                 <button
@@ -673,7 +747,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
               {/* Order Calculation Preview */}
               <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-xs font-mono space-y-1.5">
                 <div className="flex justify-between text-slate-500">
-                  <span>سعر السلع ({cart.length}):</span>
+                  <span>سعر السلع ({cart.reduce((sum, it) => sum + it.quantity, 0)}):</span>
                   <span>{formatDZD(cartSubtotal)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
@@ -805,20 +879,19 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                 </p>
 
                 {/* Variants Picker if available */}
-                {selectedProduct.variants?.map((v, idx) => (
-                  <div key={idx} className="space-y-1.5">
+                {selectedProduct.variants?.map(v => (
+                  <div key={v.id} className="space-y-1.5">
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
                       اختر {v.name}:
                     </span>
                     <div className="flex flex-wrap gap-2">
-                      {v.options.map((opt, oIdx) => {
-                        const isSize = v.name.includes('المقاس');
-                        const isSelected = isSize ? selectedSize === opt : selectedColor === opt;
+                      {v.options.map(opt => {
+                        const isSelected = selectedVariants[v.name] === opt;
                         return (
                           <button
-                            key={oIdx}
+                            key={opt}
                             type="button"
-                            onClick={() => isSize ? setSelectedSize(opt) : setSelectedColor(opt)}
+                            onClick={() => setSelectedVariants(prev => ({ ...prev, [v.name]: opt }))}
                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
                               isSelected
                                 ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 font-bold'
@@ -834,12 +907,13 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                 ))}
 
                 <button
-                  onClick={() => handleAddToCart(selectedProduct, 1, selectedSize, selectedColor)}
-                  className="w-full py-3 rounded-xl text-white font-bold text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 mt-4"
+                  onClick={() => handleAddToCart(selectedProduct, 1, selectedVariants)}
+                  disabled={selectedProduct.stock <= 0}
+                  className="w-full py-3 rounded-xl text-white font-bold text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 mt-4 disabled:opacity-50"
                   style={{ backgroundColor: brandColor }}
                 >
                   <ShoppingBag className="w-4 h-4" />
-                  <span>أضف إلى السلة والدفع عند الاستلام</span>
+                  <span>{selectedProduct.stock <= 0 ? 'نفدت الكمية' : 'أضف إلى السلة والدفع عند الاستلام'}</span>
                 </button>
               </div>
             </div>

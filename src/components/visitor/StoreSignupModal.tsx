@@ -15,6 +15,7 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
   const { registerStore } = useAuth();
   const [storeName, setStoreName] = useState('');
   const [subdomain, setSubdomain] = useState('');
+  const [subdomainTouched, setSubdomainTouched] = useState(false);
   const [merchantName, setMerchantName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -27,14 +28,16 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
   // Auto generate slug from store name if subdomain not typed manually
   const handleStoreNameChange = (val: string) => {
     setStoreName(val);
-    if (!subdomain || subdomain.length <= 3) {
+    // Keep suggesting a slug until the merchant edits the field manually
+    if (!subdomainTouched) {
       const generated = val
         .trim()
         .toLowerCase()
         .replace(/[\s_]+/g, '-')
         .replace(/[^a-z0-9-]/g, '')
+        .replace(/-+/g, '-')
         .slice(0, 30);
-      if (generated) setSubdomain(generated);
+      setSubdomain(generated);
     }
   };
 
@@ -166,7 +169,10 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
                   required
                   dir="ltr"
                   value={subdomain}
-                  onChange={e => setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  onChange={e => {
+                    setSubdomainTouched(true);
+                    setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''));
+                  }}
                   placeholder="my-store"
                   className="w-full px-3 py-2 bg-transparent text-slate-900 dark:text-white font-mono text-sm focus:outline-none"
                 />

@@ -211,10 +211,10 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
           {/* Wilaya Fees Quick Override */}
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
             <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-              تخصيص أسعار التوصيل لأهم الولايات:
+              تخصيص أسعار التوصيل لجميع الولايات ({ALGERIA_WILAYAS.length}):
             </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {ALGERIA_WILAYAS.slice(0, 6).map(w => {
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto pl-1">
+              {ALGERIA_WILAYAS.map(w => {
                 const currentFee = customFees[w.id] !== undefined ? customFees[w.id] : w.standardDeliveryFee;
                 return (
                   <div
@@ -231,7 +231,7 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
                         min="0"
                         step="50"
                         value={currentFee}
-                        onChange={e => handleWilayaFeeChange(w.id, Number(e.target.value))}
+                        onChange={e => handleWilayaFeeChange(w.id, Math.max(0, Number(e.target.value) || 0))}
                         className="w-full p-1.5 text-center font-mono font-bold rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs"
                       />
                       <span className="text-[10px] text-slate-400">د.ج</span>
