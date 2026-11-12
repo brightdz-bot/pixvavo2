@@ -873,6 +873,21 @@ class StorageService {
         console.error('Supabase update_order_status RPC error:', error);
         return { success: false, error: error.message };
       }
+
+      // Read the saved value back from Supabase; never report success based only on the RPC response.
+      const { data: savedOrder, error: verifyError } = await supabase
+        .from('orders')
+        .select('status')
+        .eq('id', orderId)
+        .maybeSingle();
+
+      if (verifyError) {
+        console.error('Supabase order status verification error:', verifyError);
+        return { success: false, error: 'تم إرسال التحديث لكن تعذر التحقق من حفظه في قاعدة البيانات: ' + verifyError.message };
+      }
+      if (!savedOrder || savedOrder.status !== newStatus) {
+        return { success: false, error: 'لم تتطابق حالة الطلب المحفوظة في Supabase مع الحالة المطلوبة.' };
+      }
       return { success: true };
     }
 
