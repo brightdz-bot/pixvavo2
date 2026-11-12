@@ -343,33 +343,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: 'يرجى إدخال كلمة المرور' };
       }
       setIsLoading(true);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password: password
-      });
-      setIsLoading(false);
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password
+        });
 
-      if (error) {
-        let msg = error.message;
-        if (msg.includes('Invalid login credentials')) {
-          msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
-        }
-        return { success: false, error: msg };
-      }
-
-      if (data.user) {
-        const pendingRegistration = getPendingStoreRegistration();
-        if (pendingRegistration && pendingRegistration.email.toLowerCase() === (data.user.email || email).toLowerCase()) {
-          const completion = await completeStoreRegistrationForUser(data.user.id, pendingRegistration);
-          if (!completion.success) {
-            await loadSupabaseUserData(data.user.id, data.user.email || email);
-            return { success: false, error: 'تم تسجيل الدخول، لكن تعذر إكمال إنشاء المتجر: ' + completion.error };
+        if (error) {
+          let msg = error.message;
+          if (msg.includes('Invalid login credentials')) {
+            msg = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
           }
+          return { success: false, error: msg };
         }
-        await loadSupabaseUserData(data.user.id, data.user.email || email);
-        return { success: true };
+
+        if (data.user) {
+          const pendingRegistration = getPendingStoreRegistration();
+          if (pendingRegistration && pendingRegistration.email.toLowerCase() === (data.user.email || email).toLowerCase()) {
+            const completion = await completeStoreRegistrationForUser(data.user.id, pendingRegistration);
+            if (!completion.success) {
+              await loadSupabaseUserData(data.user.id, data.user.email || email);
+              return { success: false, error: 'تم تسجيل الدخول، لكن تعذر إكمال إنشاء المتجر: ' + completion.error };
+            }
+          }
+          // Keep the app in its loading state until the authenticated user data
+          // has been loaded. Otherwise AppContent can route to the landing page
+          // while currentUser is still null.
+          await loadSupabaseUserData(data.user.id, data.user.email || email);
+          return { success: true };
+        }
+        return { success: false, error: 'تعذر تسجيل الدخول' };
+      } catch (err) {
+        console.error('Supabase login error:', err);
+        return { success: false, error: 'حدث خطأ أثناء تسجيل الدخول. يرجى المحاولة مرة أخرى.' };
+      } finally {
+        setIsLoading(false);
       }
-      return { success: false, error: 'تعذر تسجيل الدخول' };
     }
 
     // Local Demo Login
