@@ -371,7 +371,7 @@ class StorageService {
         .order('created_at', { ascending: false });
       if (error) {
         console.error('Supabase getStores error:', error);
-        return this.getLocalStores();
+        return [];
       }
       return (data || []).map(mapDbStore);
     }
@@ -390,16 +390,18 @@ class StorageService {
   async getStoreById(id: string): Promise<Store | undefined> {
     if (isSupabaseConfigured && supabase) {
       if (!isUuid(id)) {
-        return this.getLocalStores().find(s => s.id === id);
+        return undefined;
       }
       const { data, error } = await supabase
         .from('stores')
         .select('*')
         .eq('id', id)
         .maybeSingle();
-      if (error || !data) {
-        return this.getLocalStores().find(s => s.id === id);
+      if (error) {
+        console.error('Supabase getStoreById error:', error);
+        return undefined;
       }
+      if (!data) return undefined;
       return mapDbStore(data);
     }
     return this.getLocalStores().find(s => s.id === id);
@@ -413,9 +415,11 @@ class StorageService {
         .select('*')
         .ilike('subdomain', clean)
         .maybeSingle();
-      if (error || !data) {
-        return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean);
+      if (error) {
+        console.error('Supabase getStoreBySubdomain error:', error);
+        throw error;
       }
+      if (!data) return undefined;
       return mapDbStore(data);
     }
     return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean);
@@ -520,7 +524,7 @@ class StorageService {
   async getProducts(storeId?: string): Promise<Product[]> {
     if (isSupabaseConfigured && supabase) {
       if (storeId && !isUuid(storeId)) {
-        return this.getLocalProducts(storeId);
+        return [];
       }
       let query = supabase.from('products').select('*');
       if (storeId) {
@@ -529,7 +533,7 @@ class StorageService {
       const { data: prods, error } = await query.order('created_at', { ascending: false });
       if (error) {
         console.error('Supabase getProducts error:', error);
-        return this.getLocalProducts(storeId);
+        throw error;
       }
 
       // Try fetching confidential cost prices for store owner from product_costs
@@ -573,16 +577,18 @@ class StorageService {
   async getProductById(id: string): Promise<Product | undefined> {
     if (isSupabaseConfigured && supabase) {
       if (!isUuid(id)) {
-        return this.getLocalProducts().find(p => p.id === id);
+        return undefined;
       }
       const { data, error } = await supabase
         .from('products')
         .select('*')
         .eq('id', id)
         .maybeSingle();
-      if (error || !data) {
-        return this.getLocalProducts().find(p => p.id === id);
+      if (error) {
+        console.error('Supabase getProductById error:', error);
+        return undefined;
       }
+      if (!data) return undefined;
 
       // Fetch cost if available
       let costPrice: number | undefined;
@@ -687,7 +693,7 @@ class StorageService {
   async getOrders(storeId?: string): Promise<Order[]> {
     if (isSupabaseConfigured && supabase) {
       if (storeId && !isUuid(storeId)) {
-        return this.getLocalOrders(storeId);
+        return [];
       }
       let query = supabase.from('orders').select('*');
       if (storeId) {
@@ -696,7 +702,7 @@ class StorageService {
       const { data, error } = await query.order('created_at', { ascending: false });
       if (error) {
         console.error('Supabase getOrders error:', error);
-        return this.getLocalOrders(storeId);
+        throw error;
       }
       return (data || []).map(mapDbOrder);
     }
