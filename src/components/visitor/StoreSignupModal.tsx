@@ -19,11 +19,10 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
   const [merchantName, setMerchantName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [planId, setPlanId] = useState(initialPlanId || 'plan_trial');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  if (!isOpen) return null;
 
   // Auto generate slug from store name if subdomain not typed manually
   const handleStoreNameChange = (val: string) => {
@@ -41,7 +40,7 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -77,28 +76,34 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
       return;
     }
 
+    if (!password || password.length < 6) {
+      setError('يرجى إدخال كلمة مرور تتكون من 6 أحرف على الأقل لحماية متجرك');
+      return;
+    }
+
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const res = registerStore({
-        storeName: storeName.trim(),
-        subdomain: cleanSub,
-        planId,
-        merchantName: merchantName.trim(),
-        email: email.trim(),
-        phone: cleanPhone
-      });
+    const res = await registerStore({
+      storeName: storeName.trim(),
+      subdomain: cleanSub,
+      planId,
+      merchantName: merchantName.trim(),
+      email: email.trim(),
+      phone: cleanPhone,
+      password: password
+    });
 
-      setIsSubmitting(false);
+    setIsSubmitting(false);
 
-      if (res.success) {
-        onSuccess();
-        onClose();
-      } else {
-        setError(res.error || 'حدث خطأ غير متوقع أثناء إنشاء المتجر');
-      }
-    }, 600);
+    if (res.success) {
+      onSuccess();
+      onClose();
+    } else {
+      setError(res.error || 'حدث خطأ غير متوقع أثناء إنشاء المتجر');
+    }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
@@ -228,6 +233,22 @@ export const StoreSignupModal: React.FC<Props> = ({ isOpen, onClose, initialPlan
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="merchant@example.dz"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+            />
+          </div>
+
+          {/* Password */}
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              كلمة مرور الحساب <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="password"
+              required
+              dir="ltr"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="•••••••• (6 أحرف على الأقل)"
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
             />
           </div>

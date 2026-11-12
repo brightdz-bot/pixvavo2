@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
 import { SAAS_PLANS } from '../../data/plans';
@@ -15,12 +15,13 @@ import {
   Settings,
   ExternalLink,
   Store as StoreIcon,
-  Bell,
   CheckCircle2,
   Menu,
   X,
   LogOut,
-  ChevronDown
+  Lock,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 
 interface Props {
@@ -29,76 +30,192 @@ interface Props {
 }
 
 export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLanding }) => {
-  const { currentStore, currentUser, refreshCurrentStore, logout } = useAuth();
+  const { currentStore, currentUser, isSupabaseMode, isLoading: isAuthLoading, refreshCurrentStore, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'orders' | 'settings'>('overview');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // If no store loaded, fallback
-  const store = currentStore || storage.getStores()[0];
+  // Data states
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Refresh reactive store data
-  const [products, setProducts] = useState<Product[]>(() => storage.getProducts(store.id));
-  const [orders, setOrders] = useState<Order[]>(() => storage.getOrders(store.id));
+  // Active store (fallback to local only if demo mode)
+  const store = currentStore || (!isSupabaseMode ? storage.getLocalStores()[0] : null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleSaveProduct = (prod: Product) => {
+  // Load products and orders
+  const loadData = useCallback(async () => {
+    if (!store?.id) {
+      setIsDataLoading(false);
+      return;
+    }
+    setIsDataLoading(true);
+    setLoadError(null);
+    try {
+      const [loadedProducts, loadedOrders] = await Promise.all([
+        storage.getProducts(store.id),
+        storage.getOrders(store.id)
+      ]);
+      setProducts(loadedProducts);
+      setOrders(loadedOrders);
+    } catch (err: any) {
+      console.error('Failed to load merchant data:', err);
+      setLoadError('تعذر تحميل بيانات المتجر، يرجى إعادة المحاولة');
+    } finally {
+      setIsDataLoading(false);
+    }
+  }, [store?.id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Actions
+  const handleSaveProduct = async (prod: Product) => {
+    if (!store) return;
     const isNew = !products.some(p => p.id === prod.id);
     const plan = SAAS_PLANS.find(p => p.id === store.planId);
     if (isNew && plan && products.length >= plan.maxProducts) {
       showToast(`وصلت للحد الأقصى لخطتك (${plan.maxProducts} منتج). رقّ خطتك لإضافة المزيد`);
       return;
     }
-    storage.saveProduct(prod);
-    setProducts(storage.getProducts(store.id));
-    showToast('تم حفظ المنتج وتحديث بيانات المخزون بنجاح');
-  };
-
-  const handleDeleteProduct = (prodId: string) => {
-    storage.deleteProduct(prodId);
-    setProducts(storage.getProducts(store.id));
-    showToast('تم حذف المنتج من المتجر');
-  };
-
-  const handleUpdateOrderStatus = (orderId: string, newStatus: OrderStatus, note?: string) => {
-    storage.updateOrderStatus(orderId, newStatus, note);
-    const updatedOrders = storage.getOrders(store.id);
-    setOrders(updatedOrders);
-    if (selectedOrder && selectedOrder.id === orderId) {
-      const found = updatedOrders.find(o => o.id === orderId);
-      if (found) setSelectedOrder(found);
+    const res = await storage.saveProduct(prod);
+    if (res.success) {
+      await loadData();
+      showToast('تم حفظ المنتج وتحديث بيانات المخزون بنجاح');
+    } else {
+      showToast('حدث خطأ: ' + (res.error || 'تعذر حفظ المنتج'));
     }
-    const statusLabels: Record<OrderStatus, string> = {
-      new: 'جديد',
-      confirmed: 'مؤكد',
-      shipping: 'قيد التوصيل',
-      delivered: 'تم التسليم',
-      cancelled: 'ملغي'
-    };
-    // Cancelling or re-opening an order changes stock, so refresh products too
-    setProducts(storage.getProducts(store.id));
-    showToast(`تم تحديث حالة الطلب إلى "${statusLabels[newStatus]}"`);
   };
 
-  const handleRestockProduct = (prodId: string, addCount: number) => {
-    const prod = storage.getProductById(prodId);
+  const handleDeleteProduct = async (prodId: string) => {
+    const res = await storage.deleteProduct(prodId);
+    if (res.success) {
+      await loadData();
+      showToast('تم حذف المنتج من المتجر');
+    } else {
+      showToast('حدث خطأ أثناء الحذف: ' + res.error);
+    }
+  };
+
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: OrderStatus, note?: string) => {
+    if (!store?.id) return;
+    const res = await storage.updateOrderStatus(orderId, newStatus, note);
+    if (res.success) {
+      const updatedOrders = await storage.getOrders(store.id);
+      setOrders(updatedOrders);
+      if (selectedOrder && selectedOrder.id === orderId) {
+        const found = updatedOrders.find(o => o.id === orderId);
+        if (found) setSelectedOrder(found);
+      }
+      // Reload products to reflect any cancellation restock
+      const updatedProducts = await storage.getProducts(store.id);
+      setProducts(updatedProducts);
+
+      const statusLabels: Record<OrderStatus, string> = {
+        new: 'جديد',
+        confirmed: 'مؤكد',
+        shipping: 'قيد التوصيل',
+        delivered: 'تم التسليم',
+        cancelled: 'ملغي'
+      };
+      showToast(`تم تحديث حالة الطلب إلى "${statusLabels[newStatus]}"`);
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر تحديث حالة الطلب'));
+    }
+  };
+
+  const handleRestockProduct = async (prodId: string, addCount: number) => {
+    const prod = await storage.getProductById(prodId);
     if (prod) {
-      storage.saveProduct({ ...prod, stock: prod.stock + addCount });
-      setProducts(storage.getProducts(store.id));
+      await storage.saveProduct({ ...prod, stock: prod.stock + addCount });
+      await loadData();
       showToast(`تم تزويد المخزون بـ +${addCount} قطع بنجاح`);
     }
   };
 
-  const handleSaveSettings = (updated: Store) => {
-    storage.saveStore(updated);
-    refreshCurrentStore();
-    showToast('تم حفظ إعدادات وهوية المتجر بنجاح');
+  const handleSaveSettings = async (updated: Store) => {
+    const res = await storage.saveStore(updated);
+    if (res.success) {
+      await refreshCurrentStore();
+      showToast('تم حفظ إعدادات وهوية المتجر بنجاح');
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر حفظ الإعدادات'));
+    }
   };
+
+  const handleLogout = async () => {
+    await logout();
+    onGoToLanding();
+  };
+
+  // Protected route check when in Supabase mode
+  if (isSupabaseMode && !isAuthLoading && !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-amber-100 dark:bg-amber-950/70 text-amber-600 flex items-center justify-center mx-auto">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+            لوحة تحكم محمية
+          </h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            يرجى تسجيل الدخول بحساب التاجر أو إنشاء متجر جديد للوصول إلى لوحة التحكم والمنتجات والطلبات.
+          </p>
+          <button
+            onClick={onGoToLanding}
+            className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all"
+          >
+            الانتقال لتسجيل الدخول / إنشاء متجر
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSupabaseMode && !isAuthLoading && !store) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 flex items-center justify-center mx-auto">
+            <StoreIcon className="w-7 h-7" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+            لم يتم العثور على متجر نشط
+          </h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            حسابك لا يحتوي على متجر مسجل حالياً. يمكنك إنشاء متجرك الجديد فوراً والبدء في البيع.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={onGoToLanding}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all"
+            >
+              إنشاء متجر جديد
+            </button>
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+            >
+              خروج
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!store) {
+    return null;
+  }
 
   const navItems = [
     { id: 'overview', label: 'نظرة عامة', icon: LayoutDashboard },
@@ -189,26 +306,28 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
         {/* Sidebar Footer with Merchant profile & Logout */}
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center font-bold text-xs">
+            <div className="flex items-center gap-2 overflow-hidden">
+              <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center font-bold text-xs shrink-0">
                 {(currentUser?.name || 'تاجر')[0]}
               </div>
-              <div className="text-right">
-                <div className="text-xs font-bold text-slate-900 dark:text-white">
-                  {currentUser?.name || 'سفيان بلحاج'}
+              <div className="text-right truncate">
+                <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                  {currentUser?.name || 'تاجر مسجل'}
                 </div>
-                <div className="text-[10px] text-slate-400">تاجر معتمد</div>
+                <div className="text-[10px] text-slate-400 truncate">
+                  {currentUser?.email || 'حساب التاجر'}
+                </div>
               </div>
             </div>
             <ThemeToggle />
           </div>
 
           <button
-            onClick={onGoToLanding}
+            onClick={handleLogout}
             className="w-full py-1.5 text-center text-xs text-slate-400 hover:text-rose-500 font-semibold transition-colors flex items-center justify-center gap-1"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>تسجيل الخروج للمنصة</span>
+            <span>تسجيل الخروج</span>
           </button>
         </div>
       </aside>
@@ -218,7 +337,6 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
         {/* Top Header */}
         <header className="sticky top-0 z-20 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 sm:px-8 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Mobile menu trigger */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
@@ -272,48 +390,83 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
                 </button>
               );
             })}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={handleLogout}
+                className="w-full text-right text-xs text-rose-500 font-bold p-2 flex items-center gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>تسجيل الخروج</span>
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Tab Body */}
+        {/* Tab Body with Loading State */}
         <div className="p-4 sm:p-8 flex-1">
-          {activeTab === 'overview' && (
-            <OverviewTab
-              store={store}
-              orders={orders}
-              products={products}
-              onSelectOrder={ord => {
-                setSelectedOrder(ord);
-                setActiveTab('orders');
-              }}
-              onGoToProducts={() => setActiveTab('products')}
-              onRestockProduct={handleRestockProduct}
-            />
+          {isDataLoading && (
+            <div className="p-12 text-center space-y-3">
+              <Loader2 className="w-8 h-8 text-emerald-600 animate-spin mx-auto" />
+              <p className="text-xs text-slate-500">جارٍ مزامنة بيانات المتجر...</p>
+            </div>
           )}
 
-          {activeTab === 'products' && (
-            <ProductsTab
-              storeId={store.id}
-              products={products}
-              onSaveProduct={handleSaveProduct}
-              onDeleteProduct={handleDeleteProduct}
-            />
+          {loadError && (
+            <div className="mb-6 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 text-rose-700 text-xs flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                <span>{loadError}</span>
+              </div>
+              <button
+                onClick={loadData}
+                className="px-3 py-1 bg-rose-600 text-white rounded-lg font-bold"
+              >
+                إعادة المحاولة
+              </button>
+            </div>
           )}
 
-          {activeTab === 'orders' && (
-            <OrdersTab
-              orders={orders}
-              onUpdateStatus={handleUpdateOrderStatus}
-              selectedOrder={selectedOrder}
-              onSelectOrder={setSelectedOrder}
-            />
-          )}
+          {!isDataLoading && (
+            <>
+              {activeTab === 'overview' && (
+                <OverviewTab
+                  store={store}
+                  orders={orders}
+                  products={products}
+                  onSelectOrder={ord => {
+                    setSelectedOrder(ord);
+                    setActiveTab('orders');
+                  }}
+                  onGoToProducts={() => setActiveTab('products')}
+                  onRestockProduct={handleRestockProduct}
+                />
+              )}
 
-          {activeTab === 'settings' && (
-            <SettingsTab
-              store={store}
-              onSaveSettings={handleSaveSettings}
-            />
+              {activeTab === 'products' && (
+                <ProductsTab
+                  storeId={store.id}
+                  products={products}
+                  onSaveProduct={handleSaveProduct}
+                  onDeleteProduct={handleDeleteProduct}
+                />
+              )}
+
+              {activeTab === 'orders' && (
+                <OrdersTab
+                  orders={orders}
+                  onUpdateStatus={handleUpdateOrderStatus}
+                  selectedOrder={selectedOrder}
+                  onSelectOrder={setSelectedOrder}
+                />
+              )}
+
+              {activeTab === 'settings' && (
+                <SettingsTab
+                  store={store}
+                  onSaveSettings={handleSaveSettings}
+                />
+              )}
+            </>
           )}
         </div>
       </main>

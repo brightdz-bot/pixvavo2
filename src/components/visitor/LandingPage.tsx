@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { SAAS_PLANS } from '../../data/plans';
 import { formatDZD } from '../../data/wilayas';
 import { StoreSignupModal } from './StoreSignupModal';
+import { LoginModal } from './LoginModal';
 import { ThemeToggle } from '../common/ThemeToggle';
 import {
   Store,
@@ -26,6 +27,7 @@ interface Props {
 
 export const LandingPage: React.FC<Props> = ({ onGoToMerchant, onGoToStorefront }) => {
   const [signupOpen, setSignupOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<string>('plan_pro');
 
   const openSignupWithPlan = (planId: string) => {
@@ -55,7 +57,7 @@ export const LandingPage: React.FC<Props> = ({ onGoToMerchant, onGoToStorefront 
           <div className="flex items-center gap-3">
             <ThemeToggle />
             <button
-              onClick={onGoToMerchant}
+              onClick={() => setLoginOpen(true)}
               className="text-sm font-semibold text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 px-3 py-2 rounded-xl transition-colors hidden md:inline-block"
             >
               دخول التاجر
@@ -331,6 +333,17 @@ export const LandingPage: React.FC<Props> = ({ onGoToMerchant, onGoToStorefront 
         isOpen={signupOpen}
         onClose={() => setSignupOpen(false)}
         initialPlanId={selectedPlanId}
+        onSuccess={onGoToMerchant}
+      />
+
+      {/* Login Modal */}
+      <LoginModal
+        isOpen={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        onOpenSignup={() => {
+          setLoginOpen(false);
+          setSignupOpen(true);
+        }}
         onSuccess={onGoToMerchant}
       />
     </div>

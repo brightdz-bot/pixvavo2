@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Store, Product, Order, OrderItem, OrderStatus } from '../../types';
 import { storage } from '../../services/storage';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
@@ -28,8 +28,9 @@ interface Props {
 }
 
 export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, onGoToLanding }) => {
-  const store = storage.getStoreBySubdomain(subdomain) || storage.getStores()[0];
-  const products = storage.getProducts(store.id).filter(p => p.isActive);
+  const [store, setStore] = useState<Store>(() => storage.getLocalStores().find(s => s.subdomain.toLowerCase() === subdomain.toLowerCase()) || storage.getLocalStores()[0]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoadingStore, setIsLoadingStore] = useState(true);
 
   // Cart State
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -47,8 +48,9 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
 
   // Order Tracking
   const [trackingNumber, setTrackingNumber] = useState('');
-  const [trackedOrder, setTrackedOrder] = useState<Order | null>(null);
+  const [trackedOrder, setTrackedOrder] = useState<any | null>(null);
   const [trackingSearched, setTrackingSearched] = useState(false);
+  const [isTrackingLoading, setIsTrackingLoading] = useState(false);
 
   // Checkout Form
   const [customerName, setCustomerName] = useState('');
@@ -56,8 +58,41 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
   const [selectedWilayaId, setSelectedWilayaId] = useState('16'); // Default Alger
   const [address, setAddress] = useState('');
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
-  const [orderCompleted, setOrderCompleted] = useState<Order | null>(null);
+  const [orderCompleted, setOrderCompleted] = useState<any | null>(null);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+
+  // Fetch store and products
+  useEffect(() => {
+    let mounted = true;
+    async function fetchStoreAndProducts() {
+      setIsLoadingStore(true);
+      try {
+        const foundStore = await storage.getStoreBySubdomain(subdomain);
+        if (foundStore && mounted) {
+          setStore(foundStore);
+          const prods = await storage.getProducts(foundStore.id);
+          if (mounted) setProducts(prods.filter(p => p.isActive));
+        } else if (mounted) {
+          const fallback = (await storage.getStores())[0];
+          if (fallback) {
+            setStore(fallback);
+            const prods = await storage.getProducts(fallback.id);
+            if (mounted) setProducts(prods.filter(p => p.isActive));
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching storefront data:', err);
+      } finally {
+        if (mounted) setIsLoadingStore(false);
+      }
+    }
+
+    fetchStoreAndProducts();
+
+    return () => {
+      mounted = false;
+    };
+  }, [subdomain]);
 
   // Categories
   const categories = ['الكل', ...Array.from(new Set(products.map(p => p.category)))];
@@ -106,8 +141,8 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
       return;
     }
 
-    // Always check against the latest stock, not the copy rendered earlier
-    const fresh = storage.getProductById(product.id) || product;
+    // Check against current products state
+    const fresh = products.find(p => p.id === product.id) || product;
     if (fresh.stock <= 0) {
       showNotice('نفدت كمية هذا المنتج');
       return;
@@ -142,7 +177,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
     const item = cart[idx];
     if (!item) return;
     if (delta > 0) {
-      const fresh = storage.getProductById(item.productId);
+      const fresh = products.find(p => p.id === item.productId);
       if (fresh && unitsInCart(item.productId) + delta > fresh.stock) {
         showNotice(`المتوفر في المخزن ${fresh.stock} قطعة فقط`);
         return;
@@ -155,7 +190,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
     );
   };
 
-  const handleTrackOrder = (e: React.FormEvent) => {
+  const handleTrackOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setTrackingSearched(true);
     if (!trackingNumber.trim()) {
@@ -163,11 +198,19 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
       return;
     }
     const cleanNum = trackingNumber.replace(/^#/, '').trim();
-    const found = storage.getOrderByNumber(cleanNum, store.id);
-    setTrackedOrder(found || null);
+    setIsTrackingLoading(true);
+    try {
+      const found = await storage.trackOrder(cleanNum);
+      setTrackedOrder(found || null);
+    } catch (err) {
+      console.error('Tracking error:', err);
+      setTrackedOrder(null);
+    } finally {
+      setIsTrackingLoading(false);
+    }
   };
 
-  const handlePlaceOrder = (e: React.FormEvent) => {
+  const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setCheckoutError(null);
 
@@ -184,7 +227,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
     const cleanPhone = customerPhone.replace(/\s+/g, '');
     const phoneRegex = /^(05|06|07)[0-9]{8}$/;
     if (!phoneRegex.test(cleanPhone)) {
-      setCheckoutError('يرجى كتابة رقم هاتف جزائري صحيح يبدأ بـ 05 أو 06 أو 07');
+      setCheckoutError('يرجى كتابة رقم هاتف جزائري صحيح يبدأ بـ 05 أو 06 أو 07 ويتكون من 10 أرقام');
       return;
     }
 
@@ -193,62 +236,43 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
       return;
     }
 
-    // Final stock check against the latest data before accepting the order
-    for (const it of cart) {
-      const fresh = storage.getProductById(it.productId);
-      const available = fresh ? fresh.stock : 0;
-      const wanted = unitsInCart(it.productId);
-      if (!fresh || !fresh.isActive || wanted > available) {
-        setCheckoutError(
-          available > 0
-            ? `الكمية المتوفرة من "${it.title}" هي ${available} فقط، يرجى تعديل السلة`
-            : `نفدت كمية "${it.title}"، يرجى إزالته من السلة`
-        );
-        return;
-      }
-    }
-
     setIsSubmittingOrder(true);
 
-    setTimeout(() => {
-      const newOrderNumber = storage.generateOrderNumber();
-      const newOrder: Order = {
-        id: 'ord_' + Math.random().toString(36).substring(2, 9),
-        orderNumber: newOrderNumber,
+    try {
+      const itemsPayload = cart.map(it => ({
+        productId: it.productId,
+        quantity: it.quantity,
+        variantText: it.variantText
+      }));
+
+      const res = await storage.placeOrder({
         storeId: store.id,
         customerName: customerName.trim(),
         customerPhone: cleanPhone,
         wilayaId: selectedWilaya.id,
         wilayaName: selectedWilaya.nameAr,
         address: address.trim(),
-        items: [...cart],
-        subtotal: cartSubtotal,
-        shippingFee,
-        total: cartGrandTotal,
-        status: 'new',
-        statusHistory: [
-          { status: 'new', timestamp: new Date().toISOString(), note: 'تم تسجيل الطلب والدفع عند الاستلام' }
-        ],
-        paymentMethod: 'cod',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      // Save order & update product stocks
-      storage.saveOrder(newOrder);
-      cart.forEach(it => {
-        const p = storage.getProductById(it.productId);
-        if (p) {
-          storage.saveProduct({ ...p, stock: Math.max(0, p.stock - it.quantity) });
-        }
+        items: itemsPayload
       });
 
-      setOrderCompleted(newOrder);
-      setCart([]);
       setIsSubmittingOrder(false);
-      setIsCheckoutOpen(false);
-      setIsCartOpen(false);
-    }, 700);
+
+      if (res.success && res.order) {
+        setOrderCompleted(res.order);
+        setCart([]);
+        setIsCheckoutOpen(false);
+        setIsCartOpen(false);
+
+        // Refresh products stock in storefront
+        const freshProds = await storage.getProducts(store.id);
+        setProducts(freshProds.filter(p => p.isActive));
+      } else {
+        setCheckoutError(res.error || 'تعذر تسجيل الطلب، يرجى المحاولة مجدداً');
+      }
+    } catch (err: any) {
+      setIsSubmittingOrder(false);
+      setCheckoutError(err.message || 'حدث خطأ غير متوقع أثناء إرسال الطلب');
+    }
   };
 
   const brandColor = store.brandColor || '#059669';
@@ -407,7 +431,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/80 dark:border-emerald-800 pb-2">
                   <div className="font-bold text-slate-900 dark:text-white font-mono">
-                    طلب #{trackedOrder.orderNumber} ({trackedOrder.customerName.split(' ')[0]} - {trackedOrder.wilayaName})
+                    طلب #{trackedOrder.orderNumber} ({trackedOrder.customerFirstName || trackedOrder.customerName?.split(' ')[0] || 'الزبون'} - {trackedOrder.wilayaName})
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
                     الحالة الحالية: {trackedOrder.status === 'new' ? 'جديد' : trackedOrder.status === 'confirmed' ? 'مؤكد' : trackedOrder.status === 'shipping' ? 'قيد التوصيل' : trackedOrder.status === 'delivered' ? 'تم التسليم' : 'ملغي'}
@@ -415,7 +439,7 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
                 </div>
                 <div className="space-y-1.5">
                   <span className="font-semibold text-slate-700 dark:text-slate-300 block">سجل الحركة:</span>
-                  {trackedOrder.statusHistory.map((h, i) => (
+                  {trackedOrder.statusHistory?.map((h: any, i: number) => (
                     <div key={i} className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                       <span className="font-mono text-[10px]">{new Date(h.timestamp).toLocaleString('ar-DZ', { dateStyle: 'short', timeStyle: 'short' })}</span>

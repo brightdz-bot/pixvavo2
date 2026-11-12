@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Store, User, Order } from '../../types';
 import { storage } from '../../services/storage';
 import { SAAS_PLANS } from '../../data/plans';
@@ -16,7 +16,8 @@ import {
   PauseCircle,
   PlayCircle,
   Search,
-  Filter
+  Filter,
+  Loader2
 } from 'lucide-react';
 
 interface Props {
@@ -30,8 +31,10 @@ export const PlatformAdmin: React.FC<Props> = ({
   onGoToStorefront,
   onGoToLanding
 }) => {
-  const [stores, setStores] = useState<Store[]>(() => storage.getStores());
+  const [stores, setStores] = useState<Store[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [users, setUsers] = useState<User[]>(() => storage.getUsers());
+  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -40,8 +43,27 @@ export const PlatformAdmin: React.FC<Props> = ({
     setTimeout(() => setToastMsg(null), 3000);
   };
 
+  const loadAdminData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const [loadedStores, loadedOrders] = await Promise.all([
+        storage.getStores(),
+        storage.getOrders()
+      ]);
+      setStores(loadedStores);
+      setAllOrders(loadedOrders);
+    } catch (err) {
+      console.error('Failed to load admin data:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAdminData();
+  }, [loadAdminData]);
+
   // Calculate platform financial stats
-  const allOrders: Order[] = storage.getOrders();
   const totalStores = stores.length;
   const activeStores = stores.filter(s => s.status === 'active').length;
   const suspendedStores = stores.filter(s => s.status === 'suspended').length;
@@ -52,27 +74,30 @@ export const PlatformAdmin: React.FC<Props> = ({
     return sum + (plan ? plan.priceDZD : 0);
   }, 0);
 
-  // Platform commissions (if any plan has commission)
   const totalOrdersAmount = allOrders.filter(o => o.status === 'delivered').reduce((s, o) => s + o.total, 0);
 
-  const handleChangePlan = (storeId: string, newPlanId: string) => {
-    const store = storage.getStoreById(storeId);
-    if (store) {
-      const updated: Store = { ...store, planId: newPlanId, updatedAt: new Date().toISOString() };
-      storage.saveStore(updated);
-      setStores(storage.getStores());
+  const handleChangePlan = async (storeId: string, newPlanId: string) => {
+    const store = stores.find(s => s.id === storeId);
+    if (!store) return;
+    const res = await storage.adminSetStore(storeId, store.status, newPlanId);
+    if (res.success) {
+      await loadAdminData();
       showToast(`تم تغيير خطة متجر "${store.name}" بنجاح`);
+    } else {
+      showToast('خطأ: ' + res.error);
     }
   };
 
-  const handleToggleStoreStatus = (storeId: string) => {
-    const store = storage.getStoreById(storeId);
-    if (store) {
-      const newStatus = store.status === 'active' ? 'suspended' : 'active';
-      const updated: Store = { ...store, status: newStatus, updatedAt: new Date().toISOString() };
-      storage.saveStore(updated);
-      setStores(storage.getStores());
+  const handleToggleStoreStatus = async (storeId: string) => {
+    const store = stores.find(s => s.id === storeId);
+    if (!store) return;
+    const newStatus = store.status === 'active' ? 'suspended' : 'active';
+    const res = await storage.adminSetStore(storeId, newStatus, store.planId);
+    if (res.success) {
+      await loadAdminData();
       showToast(newStatus === 'active' ? `تم تفعيل متجر "${store.name}"` : `تم تعليق وتجميد متجر "${store.name}"`);
+    } else {
+      showToast('خطأ: ' + res.error);
     }
   };
 
@@ -103,7 +128,7 @@ export const PlatformAdmin: React.FC<Props> = ({
                 لوحة الإدارة المركزية لمنصة «دكاني»
               </h1>
               <span className="text-[11px] text-slate-400">
-                مراقبة التجار، خطط الاشتراكات وإيرادات المنصة
+                مراقبة التجار، خطط الاشتراكات وإيرادات المنصة عبر Supabase
               </span>
             </div>
           </div>
@@ -135,7 +160,7 @@ export const PlatformAdmin: React.FC<Props> = ({
             <div className="text-2xl font-black text-emerald-600 font-mono">
               {formatDZD(monthlySubscriptionRev)}
             </div>
-            <div className="text-[11px] text-slate-400 mt-1">تجدد شهرياً من التجار</div>
+            <div className="text-[11px] text-slate-400 mt-1">تجدد شهرياً من التجار النشطين</div>
           </div>
 
           {/* Total Stores */}
@@ -163,7 +188,7 @@ export const PlatformAdmin: React.FC<Props> = ({
               </div>
             </div>
             <div className="text-2xl font-black text-slate-900 dark:text-white font-mono">
-              {users.filter(u => u.role === 'merchant').length} تاجر
+              {stores.length} تاجر
             </div>
             <div className="text-[11px] text-slate-400 mt-1">عبر مختلف الولايات الجزائرية</div>
           </div>
@@ -207,120 +232,118 @@ export const PlatformAdmin: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                <tr>
-                  <th className="py-3 px-4 font-bold">المتجر والرابط</th>
-                  <th className="py-3 px-4 font-bold">التاجر المسجل</th>
-                  <th className="py-3 px-4 font-bold">خطة الاشتراك</th>
-                  <th className="py-3 px-4 font-bold">المنتجات والطلبات</th>
-                  <th className="py-3 px-4 font-bold">حالة المتجر</th>
-                  <th className="py-3 px-4 font-bold text-left">الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredStores.map(store => {
-                  const merchant = users.find(u => u.storeId === store.id || u.id === store.ownerId);
-                  const storeProds = storage.getProducts(store.id);
-                  const storeOrds = storage.getOrders(store.id);
-                  const currentPlan = SAAS_PLANS.find(p => p.id === store.planId) || SAAS_PLANS[0];
+          {isLoading ? (
+            <div className="p-12 text-center space-y-2">
+              <Loader2 className="w-6 h-6 text-emerald-600 animate-spin mx-auto" />
+              <p className="text-xs text-slate-500">جارٍ تحميل بيانات المتاجر...</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                  <tr>
+                    <th className="py-3 px-4 font-bold">المتجر والرابط</th>
+                    <th className="py-3 px-4 font-bold">هاتف المتجر</th>
+                    <th className="py-3 px-4 font-bold">خطة الاشتراك</th>
+                    <th className="py-3 px-4 font-bold">الطلبات المسجلة</th>
+                    <th className="py-3 px-4 font-bold">حالة المتجر</th>
+                    <th className="py-3 px-4 font-bold text-left">الإجراءات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredStores.map(store => {
+                    const storeOrdsCount = allOrders.filter(o => o.storeId === store.id).length;
 
-                  return (
-                    <tr key={store.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    return (
+                      <tr key={store.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: store.brandColor || '#059669' }}
+                            />
+                            <span>{store.name}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            {store.subdomain}.dokani.dz
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 font-mono">
+                          {store.phone || '0550XXXXXX'}
+                        </td>
+
+                        <td className="py-3.5 px-4">
+                          <select
+                            value={store.planId}
+                            onChange={e => handleChangePlan(store.id, e.target.value)}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold focus:ring-2 focus:ring-emerald-500"
+                          >
+                            {SAAS_PLANS.map(p => (
+                              <option key={p.id} value={p.id}>
+                                {p.nameAr} ({p.priceDZD === 0 ? 'مجاناً' : formatDZD(p.priceDZD)})
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300 font-mono">
+                          {storeOrdsCount} طلب
+                        </td>
+
+                        <td className="py-3.5 px-4">
                           <span
-                            className="w-2.5 h-2.5 rounded-full"
-                            style={{ backgroundColor: store.brandColor || '#059669' }}
-                          />
-                          <span>{store.name}</span>
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono">
-                          {store.subdomain}.dokani.dz
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        <div className="font-semibold text-slate-800 dark:text-slate-200">
-                          {merchant?.name || 'تاجر مسجل'}
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono">
-                          {merchant?.email || store.phone || '0550XXXXXX'}
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        <select
-                          value={store.planId}
-                          onChange={e => handleChangePlan(store.id, e.target.value)}
-                          className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold focus:ring-2 focus:ring-emerald-500"
-                        >
-                          {SAAS_PLANS.map(p => (
-                            <option key={p.id} value={p.id}>
-                              {p.nameAr} ({p.priceDZD === 0 ? 'مجاناً' : formatDZD(p.priceDZD)})
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-slate-600 dark:text-slate-300">
-                        {storeProds.length} منتج • {storeOrds.length} طلب
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            store.status === 'active'
-                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                              : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                          }`}
-                        >
-                          {store.status === 'active' ? 'نشط' : 'معلق ومجمد'}
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-left">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleToggleStoreStatus(store.id)}
-                            className={`p-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 transition-colors ${
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                               store.status === 'active'
-                                ? 'border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40'
-                                : 'border-emerald-200 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-900/60 dark:hover:bg-emerald-950/40'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
                             }`}
-                            title={store.status === 'active' ? 'تجميد وتعليق المتجر' : 'تفعيل المتجر'}
                           >
-                            {store.status === 'active' ? (
-                              <PauseCircle className="w-4 h-4" />
-                            ) : (
-                              <PlayCircle className="w-4 h-4" />
-                            )}
-                          </button>
+                            {store.status === 'active' ? 'نشط' : 'معلق ومجمد'}
+                          </span>
+                        </td>
 
-                          <button
-                            onClick={() => onGoToMerchant(store.id)}
-                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold"
-                          >
-                            لوحة التحكم
-                          </button>
+                        <td className="py-3.5 px-4 text-left">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleToggleStoreStatus(store.id)}
+                              className={`p-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 transition-colors ${
+                                store.status === 'active'
+                                  ? 'border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40'
+                                  : 'border-emerald-200 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-900/60 dark:hover:bg-emerald-950/40'
+                              }`}
+                              title={store.status === 'active' ? 'تجميد وتعليق المتجر' : 'تفعيل المتجر'}
+                            >
+                              {store.status === 'active' ? (
+                                <PauseCircle className="w-4 h-4" />
+                              ) : (
+                                <PlayCircle className="w-4 h-4" />
+                              )}
+                            </button>
 
-                          <button
-                            onClick={() => onGoToStorefront(store.subdomain)}
-                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
-                            title="عرض المتجر العام"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                            <button
+                              onClick={() => onGoToMerchant(store.id)}
+                              className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold"
+                            >
+                              لوحة التحكم
+                            </button>
+
+                            <button
+                              onClick={() => onGoToStorefront(store.subdomain)}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
+                              title="عرض المتجر العام"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </main>
     </div>
