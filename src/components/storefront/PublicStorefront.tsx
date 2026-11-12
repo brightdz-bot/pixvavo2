@@ -28,9 +28,10 @@ interface Props {
 }
 
 export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, onGoToLanding }) => {
-  const [store, setStore] = useState<Store>(() => storage.getLocalStores().find(s => s.subdomain.toLowerCase() === subdomain.toLowerCase()) || storage.getLocalStores()[0]);
+  const [store, setStore] = useState<Store | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoadingStore, setIsLoadingStore] = useState(true);
+  const [storeLoadError, setStoreLoadError] = useState<string | null>(null);
 
   // Cart State
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -66,22 +67,22 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
     let mounted = true;
     async function fetchStoreAndProducts() {
       setIsLoadingStore(true);
+      setStore(null);
+      setProducts([]);
+      setStoreLoadError(null);
       try {
         const foundStore = await storage.getStoreBySubdomain(subdomain);
-        if (foundStore && mounted) {
-          setStore(foundStore);
-          const prods = await storage.getProducts(foundStore.id);
-          if (mounted) setProducts(prods.filter(p => p.isActive));
-        } else if (mounted) {
-          const fallback = (await storage.getStores())[0];
-          if (fallback) {
-            setStore(fallback);
-            const prods = await storage.getProducts(fallback.id);
-            if (mounted) setProducts(prods.filter(p => p.isActive));
-          }
+        if (!mounted) return;
+        if (!foundStore) {
+          setStore(null);
+          return;
         }
+        setStore(foundStore);
+        const prods = await storage.getProducts(foundStore.id);
+        if (mounted) setProducts(prods.filter(p => p.isActive));
       } catch (err) {
         console.error('Error fetching storefront data:', err);
+        if (mounted) setStoreLoadError('تعذر تحميل بيانات المتجر. تحقق من الاتصال ثم أعد المحاولة.');
       } finally {
         if (mounted) setIsLoadingStore(false);
       }
@@ -93,6 +94,39 @@ export const PublicStorefront: React.FC<Props> = ({ subdomain, onGoToMerchant, o
       mounted = false;
     };
   }, [subdomain]);
+
+  if (isLoadingStore) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-500">
+        <div className="text-center space-y-3">
+          <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm">جارٍ تحميل المتجر...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (storeLoadError || !store) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 text-center">
+        <div className="max-w-md space-y-3">
+          <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+          <h1 className="text-xl font-black text-slate-900 dark:text-white">
+            {storeLoadError ? 'تعذر تحميل المتجر' : 'المتجر غير موجود'}
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {storeLoadError || 'الرابط الذي طلبته لا يطابق أي متجر مسجل. تحقق من الرابط وحاول مجدداً.'}
+          </p>
+          <button
+            onClick={onGoToLanding}
+            className="px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-bold"
+          >
+            العودة إلى المنصة
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Categories
   const categories = ['الكل', ...Array.from(new Set(products.map(p => p.category)))];
