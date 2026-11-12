@@ -648,17 +648,18 @@ class StorageService {
         savedDbProduct = data;
       }
 
-      // Update or insert cost_price in product_costs table
+      // Update or insert cost_price in product_costs table and surface RLS/database errors.
       if (savedDbProduct && product.costPrice !== undefined) {
-        try {
-          await supabase
-            .from('product_costs')
-            .upsert({
-              product_id: savedDbProduct.id,
-              cost_price: product.costPrice
-            });
-        } catch (e) {
-          console.warn('Cost price save warning:', e);
+        const { error: costError } = await supabase
+          .from('product_costs')
+          .upsert({
+            product_id: savedDbProduct.id,
+            cost_price: product.costPrice
+          }, { onConflict: 'product_id' });
+
+        if (costError) {
+          console.error('Supabase product cost save error:', costError);
+          return { success: false, error: 'تم حفظ بيانات المنتج، لكن تعذر حفظ سعر التكلفة: ' + costError.message };
         }
       }
 
