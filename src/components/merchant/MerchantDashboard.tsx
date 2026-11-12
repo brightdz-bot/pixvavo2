@@ -226,6 +226,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront, onGoToLan
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row transition-colors">
+      {!isSupabaseMode && (
+        <div className="fixed top-0 inset-x-0 z-[70] bg-amber-100 text-amber-950 border-b border-amber-300 px-4 py-2 text-center text-xs font-bold">
+          وضع تجريبي: التغييرات تُحفظ في هذا المتصفح فقط ولا تُرسل إلى Supabase. تحقق من إعداد VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY في إعدادات النشر.
+        </div>
+      )}
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-5 left-5 z-50 p-4 rounded-xl bg-slate-900 text-white dark:bg-emerald-600 shadow-2xl flex items-center gap-2.5 text-xs font-bold border border-slate-700 animate-bounce">
