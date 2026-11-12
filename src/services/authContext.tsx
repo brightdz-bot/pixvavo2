@@ -28,6 +28,47 @@ interface AuthContextType {
   refreshCurrentStore: () => Promise<void>;
 }
 
+
+interface PendingStoreRegistration {
+  storeName: string;
+  subdomain: string;
+  planId?: string;
+  merchantName: string;
+  email: string;
+  phone: string;
+}
+
+const PENDING_STORE_REGISTRATION_KEY = 'dokani_pending_store_registration';
+
+function savePendingStoreRegistration(params: PendingStoreRegistration): void {
+  try {
+    // Never persist the password or authentication tokens.
+    localStorage.setItem(PENDING_STORE_REGISTRATION_KEY, JSON.stringify(params));
+  } catch (error) {
+    console.error('Unable to save pending store registration:', error);
+  }
+}
+
+function getPendingStoreRegistration(): PendingStoreRegistration | null {
+  try {
+    const raw = localStorage.getItem(PENDING_STORE_REGISTRATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingStoreRegistration;
+    if (!parsed || typeof parsed.email !== 'string' || typeof parsed.subdomain !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingStoreRegistration(): void {
+  try {
+    localStorage.removeItem(PENDING_STORE_REGISTRATION_KEY);
+  } catch (error) {
+    console.error('Unable to clear pending store registration:', error);
+  }
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -36,6 +77,127 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activeRole, setActiveRole] = useState<UserRole>('merchant');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [currentSubdomain, setCurrentSubdomain] = useState<string>('el-nokhba');
+
+  const completeStoreRegistrationForUser = async (
+    userId: string,
+    params: PendingStoreRegistration
+  ): Promise<{ success: boolean; error?: string; store?: Store }> => {
+    if (!supabase) return { success: false, error: 'اتصال قاعدة البيانات غير متاح' };
+
+    const cleanSubdomain = params.subdomain.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (!cleanSubdomain || cleanSubdomain.length < 3) {
+      return { success: false, error: 'اسم النطاق الفرعي غير صالح' };
+    }
+
+    // A retry must not create a second store for the same account.
+    const { data: ownedStore, error: ownedStoreError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('owner_id', userId)
+      .maybeSingle();
+
+    if (ownedStoreError) {
+      return { success: false, error: 'تعذر التحقق من المتجر الحالي: ' + ownedStoreError.message };
+    }
+    if (ownedStore) {
+      clearPendingStoreRegistration();
+      return { success: true, store: {
+        id: ownedStore.id,
+        ownerId: ownedStore.owner_id,
+        name: ownedStore.name,
+        subdomain: ownedStore.subdomain,
+        description: ownedStore.description || '',
+        logoUrl: ownedStore.logo_url,
+        brandColor: ownedStore.brand_color || '#059669',
+        freeShippingThreshold: Number(ownedStore.free_shipping_threshold || 10000),
+        planId: ownedStore.plan_id || 'plan_trial',
+        status: ownedStore.status || 'active',
+        phone: ownedStore.phone || '',
+        customWilayaFees: ownedStore.custom_wilaya_fees || {},
+        createdAt: ownedStore.created_at,
+        updatedAt: ownedStore.updated_at
+      } };
+    }
+
+    const { data: existingSubdomain, error: subdomainError } = await supabase
+      .from('stores')
+      .select('id')
+      .eq('subdomain', cleanSubdomain)
+      .maybeSingle();
+
+    if (subdomainError) {
+      return { success: false, error: 'تعذر التحقق من رابط المتجر: ' + subdomainError.message };
+    }
+    if (existingSubdomain) {
+      return { success: false, error: 'هذا النطاق الفرعي محجوز بالفعل، يرجى اختيار اسم آخر' };
+    }
+
+    const storeInsertPayload = {
+      owner_id: userId,
+      name: params.storeName.trim(),
+      subdomain: cleanSubdomain,
+      description: `مرحباً بكم في متجر ${params.storeName.trim()}`,
+      brand_color: '#059669',
+      free_shipping_threshold: 10000,
+      phone: params.phone.trim(),
+      custom_wilaya_fees: {}
+    };
+
+    const { data: newStoreData, error: storeError } = await supabase
+      .from('stores')
+      .insert(storeInsertPayload)
+      .select('*')
+      .single();
+
+    if (storeError || !newStoreData) {
+      // Handle a retry/race where the store was created by a previous request.
+      const { data: retryStore } = await supabase
+        .from('stores')
+        .select('*')
+        .eq('owner_id', userId)
+        .maybeSingle();
+
+      if (retryStore) {
+        clearPendingStoreRegistration();
+        return { success: true, store: {
+          id: retryStore.id,
+          ownerId: retryStore.owner_id,
+          name: retryStore.name,
+          subdomain: retryStore.subdomain,
+          description: retryStore.description || '',
+          logoUrl: retryStore.logo_url,
+          brandColor: retryStore.brand_color || '#059669',
+          freeShippingThreshold: Number(retryStore.free_shipping_threshold || 10000),
+          planId: retryStore.plan_id || 'plan_trial',
+          status: retryStore.status || 'active',
+          phone: retryStore.phone || '',
+          customWilayaFees: retryStore.custom_wilaya_fees || {},
+          createdAt: retryStore.created_at,
+          updatedAt: retryStore.updated_at
+        } };
+      }
+      return { success: false, error: 'تعذر إنشاء المتجر: ' + (storeError?.message || 'خطأ غير معروف') };
+    }
+
+    clearPendingStoreRegistration();
+    return { success: true, store: {
+      id: newStoreData.id,
+      ownerId: newStoreData.owner_id,
+      name: newStoreData.name,
+      subdomain: newStoreData.subdomain,
+      description: newStoreData.description || '',
+      logoUrl: newStoreData.logo_url,
+      brandColor: newStoreData.brand_color || '#059669',
+      freeShippingThreshold: Number(newStoreData.free_shipping_threshold || 10000),
+      planId: newStoreData.plan_id || 'plan_trial',
+      status: newStoreData.status || 'active',
+      phone: newStoreData.phone || '',
+      customWilayaFees: newStoreData.custom_wilaya_fees || {},
+      createdAt: newStoreData.created_at,
+      updatedAt: newStoreData.updated_at
+    } };
+  };
+
 
   // Initialize Auth state
   useEffect(() => {
@@ -48,6 +210,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user && mounted) {
+            const pendingRegistration = getPendingStoreRegistration();
+            if (pendingRegistration && pendingRegistration.email.toLowerCase() === (session.user.email || '').toLowerCase()) {
+              const completion = await completeStoreRegistrationForUser(session.user.id, pendingRegistration);
+              if (!completion.success) console.error('Pending store registration could not be completed:', completion.error);
+            }
             await loadSupabaseUserData(session.user.id, session.user.email || '');
           } else if (mounted) {
             setCurrentUser(null);
@@ -64,6 +231,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
           if (!mounted) return;
           if (session?.user) {
+            const pendingRegistration = getPendingStoreRegistration();
+            if (pendingRegistration && pendingRegistration.email.toLowerCase() === (session.user.email || '').toLowerCase()) {
+              const completion = await completeStoreRegistrationForUser(session.user.id, pendingRegistration);
+              if (!completion.success) console.error('Pending store registration could not be completed:', completion.error);
+            }
             await loadSupabaseUserData(session.user.id, session.user.email || '');
           } else {
             setCurrentUser(null);
@@ -186,6 +358,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data.user) {
+        const pendingRegistration = getPendingStoreRegistration();
+        if (pendingRegistration && pendingRegistration.email.toLowerCase() === (data.user.email || email).toLowerCase()) {
+          const completion = await completeStoreRegistrationForUser(data.user.id, pendingRegistration);
+          if (!completion.success) {
+            await loadSupabaseUserData(data.user.id, data.user.email || email);
+            return { success: false, error: 'تم تسجيل الدخول، لكن تعذر إكمال إنشاء المتجر: ' + completion.error };
+          }
+        }
         await loadSupabaseUserData(data.user.id, data.user.email || email);
         return { success: true };
       }
@@ -265,9 +445,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: 'هذا النطاق الفرعي محجوز بالفعل، يرجى اختيار اسم آخر' };
       }
 
-      // 1. Sign up Supabase Auth User
+      // 1. Create the merchant account.
+      const normalizedEmail = params.email.trim().toLowerCase();
+      const pendingRegistration: PendingStoreRegistration = {
+        storeName: params.storeName.trim(),
+        subdomain: cleanSubdomain,
+        planId: params.planId,
+        merchantName: params.merchantName.trim(),
+        email: normalizedEmail,
+        phone: params.phone.trim()
+      };
+
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: params.email.trim().toLowerCase(),
+        email: normalizedEmail,
         password: params.password,
         options: {
           data: {
@@ -282,58 +472,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: authError?.message || 'حدث خطأ أثناء إنشاء حساب التاجر' };
       }
 
-      const userId = authData.user.id;
-
-      // 2. Insert Store (only owner_id, name, subdomain, description, logo_url, brand_color, free_shipping_threshold, phone, custom_wilaya_fees)
-      // Never send plan_id or status!
-      const storeInsertPayload = {
-        owner_id: userId,
-        name: params.storeName.trim(),
-        subdomain: cleanSubdomain,
-        description: `مرحباً بكم في متجر ${params.storeName.trim()}`,
-        brand_color: '#059669',
-        free_shipping_threshold: 10000,
-        phone: params.phone.trim(),
-        custom_wilaya_fees: {}
-      };
-
-      const { data: newStoreData, error: storeError } = await supabase
-        .from('stores')
-        .insert(storeInsertPayload)
-        .select()
-        .single();
-
-      if (storeError || !newStoreData) {
-        console.error('Supabase store creation error:', storeError);
+      // Supabase may require email confirmation. Keep only non-sensitive store details;
+      // never save the password. The store is created after the user has a valid session.
+      if (!authData.session) {
+        savePendingStoreRegistration(pendingRegistration);
         setIsLoading(false);
-        return { success: false, error: 'تم إنشاء الحساب ولكن تعذر إنشاء المتجر: ' + storeError?.message };
+        return {
+          success: false,
+          error: 'تم إنشاء الحساب. افتح رسالة التأكيد في بريدك الإلكتروني، ثم ارجع وسجّل الدخول بنفس البريد لإكمال إنشاء المتجر.'
+        };
       }
 
-      // 3. Link store_id in profile
-      await supabase
-        .from('profiles')
-        .update({ store_id: newStoreData.id, phone: params.phone.trim(), name: params.merchantName.trim() })
-        .eq('id', userId);
+      const completion = await completeStoreRegistrationForUser(authData.user.id, pendingRegistration);
+      if (!completion.success || !completion.store) {
+        savePendingStoreRegistration(pendingRegistration);
+        await loadSupabaseUserData(authData.user.id, normalizedEmail);
+        setIsLoading(false);
+        return { success: false, error: 'تم إنشاء الحساب، لكن تعذر إكمال إنشاء المتجر: ' + completion.error };
+      }
 
-      await loadSupabaseUserData(userId, params.email.trim().toLowerCase());
+      await loadSupabaseUserData(authData.user.id, normalizedEmail);
       setIsLoading(false);
-
-      return {
-        success: true,
-        store: {
-          id: newStoreData.id,
-          ownerId: newStoreData.owner_id,
-          name: newStoreData.name,
-          subdomain: newStoreData.subdomain,
-          brandColor: newStoreData.brand_color,
-          freeShippingThreshold: Number(newStoreData.free_shipping_threshold),
-          planId: newStoreData.plan_id,
-          status: newStoreData.status,
-          phone: newStoreData.phone,
-          createdAt: newStoreData.created_at,
-          updatedAt: newStoreData.updated_at
-        }
-      };
+      return { success: true, store: completion.store };
     }
 
     // Local Fallback Store Registration
