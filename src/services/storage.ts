@@ -648,17 +648,18 @@ class StorageService {
         savedDbProduct = data;
       }
 
-      // Update or insert cost_price in product_costs table
+      // Update or insert cost_price in product_costs table and surface RLS/database errors.
       if (savedDbProduct && product.costPrice !== undefined) {
-        try {
-          await supabase
-            .from('product_costs')
-            .upsert({
-              product_id: savedDbProduct.id,
-              cost_price: product.costPrice
-            });
-        } catch (e) {
-          console.warn('Cost price save warning:', e);
+        const { error: costError } = await supabase
+          .from('product_costs')
+          .upsert({
+            product_id: savedDbProduct.id,
+            cost_price: product.costPrice
+          }, { onConflict: 'product_id' });
+
+        if (costError) {
+          console.error('Supabase product cost save error:', costError);
+          return { success: false, error: 'تم حفظ بيانات المنتج، لكن تعذر حفظ سعر التكلفة: ' + costError.message };
         }
       }
 
@@ -872,6 +873,21 @@ class StorageService {
       if (error) {
         console.error('Supabase update_order_status RPC error:', error);
         return { success: false, error: error.message };
+      }
+
+      // Read the saved value back from Supabase; never report success based only on the RPC response.
+      const { data: savedOrder, error: verifyError } = await supabase
+        .from('orders')
+        .select('status')
+        .eq('id', orderId)
+        .maybeSingle();
+
+      if (verifyError) {
+        console.error('Supabase order status verification error:', verifyError);
+        return { success: false, error: 'تم إرسال التحديث لكن تعذر التحقق من حفظه في قاعدة البيانات: ' + verifyError.message };
+      }
+      if (!savedOrder || savedOrder.status !== newStatus) {
+        return { success: false, error: 'لم تتطابق حالة الطلب المحفوظة في Supabase مع الحالة المطلوبة.' };
       }
       return { success: true };
     }

@@ -233,31 +233,49 @@ CREATE POLICY plans_select ON public.plans FOR SELECT USING (true);
 DROP POLICY IF EXISTS wilayas_select ON public.wilayas;
 CREATE POLICY wilayas_select ON public.wilayas FOR SELECT USING (true);
 
--- stores: public sees active/trial stores; owner sees own; admin sees all
+-- stores: anonymous visitors can resolve active storefronts; signed-in merchants see ONLY their own store; admins see all.
 DROP POLICY IF EXISTS stores_select ON public.stores;
-CREATE POLICY stores_select ON public.stores FOR SELECT
-    USING (status IN ('active', 'trial') OR owner_id = auth.uid() OR public.is_admin());
-DROP POLICY IF EXISTS stores_insert ON public.stores;
-CREATE POLICY stores_insert ON public.stores FOR INSERT WITH CHECK (owner_id = auth.uid());
-DROP POLICY IF EXISTS stores_update ON public.stores;
-CREATE POLICY stores_update ON public.stores FOR UPDATE USING (owner_id = auth.uid()) WITH CHECK (owner_id = auth.uid());
+DROP POLICY IF EXISTS stores_public_select ON public.stores;
+DROP POLICY IF EXISTS stores_owner_admin_select ON public.stores;
+CREATE POLICY stores_public_select ON public.stores
+    FOR SELECT TO anon
+    USING (status IN ('active', 'trial'));
+CREATE POLICY stores_owner_admin_select ON public.stores
+    FOR SELECT TO authenticated
+    USING (owner_id = auth.uid() OR public.is_admin());
 
--- products
+DROP POLICY IF EXISTS stores_insert ON public.stores;
+CREATE POLICY stores_insert ON public.stores FOR INSERT TO authenticated
+    WITH CHECK (owner_id = auth.uid());
+DROP POLICY IF EXISTS stores_update ON public.stores;
+CREATE POLICY stores_update ON public.stores FOR UPDATE TO authenticated
+    USING (owner_id = auth.uid()) WITH CHECK (owner_id = auth.uid());
+
+-- products: public visitors can read active products for published stores; authenticated merchants see only their own products; admins see all.
 DROP POLICY IF EXISTS products_select ON public.products;
-CREATE POLICY products_select ON public.products FOR SELECT
+DROP POLICY IF EXISTS products_public_select ON public.products;
+DROP POLICY IF EXISTS products_owner_admin_select ON public.products;
+CREATE POLICY products_public_select ON public.products
+    FOR SELECT TO anon
     USING (
-        (is_active = true AND EXISTS (
-            SELECT 1 FROM public.stores s WHERE s.id = products.store_id AND s.status IN ('active', 'trial')
-        ))
-        OR public.owns_store(store_id)
-        OR public.is_admin()
+        is_active = true AND EXISTS (
+            SELECT 1 FROM public.stores s
+            WHERE s.id = products.store_id AND s.status IN ('active', 'trial')
+        )
     );
+CREATE POLICY products_owner_admin_select ON public.products
+    FOR SELECT TO authenticated
+    USING (public.owns_store(store_id) OR public.is_admin());
+
 DROP POLICY IF EXISTS products_insert ON public.products;
-CREATE POLICY products_insert ON public.products FOR INSERT WITH CHECK (public.owns_store(store_id));
+CREATE POLICY products_insert ON public.products FOR INSERT TO authenticated
+    WITH CHECK (public.owns_store(store_id));
 DROP POLICY IF EXISTS products_update ON public.products;
-CREATE POLICY products_update ON public.products FOR UPDATE USING (public.owns_store(store_id)) WITH CHECK (public.owns_store(store_id));
+CREATE POLICY products_update ON public.products FOR UPDATE TO authenticated
+    USING (public.owns_store(store_id)) WITH CHECK (public.owns_store(store_id));
 DROP POLICY IF EXISTS products_delete ON public.products;
-CREATE POLICY products_delete ON public.products FOR DELETE USING (public.owns_store(store_id));
+CREATE POLICY products_delete ON public.products FOR DELETE TO authenticated
+    USING (public.owns_store(store_id));
 
 -- product_costs: visible ONLY to the owner of the product's store
 DROP POLICY IF EXISTS product_costs_all ON public.product_costs;
