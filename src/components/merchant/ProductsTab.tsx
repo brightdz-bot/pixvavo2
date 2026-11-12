@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Product, ProductVariant } from '../../types';
 import { formatDZD } from '../../data/wilayas';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 import {
   Plus,
   Search,
@@ -72,6 +73,7 @@ export const ProductsTab: React.FC<Props> = ({
   const [variantSizes, setVariantSizes] = useState<string>('S, M, L, XL');
   const [variantColors, setVariantColors] = useState<string>('أسود, بني, أزرق');
   const [formError, setFormError] = useState<string | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
   // Filtered Products
   const filtered = products.filter(p => {
@@ -113,6 +115,9 @@ export const ProductsTab: React.FC<Props> = ({
     setImageUrl(p.imageUrl);
     setIsActive(p.isActive);
 
+    // Reset first so options from a previously edited product never leak into this one
+    setVariantSizes('');
+    setVariantColors('');
     if (p.variants && p.variants.length > 0) {
       setHasVariants(true);
       const sizeVar = p.variants.find(v => v.name.includes('المقاس') || v.name.toLowerCase().includes('size'));
@@ -136,8 +141,18 @@ export const ProductsTab: React.FC<Props> = ({
       return;
     }
 
-    if (price <= 0) {
+    if (!Number.isFinite(Number(price)) || price <= 0) {
       setFormError('يجب أن يكون سعر المنتج أكبر من صفر د.ج');
+      return;
+    }
+
+    if (!Number.isInteger(Number(stock)) || stock < 0) {
+      setFormError('الكمية في المخزون يجب أن تكون عدداً صحيحاً صفراً أو أكثر');
+      return;
+    }
+
+    if (comparePrice > 0 && comparePrice <= price) {
+      setFormError('السعر قبل التخفيض يجب أن يكون أكبر من سعر البيع (أو اتركه 0 لإلغائه)');
       return;
     }
 
@@ -182,13 +197,23 @@ export const ProductsTab: React.FC<Props> = ({
   };
 
   const handleDelete = (p: Product) => {
-    if (window.confirm(`هل أنت متأكد من حذف المنتج: "${p.title}"؟`)) {
-      onDeleteProduct(p.id);
-    }
+    setProductToDelete(p);
   };
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        isOpen={!!productToDelete}
+        danger
+        title="حذف المنتج"
+        message={productToDelete ? `هل أنت متأكد من حذف المنتج: "${productToDelete.title}"؟ لا يمكن التراجع عن هذا الإجراء.` : ''}
+        confirmLabel="نعم، احذف"
+        onConfirm={() => {
+          if (productToDelete) onDeleteProduct(productToDelete.id);
+          setProductToDelete(null);
+        }}
+        onCancel={() => setProductToDelete(null)}
+      />
       {/* Top Header & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

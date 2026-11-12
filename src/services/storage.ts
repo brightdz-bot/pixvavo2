@@ -438,6 +438,16 @@ class StorageService {
     return this.getOrders().find(o => o.id === id);
   }
 
+  // Unique, human-friendly order number (DZ-1234). Retries until it does not collide.
+  generateOrderNumber(): string {
+    const taken = new Set(this.getOrders().map(o => o.orderNumber.toUpperCase()));
+    for (let i = 0; i < 1000; i++) {
+      const candidate = 'DZ-' + Math.floor(1000 + Math.random() * 9000);
+      if (!taken.has(candidate)) return candidate;
+    }
+    return 'DZ-' + Date.now().toString().slice(-6);
+  }
+
   getOrderByNumber(orderNumber: string, storeId?: string): Order | undefined {
     const all = this.getOrders(storeId);
     return all.find(o => o.orderNumber.toUpperCase() === orderNumber.toUpperCase().trim());
@@ -471,8 +481,25 @@ class StorageService {
       updatedAt: new Date().toISOString()
     };
 
+    // Keep inventory consistent: stock is deducted when the order is placed,
+    // so cancelling returns it, and re-opening a cancelled order takes it again.
+    if (order.status !== 'cancelled' && newStatus === 'cancelled') {
+      this.adjustStock(order, +1);
+    } else if (order.status === 'cancelled' && newStatus !== 'cancelled') {
+      this.adjustStock(order, -1);
+    }
+
     this.saveOrder(updated);
     return updated;
+  }
+
+  private adjustStock(order: Order, direction: 1 | -1): void {
+    order.items.forEach(it => {
+      const p = this.getProductById(it.productId);
+      if (p) {
+        this.saveProduct({ ...p, stock: Math.max(0, p.stock + direction * it.quantity) });
+      }
+    });
   }
 
   // --- USERS ---

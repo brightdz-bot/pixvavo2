@@ -47,7 +47,7 @@ export const PlatformAdmin: React.FC<Props> = ({
   const suspendedStores = stores.filter(s => s.status === 'suspended').length;
 
   // Monthly subscription revenue calculation
-  const monthlySubscriptionRev = stores.reduce((sum, s) => {
+  const monthlySubscriptionRev = stores.filter(s => s.status !== 'suspended').reduce((sum, s) => {
     const plan = SAAS_PLANS.find(p => p.id === s.planId);
     return sum + (plan ? plan.priceDZD : 0);
   }, 0);

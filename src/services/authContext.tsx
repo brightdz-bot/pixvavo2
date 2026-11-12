@@ -93,13 +93,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (store) {
         setCurrentStore(store);
         setCurrentSubdomain(store.subdomain);
-        const merchant = storage.getUsers().find(u => u.storeId === store.id) || {
-          id: 'usr_' + store.ownerId,
+        const fallbackMerchant: User = {
+          id: store.ownerId,
           name: 'تاجر ' + store.name,
           email: `${store.subdomain}@dokani.dz`,
           role: 'merchant',
           storeId: store.id
         };
+        const merchant = storage.getUsers().find(u => u.storeId === store.id) || fallbackMerchant;
         setCurrentUser(merchant);
       }
     }

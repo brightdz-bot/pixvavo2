@@ -11,10 +11,11 @@ export const ThemeToggle: React.FC = () => {
   });
 
   useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    document.documentElement.classList.toggle('dark', isDark);
+    try {
+      localStorage.setItem('dokani_theme', isDark ? 'dark' : 'light');
+    } catch {
+      /* storage unavailable: theme still applies for this session */
     }
   }, [isDark]);
 
