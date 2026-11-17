@@ -607,7 +607,7 @@ GRANT UPDATE (name, description, announcement_text, logo_url, brand_color, free_
               custom_wilaya_fees, custom_wilaya_rates, updated_at)
     ON public.stores TO authenticated;
 GRANT INSERT (id, store_id, slug, title, highlight_title, description, category, stock, badge_text,
-              main_image, gallery_images, offers, theme, integrations, is_published)
+              main_image, gallery_images, offers, theme, integrations, is_published, updated_at)
     ON public.landing_pages TO authenticated;
 GRANT UPDATE (slug, title, highlight_title, description, category, stock, badge_text,
               main_image, gallery_images, offers, theme, integrations, is_published, updated_at)

@@ -646,8 +646,7 @@ class StorageService {
 
     if (this.useSupabase() && supabase) {
       const isExisting = page.id && isUuid(page.id);
-      const payload: any = {
-        store_id: page.storeId,
+      const commonFields = {
         slug: cleanSlug,
         title: page.title.trim(),
         highlight_title: page.highlightTitle?.trim() || null,
@@ -660,23 +659,30 @@ class StorageService {
         offers: page.offers || [],
         theme: page.theme || LANDING_THEME_PRESETS[0],
         integrations: page.integrations || {},
-        is_published: page.isPublished,
-        updated_at: new Date().toISOString()
+        is_published: page.isPublished
       };
 
       if (isExisting) {
+        const updatePayload = {
+          ...commonFields,
+          updated_at: new Date().toISOString()
+        };
         const { data, error } = await supabase
           .from('landing_pages')
-          .update(payload)
+          .update(updatePayload)
           .eq('id', page.id)
           .select()
           .single();
         if (error) return { success: false, error: error.message };
         return { success: true, page: mapDbLandingPage(data) };
       } else {
+        const insertPayload = {
+          store_id: page.storeId,
+          ...commonFields
+        };
         const { data, error } = await supabase
           .from('landing_pages')
-          .insert(payload)
+          .insert(insertPayload)
           .select()
           .single();
         if (error) return { success: false, error: error.message };
