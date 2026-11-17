@@ -206,27 +206,6 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
             >
               تسجيل دخول المالك
             </button>
-            <button
-              onClick={() => {
-                setLoginModalMode('register');
-                setLoginModalOpen(true);
-              }}
-              className="w-full py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white font-bold text-xs cursor-pointer"
-            >
-              إنشاء حساب مالك جديد (لأول مرة)
-            </button>
-            <button
-              onClick={() => enableDemoPreview(true)}
-              className="w-full py-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 font-bold text-xs cursor-pointer"
-            >
-              تشغيل الوضع التجريبي المباشر (بدون تسجيل)
-            </button>
-            <button
-              onClick={() => onGoToStorefront()}
-              className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold cursor-pointer"
-            >
-              تصفح واجهة المتجر
-            </button>
           </div>
         </div>
       </div>
