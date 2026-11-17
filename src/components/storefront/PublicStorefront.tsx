@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Store, LandingPage, OrderStatus } from '../../types';
 import { storage } from '../../services/storage';
 import { useAuth } from '../../services/authContext';
+import { fetchOrderFromGoogleSheet } from '../../services/integrations';
 import { formatDZD } from '../../data/wilayas';
 import { LandingPageView } from './LandingPageView';
 import {
@@ -122,12 +123,38 @@ export const PublicStorefront: React.FC<Props> = ({
       return;
     }
     setIsTrackingLoading(true);
-    const data = await storage.trackOrder(clean);
+    const sheetWebhook = store?.googleSheetWebhook;
+    const [data, sheetData] = await Promise.all([
+      storage.trackOrder(clean),
+      sheetWebhook ? fetchOrderFromGoogleSheet(sheetWebhook, clean) : Promise.resolve(null)
+    ]);
     setIsTrackingLoading(false);
-    if (!data) {
+    if (!data && !sheetData) {
       setTrackError('لم يتم العثور على طلب بهذا الرقم');
     } else {
-      setTrackedResult(data);
+      const hasDbEditAfterCreate =
+        Boolean(data?.updatedAt && data?.createdAt) &&
+        new Date(data.updatedAt).getTime() - new Date(data.createdAt).getTime() > 2500;
+      const preferDb = hasDbEditAfterCreate && Boolean(data);
+      setTrackedResult({
+        orderNumber: data?.orderNumber || sheetData?.orderNumber || clean,
+        customerFirstName: data?.customerFirstName || sheetData?.customerFirstName,
+        wilayaName: preferDb
+          ? data?.wilayaName || sheetData?.wilayaName || ''
+          : sheetData?.wilayaName || data?.wilayaName || '',
+        commune: preferDb ? data?.commune ?? sheetData?.commune : sheetData?.commune ?? data?.commune,
+        deliveryType: preferDb
+          ? data?.deliveryType || sheetData?.deliveryType || 'home'
+          : sheetData?.deliveryType || data?.deliveryType || 'home',
+        bundleLabel: preferDb
+          ? data?.bundleLabel || sheetData?.bundleLabel || ''
+          : sheetData?.bundleLabel || data?.bundleLabel || '',
+        total: preferDb
+          ? Number(data?.total || sheetData?.total || 0)
+          : Number(sheetData?.total || data?.total || 0),
+        status: sheetData?.status || data?.status || 'new',
+        trackingCode: sheetData?.trackingCode || data?.trackingCode
+      });
     }
   };
 
@@ -403,10 +430,11 @@ export const PublicStorefront: React.FC<Props> = ({
                     <strong>{trackedResult.bundleLabel}</strong>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">الولاية:</span>
+                    <span className="text-slate-500">الوجهة والتوصيل:</span>
                     <strong>
                       {trackedResult.wilayaName}
-                      {trackedResult.commune ? ` - ${trackedResult.commune}` : ''}
+                      {trackedResult.commune ? ` - ${trackedResult.commune}` : ''} (
+                      {trackedResult.deliveryType === 'stop' ? 'مكتب الشحن' : 'للمنزل'})
                     </strong>
                   </div>
                   {trackedResult.trackingCode && (

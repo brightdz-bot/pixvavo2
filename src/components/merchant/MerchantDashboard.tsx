@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
-import { LandingPage, Order, OrderStatus, Store } from '../../types';
+import { DeliveryType, LandingPage, Order, OrderStatus, Store } from '../../types';
 import { OverviewTab } from './OverviewTab';
 import { LandingPagesTab } from './LandingPagesTab';
 import { OrdersTab } from './OrdersTab';
 import { SettingsTab } from './SettingsTab';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { LoginModal } from '../visitor/LoginModal';
+import { ORDER_STAGE_LABELS, updateOrderInGoogleSheet } from '../../services/integrations';
 import {
   LayoutDashboard,
   Layers,
@@ -139,13 +140,64 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       ]);
       setOrders(updatedOrders);
       setLandingPages(updatedPages);
-      if (selectedOrder && selectedOrder.id === orderId) {
-        const found = updatedOrders.find(o => o.id === orderId);
-        if (found) setSelectedOrder(found);
+      const updatedOrder = updatedOrders.find(o => o.id === orderId);
+      if (selectedOrder && selectedOrder.id === orderId && updatedOrder) {
+        setSelectedOrder(updatedOrder);
+      }
+      if (updatedOrder) {
+        const lp = updatedPages.find(p => p.id === updatedOrder.landingPageId);
+        const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
+        updateOrderInGoogleSheet(webhook, {
+          orderId: updatedOrder.orderNumber,
+          statusLabel: ORDER_STAGE_LABELS[updatedOrder.status],
+          trackingCode: updatedOrder.trackingCode || trackingCode || ''
+        });
       }
       showToast('تم تحديث حالة الطلب بنجاح');
     } else {
       showToast('خطأ: ' + (res.error || 'تعذر تحديث الطلب'));
+    }
+  };
+
+  const handleUpdateOrderDetails = async (params: {
+    orderNumber: string;
+    offerId?: string;
+    bundleLabel?: string;
+    wilayaId?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+  }): Promise<boolean> => {
+    if (!store?.id) return false;
+    const res = await storage.updateOrderDetails({ ...params, allowCustomBundle: true });
+    if (res.success) {
+      const [updatedOrders, updatedPages] = await Promise.all([
+        storage.getOrders(store.id),
+        storage.getLandingPages(store.id)
+      ]);
+      setOrders(updatedOrders);
+      setLandingPages(updatedPages);
+      const found = updatedOrders.find(o => o.orderNumber === params.orderNumber);
+      if (selectedOrder && selectedOrder.orderNumber === params.orderNumber && found) {
+        setSelectedOrder(found);
+      }
+      if (res.updated) {
+        const lp = updatedPages.find(p => p.id === (res.updated?.landingPageId || found?.landingPageId));
+        const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
+        updateOrderInGoogleSheet(webhook, {
+          orderId: res.updated.orderNumber,
+          wilaya: res.updated.wilayaName,
+          commune: res.updated.commune,
+          deliveryType: res.updated.deliveryType,
+          orderDetails: res.updated.bundleLabel,
+          shippingCost: res.updated.shippingFee,
+          productPrice: res.updated.subtotal
+        });
+      }
+      showToast('تم تحديث تفاصيل العرض والوجهة بنجاح');
+      return true;
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر تحديث تفاصيل الطلب'));
+      return false;
     }
   };
 
@@ -498,7 +550,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 <OrdersTab
                   store={store}
                   orders={orders}
+                  landingPages={landingPages}
                   onUpdateStatus={handleUpdateOrderStatus}
+                  onUpdateOrderDetails={handleUpdateOrderDetails}
                   selectedOrder={selectedOrder}
                   onSelectOrder={setSelectedOrder}
                 />

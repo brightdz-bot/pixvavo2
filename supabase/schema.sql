@@ -487,10 +487,10 @@ AS $$
 DECLARE
     v_order RECORD;
 BEGIN
-    SELECT order_number, split_part(customer_name, ' ', 1) AS first_name,
-           wilaya_name, commune, delivery_type, bundle_label,
+    SELECT order_number, landing_page_id, split_part(customer_name, ' ', 1) AS first_name,
+           wilaya_id, wilaya_name, commune, delivery_type, bundle_label,
            COALESCE((items -> 0 ->> 'title'), '') AS item_title,
-           total, status, tracking_code, status_history, created_at
+           total, status, tracking_code, status_history, created_at, updated_at
     INTO v_order
     FROM public.orders
     WHERE order_number = upper(trim(p_order_number));
@@ -499,7 +499,9 @@ BEGIN
 
     RETURN jsonb_build_object(
         'orderNumber', v_order.order_number,
+        'landingPageId', v_order.landing_page_id,
         'customerFirstName', v_order.first_name,
+        'wilayaId', v_order.wilaya_id,
         'wilayaName', v_order.wilaya_name,
         'commune', v_order.commune,
         'deliveryType', v_order.delivery_type,
@@ -508,7 +510,200 @@ BEGIN
         'status', v_order.status,
         'trackingCode', v_order.tracking_code,
         'statusHistory', v_order.status_history,
-        'createdAt', v_order.created_at
+        'createdAt', v_order.created_at,
+        'updatedAt', v_order.updated_at
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_order_details(
+    p_order_number TEXT,
+    p_offer_id TEXT DEFAULT NULL,
+    p_bundle_label TEXT DEFAULT NULL,
+    p_wilaya_id TEXT DEFAULT NULL,
+    p_commune TEXT DEFAULT NULL,
+    p_delivery_type TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+    v_order RECORD;
+    v_store RECORD;
+    v_page RECORD;
+    v_wilaya RECORD;
+    v_offer JSONB;
+    v_found_offer BOOLEAN := false;
+    v_is_owner_or_admin BOOLEAN := false;
+    v_old_qty INTEGER := 1;
+    v_new_qty INTEGER := 1;
+    v_delta INTEGER := 0;
+    v_subtotal NUMERIC;
+    v_bundle_label TEXT;
+    v_items JSONB;
+    v_wilaya_id TEXT;
+    v_commune TEXT;
+    v_delivery TEXT;
+    v_shipping NUMERIC;
+    v_total NUMERIC;
+    v_address TEXT;
+    v_history JSONB;
+    i INTEGER;
+BEGIN
+    SELECT * INTO v_order
+    FROM public.orders
+    WHERE order_number = upper(trim(COALESCE(p_order_number, '')))
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'الطلب غير موجود';
+    END IF;
+
+    v_is_owner_or_admin := public.owns_store(v_order.store_id) OR public.is_admin();
+
+    IF v_is_owner_or_admin THEN
+        IF v_order.status IN ('delivered', 'cancelled') THEN
+            RAISE EXCEPTION 'لا يمكن تعديل طلب مسلم أو ملغي';
+        END IF;
+    ELSE
+        IF v_order.status <> 'new' THEN
+            RAISE EXCEPTION 'يمكن تعديل العرض أو الوجهة فقط عندما يكون الطلب قيد التأكيد';
+        END IF;
+    END IF;
+
+    SELECT * INTO v_store FROM public.stores WHERE id = v_order.store_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'المتجر غير موجود';
+    END IF;
+
+    v_subtotal := v_order.subtotal;
+    v_bundle_label := COALESCE(v_order.bundle_label, v_order.items -> 0 ->> 'title', '');
+    v_items := v_order.items;
+
+    IF p_offer_id IS NOT NULL AND trim(p_offer_id) <> '' AND v_order.landing_page_id IS NOT NULL THEN
+        SELECT * INTO v_page
+        FROM public.landing_pages
+        WHERE id = v_order.landing_page_id AND store_id = v_order.store_id
+        FOR UPDATE;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'صفحة المنتج غير موجودة';
+        END IF;
+
+        IF jsonb_typeof(v_page.offers) = 'array' AND jsonb_array_length(v_page.offers) > 0 THEN
+            FOR i IN 0 .. jsonb_array_length(v_page.offers) - 1 LOOP
+                v_offer := v_page.offers -> i;
+                IF (v_offer ->> 'id') = trim(p_offer_id) THEN
+                    v_found_offer := true;
+                    EXIT;
+                END IF;
+            END LOOP;
+        END IF;
+
+        IF NOT v_found_offer THEN
+            RAISE EXCEPTION 'العرض المختار غير موجود';
+        END IF;
+
+        v_old_qty := GREATEST(1, COALESCE(
+            (v_order.items -> 0 ->> 'bundleQuantity')::INTEGER,
+            (v_order.items -> 0 ->> 'quantity')::INTEGER,
+            1
+        ));
+        v_new_qty := GREATEST(1, COALESCE((v_offer ->> 'quantity')::INTEGER, 1));
+        v_delta := v_new_qty - v_old_qty;
+
+        IF v_delta > 0 AND v_page.stock < v_delta THEN
+            RAISE EXCEPTION 'عذراً، الكمية المتوفرة من "%" هي % قطع فقط', v_page.title, v_page.stock;
+        END IF;
+
+        IF v_delta <> 0 THEN
+            UPDATE public.landing_pages
+            SET stock = GREATEST(0, stock - v_delta)
+            WHERE id = v_page.id;
+        END IF;
+
+        v_subtotal := GREATEST(0, COALESCE((v_offer ->> 'price')::NUMERIC, 0));
+        v_bundle_label := COALESCE(v_offer ->> 'title', v_page.title) || ' (الكمية: ' || v_new_qty || ')';
+        v_items := jsonb_build_array(jsonb_build_object(
+            'productId', v_page.id,
+            'title', v_page.title,
+            'price', v_subtotal,
+            'quantity', 1,
+            'bundleQuantity', v_new_qty,
+            'variantText', v_bundle_label,
+            'imageUrl', v_page.main_image
+        ));
+    ELSIF v_is_owner_or_admin AND p_bundle_label IS NOT NULL AND trim(p_bundle_label) <> '' THEN
+        v_bundle_label := left(trim(p_bundle_label), 200);
+        IF jsonb_typeof(v_items) = 'array' AND jsonb_array_length(v_items) > 0 THEN
+            v_items := jsonb_set(v_items, '{0,variantText}', to_jsonb(v_bundle_label), true);
+        END IF;
+    END IF;
+
+    v_wilaya_id := COALESCE(NULLIF(trim(COALESCE(p_wilaya_id, '')), ''), v_order.wilaya_id);
+    SELECT * INTO v_wilaya FROM public.wilayas WHERE id = v_wilaya_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'الولاية غير صحيحة';
+    END IF;
+
+    v_commune := COALESCE(NULLIF(left(trim(COALESCE(p_commune, '')), 120), ''), v_order.commune, '');
+    v_delivery := CASE
+        WHEN COALESCE(NULLIF(trim(COALESCE(p_delivery_type, '')), ''), v_order.delivery_type, 'home') = 'stop'
+        THEN 'stop'
+        ELSE 'home'
+    END;
+
+    IF v_store.custom_wilaya_rates ? v_wilaya_id
+       AND (v_store.custom_wilaya_rates -> v_wilaya_id) ? v_delivery THEN
+        v_shipping := ((v_store.custom_wilaya_rates -> v_wilaya_id) ->> v_delivery)::NUMERIC;
+    ELSIF v_delivery = 'home' AND v_store.custom_wilaya_fees ? v_wilaya_id THEN
+        v_shipping := (v_store.custom_wilaya_fees ->> v_wilaya_id)::NUMERIC;
+    ELSE
+        v_shipping := CASE WHEN v_delivery = 'stop' THEN v_wilaya.stop_fee ELSE v_wilaya.home_fee END;
+    END IF;
+
+    IF v_store.free_shipping_threshold > 0 AND v_subtotal >= v_store.free_shipping_threshold THEN
+        v_shipping := 0;
+    END IF;
+
+    v_total := v_subtotal + v_shipping;
+    v_address := v_wilaya.name_ar
+        || CASE WHEN v_commune <> '' THEN ' - ' || v_commune ELSE '' END
+        || CASE WHEN v_delivery = 'stop' THEN ' (مكتب الشحن Stop Desk)' ELSE '' END;
+
+    v_history := v_order.status_history || jsonb_build_object(
+        'status', v_order.status,
+        'timestamp', now(),
+        'note', 'تعديل العرض/الوجهة: ' || v_bundle_label || ' | ' || v_wilaya.name_ar || CASE WHEN v_commune <> '' THEN ' - ' || v_commune ELSE '' END
+    );
+
+    UPDATE public.orders
+    SET bundle_label = v_bundle_label,
+        items = v_items,
+        subtotal = v_subtotal,
+        wilaya_id = v_wilaya_id,
+        wilaya_name = v_wilaya.name_ar,
+        commune = v_commune,
+        delivery_type = v_delivery,
+        address = v_address,
+        shipping_fee = v_shipping,
+        total = v_total,
+        status_history = v_history
+    WHERE id = v_order.id;
+
+    RETURN jsonb_build_object(
+        'orderNumber', v_order.order_number,
+        'landingPageId', v_order.landing_page_id,
+        'bundleLabel', v_bundle_label,
+        'wilayaId', v_wilaya_id,
+        'wilayaName', v_wilaya.name_ar,
+        'commune', v_commune,
+        'deliveryType', v_delivery,
+        'subtotal', v_subtotal,
+        'shippingFee', v_shipping,
+        'total', v_total,
+        'status', v_order.status,
+        'statusHistory', v_history
     );
 END;
 $$;
@@ -625,6 +820,7 @@ GRANT INSERT, UPDATE, DELETE ON public.product_costs TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_admin(), public.owns_store(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.place_order(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, UUID, TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.track_order(TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_order_details(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.update_order_status(UUID, TEXT, TEXT, TEXT) TO authenticated;
 
 -- ==============================================================================

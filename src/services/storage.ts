@@ -1050,6 +1050,175 @@ class StorageService {
     return { success: true };
   }
 
+  async updateOrderDetails(params: {
+    orderNumber: string;
+    offerId?: string;
+    bundleLabel?: string;
+    wilayaId?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+    allowCustomBundle?: boolean;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    updated?: {
+      orderNumber: string;
+      landingPageId?: string;
+      bundleLabel: string;
+      wilayaId: string;
+      wilayaName: string;
+      commune: string;
+      deliveryType: DeliveryType;
+      subtotal: number;
+      shippingFee: number;
+      total: number;
+      status: OrderStatus;
+    };
+  }> {
+    const cleanNum = params.orderNumber.trim().toUpperCase();
+    if (!cleanNum) {
+      return { success: false, error: 'رقم الطلب غير صحيح' };
+    }
+
+    if (this.useSupabase() && supabase) {
+      const { data, error } = await supabase.rpc('update_order_details', {
+        p_order_number: cleanNum,
+        p_offer_id: params.offerId || null,
+        p_bundle_label: params.bundleLabel || null,
+        p_wilaya_id: params.wilayaId || null,
+        p_commune: params.commune !== undefined ? params.commune : null,
+        p_delivery_type: params.deliveryType || null
+      });
+      if (error) {
+        console.error('Supabase update_order_details RPC error:', error);
+        return { success: false, error: error.message };
+      }
+      return {
+        success: true,
+        updated: {
+          orderNumber: data.orderNumber,
+          landingPageId: data.landingPageId || undefined,
+          bundleLabel: data.bundleLabel,
+          wilayaId: data.wilayaId,
+          wilayaName: data.wilayaName,
+          commune: data.commune || '',
+          deliveryType: data.deliveryType === 'stop' ? 'stop' : 'home',
+          subtotal: Number(data.subtotal),
+          shippingFee: Number(data.shippingFee),
+          total: Number(data.total),
+          status: data.status
+        }
+      };
+    }
+
+    // Local fallback
+    const all = this.getLocalOrders();
+    const order = all.find(o => o.orderNumber.toUpperCase() === cleanNum);
+    if (!order) return { success: false, error: 'الطلب غير موجود' };
+    if (order.status === 'delivered' || order.status === 'cancelled') {
+      return { success: false, error: 'لا يمكن تعديل طلب مسلم أو ملغي' };
+    }
+    if (!params.allowCustomBundle && order.status !== 'new') {
+      return { success: false, error: 'يمكن تعديل العرض أو الوجهة فقط عندما يكون الطلب قيد التأكيد' };
+    }
+
+    const store = this.getLocalStores().find(s => s.id === order.storeId) || this.getLocalStores()[0];
+    let subtotal = order.subtotal;
+    let bundleLabel = order.bundleLabel || order.items[0]?.title || '';
+
+    if (params.offerId && order.landingPageId) {
+      const pages = this.getLocalLandingPages();
+      const page = pages.find(p => p.id === order.landingPageId);
+      if (!page) return { success: false, error: 'صفحة المنتج غير موجودة' };
+      const offer = page.offers.find(o => o.id === params.offerId);
+      if (!offer) return { success: false, error: 'العرض المختار غير موجود' };
+
+      const match = order.bundleLabel?.match(/الكمية:\s*(\d+)/);
+      const oldQty = match ? Math.max(1, parseInt(match[1], 10)) : 1;
+      const newQty = Math.max(1, offer.quantity || 1);
+      const delta = newQty - oldQty;
+      if (delta > 0 && page.stock < delta) {
+        return { success: false, error: `عذراً، الكمية المتوفرة حالياً هي ${page.stock} قطع فقط` };
+      }
+      if (delta !== 0) {
+        page.stock = Math.max(0, page.stock - delta);
+        page.updatedAt = new Date().toISOString();
+        localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
+      }
+
+      subtotal = offer.price;
+      bundleLabel = `${offer.title} (الكمية: ${newQty})`;
+      order.items = [
+        {
+          productId: page.id,
+          title: page.title,
+          price: offer.price,
+          quantity: 1,
+          variantText: bundleLabel,
+          imageUrl: page.mainImage
+        }
+      ];
+    } else if (params.allowCustomBundle && params.bundleLabel && params.bundleLabel.trim()) {
+      bundleLabel = params.bundleLabel.trim();
+      if (order.items.length > 0) {
+        order.items[0] = { ...order.items[0], variantText: bundleLabel };
+      }
+    }
+
+    const wilaya =
+      ALGERIA_WILAYAS.find(w => w.id === (params.wilayaId || order.wilayaId)) || ALGERIA_WILAYAS[15];
+    const deliveryType: DeliveryType =
+      (params.deliveryType || order.deliveryType) === 'stop' ? 'stop' : 'home';
+    const commune = params.commune !== undefined ? params.commune.trim() : order.commune || '';
+
+    let shippingFee = deliveryType === 'stop' ? wilaya.stopFee : wilaya.homeFee;
+    const customRate = store?.customWilayaRates?.[wilaya.id];
+    if (customRate && customRate[deliveryType] !== undefined) {
+      shippingFee = customRate[deliveryType];
+    } else if (deliveryType === 'home' && store?.customWilayaFees?.[wilaya.id] !== undefined) {
+      shippingFee = store.customWilayaFees[wilaya.id];
+    }
+    if (store?.freeShippingThreshold && store.freeShippingThreshold > 0 && subtotal >= store.freeShippingThreshold) {
+      shippingFee = 0;
+    }
+
+    order.bundleLabel = bundleLabel;
+    order.subtotal = subtotal;
+    order.wilayaId = wilaya.id;
+    order.wilayaName = wilaya.nameAr;
+    order.commune = commune;
+    order.deliveryType = deliveryType;
+    order.address = `${wilaya.nameAr}${commune ? ' - ' + commune : ''}${
+      deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''
+    }`;
+    order.shippingFee = shippingFee;
+    order.total = subtotal + shippingFee;
+    order.updatedAt = new Date().toISOString();
+    order.statusHistory.push({
+      status: order.status,
+      timestamp: order.updatedAt,
+      note: `تعديل العرض/الوجهة: ${bundleLabel} | ${wilaya.nameAr}${commune ? ' - ' + commune : ''}`
+    });
+
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
+    return {
+      success: true,
+      updated: {
+        orderNumber: order.orderNumber,
+        landingPageId: order.landingPageId,
+        bundleLabel,
+        wilayaId: wilaya.id,
+        wilayaName: wilaya.nameAr,
+        commune,
+        deliveryType,
+        subtotal,
+        shippingFee,
+        total: order.total,
+        status: order.status
+      }
+    };
+  }
+
   async trackOrder(orderNumber: string): Promise<any> {
     const cleanNum = orderNumber.trim().toUpperCase();
     if (this.useSupabase() && supabase) {
@@ -1068,7 +1237,9 @@ class StorageService {
     return {
       id: order.id,
       orderNumber: order.orderNumber,
+      landingPageId: order.landingPageId,
       customerFirstName: order.customerName.split(' ')[0],
+      wilayaId: order.wilayaId,
       wilayaName: order.wilayaName,
       commune: order.commune,
       deliveryType: order.deliveryType || 'home',
@@ -1077,7 +1248,8 @@ class StorageService {
       status: order.status,
       trackingCode: order.trackingCode,
       statusHistory: order.statusHistory,
-      createdAt: order.createdAt
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt
     };
   }
 

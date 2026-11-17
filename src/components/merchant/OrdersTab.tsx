@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Order, OrderStatus, Store } from '../../types';
-import { formatDZD } from '../../data/wilayas';
+import React, { useState, useEffect, useMemo } from 'react';
+import { DeliveryType, LandingPage, Order, OrderStatus, Store } from '../../types';
+import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { normalizeWhatsAppNumber } from '../../services/integrations';
 import {
@@ -14,18 +14,28 @@ import {
   FileText,
   Printer,
   MessageCircle,
-  Tag
+  Tag,
+  Pencil
 } from 'lucide-react';
 
 interface Props {
   store: Store;
   orders: Order[];
+  landingPages?: LandingPage[];
   onUpdateStatus: (
     orderId: string,
     newStatus: OrderStatus,
     note?: string,
     trackingCode?: string
   ) => void;
+  onUpdateOrderDetails?: (params: {
+    orderNumber: string;
+    offerId?: string;
+    bundleLabel?: string;
+    wilayaId?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+  }) => Promise<boolean>;
   selectedOrder?: Order | null;
   onSelectOrder: (order: Order | null) => void;
 }
@@ -33,7 +43,9 @@ interface Props {
 export const OrdersTab: React.FC<Props> = ({
   store,
   orders,
+  landingPages = [],
   onUpdateStatus,
+  onUpdateOrderDetails,
   selectedOrder,
   onSelectOrder
 }) => {
@@ -44,10 +56,42 @@ export const OrdersTab: React.FC<Props> = ({
   const [statusNoteInput, setStatusNoteInput] = useState<string>('');
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
 
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [editOfferId, setEditOfferId] = useState('');
+  const [editBundleText, setEditBundleText] = useState('');
+  const [editWilayaId, setEditWilayaId] = useState('16');
+  const [editCommune, setEditCommune] = useState('');
+  const [editDeliveryType, setEditDeliveryType] = useState<DeliveryType>('home');
+  const [isSavingDetails, setIsSavingDetails] = useState(false);
+
+  const orderLandingPage = useMemo(
+    () => landingPages.find(lp => lp.id === selectedOrder?.landingPageId) || null,
+    [landingPages, selectedOrder?.landingPageId]
+  );
+
+  const editSelectedWilaya = useMemo(
+    () => ALGERIA_WILAYAS.find(w => w.id === editWilayaId) || ALGERIA_WILAYAS[15],
+    [editWilayaId]
+  );
+
   useEffect(() => {
     setTrackingCodeInput(selectedOrder?.trackingCode || '');
     setStatusNoteInput('');
-  }, [selectedOrder?.id]);
+    setIsEditingDetails(false);
+    if (selectedOrder) {
+      const lp = landingPages.find(p => p.id === selectedOrder.landingPageId);
+      const matchedOffer = lp?.offers.find(
+        o =>
+          selectedOrder.bundleLabel === `${o.title} (الكمية: ${o.quantity})` ||
+          (selectedOrder.bundleLabel || '').includes(o.title)
+      );
+      setEditOfferId(matchedOffer?.id || '');
+      setEditBundleText(selectedOrder.bundleLabel || selectedOrder.items[0]?.title || '');
+      setEditWilayaId(selectedOrder.wilayaId || '16');
+      setEditCommune(selectedOrder.commune || '');
+      setEditDeliveryType(selectedOrder.deliveryType === 'stop' ? 'stop' : 'home');
+    }
+  }, [selectedOrder?.id, selectedOrder?.bundleLabel, selectedOrder?.wilayaId, selectedOrder?.commune, selectedOrder?.deliveryType, landingPages]);
 
   const statusConfigs: Record<OrderStatus, { label: string; badgeClass: string; icon: any }> = {
     new: {
@@ -139,6 +183,39 @@ export const OrdersTab: React.FC<Props> = ({
         `بخصوص طلبيتك رقم ${order.orderNumber} من متجر ${store.name} (${bundle})، المبلغ ${formatDZD(order.total)}. نؤكد معك التوصيل إلى ${order.wilayaName}${order.commune ? ' - ' + order.commune : ''}.`;
     }
     return `https://wa.me/${customerWa}?text=${encodeURIComponent(msg)}`;
+  };
+
+  const getStoreDeliveryFee = (wilayaId: string, type: DeliveryType, subtotal: number) => {
+    const w = ALGERIA_WILAYAS.find(x => x.id === wilayaId) || ALGERIA_WILAYAS[15];
+    let fee = type === 'stop' ? w.stopFee : w.homeFee;
+    const customRate = store.customWilayaRates?.[wilayaId];
+    if (customRate && customRate[type] !== undefined) {
+      fee = customRate[type];
+    } else if (type === 'home' && store.customWilayaFees?.[wilayaId] !== undefined) {
+      fee = store.customWilayaFees[wilayaId];
+    }
+    if (store.freeShippingThreshold > 0 && subtotal >= store.freeShippingThreshold) {
+      fee = 0;
+    }
+    return fee;
+  };
+
+  const handleSaveDetailsEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrder || !onUpdateOrderDetails) return;
+    setIsSavingDetails(true);
+    const ok = await onUpdateOrderDetails({
+      orderNumber: selectedOrder.orderNumber,
+      offerId: editOfferId || undefined,
+      bundleLabel: !editOfferId ? editBundleText.trim() || undefined : undefined,
+      wilayaId: editWilayaId,
+      commune: editCommune,
+      deliveryType: editDeliveryType
+    });
+    setIsSavingDetails(false);
+    if (ok) {
+      setIsEditingDetails(false);
+    }
   };
 
   return (
@@ -349,30 +426,188 @@ export const OrdersTab: React.FC<Props> = ({
             </div>
 
             {/* Customer Box */}
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div>
-                <span className="text-slate-400">الاسم الكامل:</span>{' '}
-                <strong className="font-bold">{selectedOrder.customerName}</strong>
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60 space-y-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <span className="text-slate-400">الاسم الكامل:</span>{' '}
+                  <strong className="font-bold">{selectedOrder.customerName}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400">الهاتف:</span>{' '}
+                  <a href={`tel:${selectedOrder.customerPhone}`} className="font-mono font-bold text-emerald-600 inline-flex items-center gap-1">
+                    <Phone className="w-3 h-3" />
+                    <span>{selectedOrder.customerPhone}</span>
+                  </a>
+                </div>
+                <div>
+                  <span className="text-slate-400">الولاية والبلدية:</span>{' '}
+                  <strong className="font-bold">
+                    {selectedOrder.wilayaName}{selectedOrder.commune ? ` - ${selectedOrder.commune}` : ''}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-slate-400">طريقة التوصيل:</span>{' '}
+                  <strong className="font-bold">
+                    {selectedOrder.deliveryType === 'stop' ? 'مكتب الشحن (Stop Desk)' : 'توصيل للمنزل'}
+                  </strong>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400">الهاتف:</span>{' '}
-                <a href={`tel:${selectedOrder.customerPhone}`} className="font-mono font-bold text-emerald-600 inline-flex items-center gap-1">
-                  <Phone className="w-3 h-3" />
-                  <span>{selectedOrder.customerPhone}</span>
-                </a>
-              </div>
-              <div>
-                <span className="text-slate-400">الولاية والبلدية:</span>{' '}
-                <strong className="font-bold">
-                  {selectedOrder.wilayaName}{selectedOrder.commune ? ` - ${selectedOrder.commune}` : ''}
-                </strong>
-              </div>
-              <div>
-                <span className="text-slate-400">طريقة التوصيل:</span>{' '}
-                <strong className="font-bold">
-                  {selectedOrder.deliveryType === 'stop' ? 'مكتب الشحن (Stop Desk)' : 'توصيل للمنزل'}
-                </strong>
-              </div>
+
+              {selectedOrder.status !== 'delivered' &&
+                selectedOrder.status !== 'cancelled' &&
+                onUpdateOrderDetails && (
+                  <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                    {!isEditingDetails ? (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingDetails(true)}
+                        className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-emerald-700 dark:text-emerald-400 font-bold text-[11px] inline-flex items-center gap-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>تعديل المنتج / العرض أو الوجهة والتوصيل</span>
+                      </button>
+                    ) : (
+                      <form onSubmit={handleSaveDetailsEdit} className="space-y-3 pt-1">
+                        {orderLandingPage && orderLandingPage.offers.length > 0 ? (
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-slate-600 dark:text-slate-300">
+                              المنتج / العرض
+                            </label>
+                            <select
+                              value={editOfferId}
+                              onChange={e => setEditOfferId(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                            >
+                              {orderLandingPage.offers.map(o => (
+                                <option key={o.id} value={o.id}>
+                                  {o.title} (الكمية: {o.quantity}) — {formatDZD(o.price)}
+                                </option>
+                              ))}
+                              <option value="">إدخال تسمية مخصصة يدوياً...</option>
+                            </select>
+                            {!editOfferId && (
+                              <input
+                                type="text"
+                                value={editBundleText}
+                                onChange={e => setEditBundleText(e.target.value)}
+                                placeholder="اسم المنتج / العرض"
+                                className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-slate-600 dark:text-slate-300">
+                              المنتج / العرض
+                            </label>
+                            <input
+                              type="text"
+                              value={editBundleText}
+                              onChange={e => setEditBundleText(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                            />
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-slate-600 dark:text-slate-300">
+                              الولاية
+                            </label>
+                            <select
+                              value={editWilayaId}
+                              onChange={e => {
+                                const wId = e.target.value;
+                                setEditWilayaId(wId);
+                                const nextW = ALGERIA_WILAYAS.find(w => w.id === wId);
+                                if (nextW && nextW.communes.length > 0) {
+                                  setEditCommune(nextW.communes[0]);
+                                }
+                              }}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                            >
+                              {ALGERIA_WILAYAS.map(w => (
+                                <option key={w.id} value={w.id}>
+                                  {w.code} - {w.nameAr}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-slate-600 dark:text-slate-300">
+                              البلدية
+                            </label>
+                            <select
+                              value={editCommune}
+                              onChange={e => setEditCommune(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                            >
+                              {editSelectedWilaya.communes.map(c => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-slate-600 dark:text-slate-300">
+                              طريقة التوصيل
+                            </label>
+                            <select
+                              value={editDeliveryType}
+                              onChange={e => setEditDeliveryType(e.target.value as DeliveryType)}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                            >
+                              <option value="home">
+                                توصيل للمنزل (
+                                {formatDZD(
+                                  getStoreDeliveryFee(
+                                    editSelectedWilaya.id,
+                                    'home',
+                                    orderLandingPage?.offers.find(o => o.id === editOfferId)?.price ??
+                                      selectedOrder.subtotal
+                                  )
+                                )}
+                                )
+                              </option>
+                              <option value="stop">
+                                مكتب الشحن Stop Desk (
+                                {formatDZD(
+                                  getStoreDeliveryFee(
+                                    editSelectedWilaya.id,
+                                    'stop',
+                                    orderLandingPage?.offers.find(o => o.id === editOfferId)?.price ??
+                                      selectedOrder.subtotal
+                                  )
+                                )}
+                                )
+                              </option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="submit"
+                            disabled={isSavingDetails}
+                            className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer disabled:opacity-50"
+                          >
+                            {isSavingDetails ? 'جارٍ الحفظ...' : 'حفظ التعديلات'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingDetails(false)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs cursor-pointer"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                )}
             </div>
 
             {/* Items & Totals */}

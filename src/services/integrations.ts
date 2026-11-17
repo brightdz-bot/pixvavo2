@@ -99,6 +99,9 @@ export async function sendOrderToGoogleSheet(
     shippingCost: number;
     productPrice: number;
     totalPrice: number;
+    discount?: number;
+    discountReason?: string;
+    trackingCode?: string;
   }
 ): Promise<void> {
   const cleanUrl = webhookUrl?.trim();
@@ -119,7 +122,10 @@ export async function sendOrderToGoogleSheet(
     formData.append('status', payload.statusLabel);
     formData.append('shippingCost', String(payload.shippingCost));
     formData.append('productPrice', String(payload.productPrice));
+    formData.append('discount', String(payload.discount || 0));
+    formData.append('discountReason', payload.discountReason || '');
     formData.append('totalPrice', formatDZD(payload.totalPrice));
+    formData.append('trackingCode', payload.trackingCode || '');
 
     await fetch(cleanUrl, {
       method: 'POST',
@@ -129,6 +135,164 @@ export async function sendOrderToGoogleSheet(
   } catch (err) {
     console.warn('Google Sheet webhook request failed (non-blocking):', err);
   }
+}
+
+export async function updateOrderInGoogleSheet(
+  webhookUrl: string | undefined,
+  payload: {
+    orderId: string;
+    wilaya?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+    orderDetails?: string;
+    statusLabel?: string;
+    shippingCost?: number;
+    productPrice?: number;
+    trackingCode?: string;
+  }
+): Promise<void> {
+  const cleanUrl = webhookUrl?.trim();
+  if (!cleanUrl || !payload.orderId.trim()) return;
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('action', 'update');
+    formData.append('orderId', payload.orderId.trim());
+    if (payload.wilaya !== undefined) formData.append('wilaya', payload.wilaya);
+    if (payload.commune !== undefined) formData.append('commune', payload.commune);
+    if (payload.deliveryType !== undefined) {
+      formData.append(
+        'shippingType',
+        payload.deliveryType === 'home' ? 'توصيل للمنزل 🏠' : 'مكتب الشحن Stop Desk 🏢'
+      );
+    }
+    if (payload.orderDetails !== undefined) formData.append('order', payload.orderDetails);
+    if (payload.statusLabel !== undefined) formData.append('status', payload.statusLabel);
+    if (payload.shippingCost !== undefined) formData.append('shippingCost', String(payload.shippingCost));
+    if (payload.productPrice !== undefined) formData.append('productPrice', String(payload.productPrice));
+    if (payload.trackingCode !== undefined) formData.append('trackingCode', payload.trackingCode);
+
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: formData
+    });
+  } catch (err) {
+    console.warn('Google Sheet update request failed (non-blocking):', err);
+  }
+}
+
+export function mapSheetStatusToOrderStatus(raw?: string): OrderStatus {
+  const text = (raw || '').trim().toLowerCase();
+  if (!text) return 'new';
+  if (text.includes('ملغ') || text.includes('cancel') || text.includes('إلغاء')) return 'cancelled';
+  if (text.includes('تسليم') || text.includes('تم التوصيل') || text.includes('delivered')) return 'delivered';
+  if (text.includes('شحن') || text.includes('توصيل') || text.includes('طريق') || text.includes('shipping')) return 'shipping';
+  if (text === 'التأكيد' || text.includes('مؤكد') || text.includes('تم التأكيد') || text.includes('confirmed')) return 'confirmed';
+  return 'new';
+}
+
+export interface SheetTrackedOrder {
+  orderNumber: string;
+  customerFirstName: string;
+  bundleLabel: string;
+  wilayaName?: string;
+  commune?: string;
+  deliveryType?: DeliveryType;
+  status: OrderStatus;
+  trackingCode?: string;
+  total: number;
+}
+
+export async function fetchOrderFromGoogleSheet(
+  webhookUrl: string | undefined,
+  orderNumber: string
+): Promise<SheetTrackedOrder | null> {
+  const cleanUrl = webhookUrl?.trim();
+  const cleanId = orderNumber.trim();
+  if (!cleanUrl || !cleanId || typeof window === 'undefined' || typeof document === 'undefined') {
+    return null;
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    const cbName = '__dzSheetCb_' + Math.random().toString(36).slice(2, 10);
+    const script = document.createElement('script');
+
+    const cleanup = () => {
+      try {
+        delete (window as any)[cbName];
+      } catch {
+        (window as any)[cbName] = undefined;
+      }
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        resolve(null);
+      }
+    }, 5500);
+
+    (window as any)[cbName] = (data: any) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      cleanup();
+
+      if (!data || data.status !== 'success') {
+        resolve(null);
+        return;
+      }
+
+      const rawTotal = String(data.total || '').replace(/[^\d.]/g, '');
+      const parsedTotal = parseFloat(rawTotal) || 0;
+      const fullName = String(data.fullName || '').trim();
+      const rawShippingType = String(data.shippingType || data.deliveryType || '').trim().toLowerCase();
+      const parsedDeliveryType: DeliveryType | undefined = rawShippingType
+        ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
+          ? 'stop'
+          : 'home'
+        : undefined;
+
+      resolve({
+        orderNumber: String(data.orderId || cleanId).trim(),
+        customerFirstName: fullName ? fullName.split(' ')[0] : 'الزبون الكريم',
+        bundleLabel: String(data.orderName || '').trim(),
+        wilayaName: String(data.wilaya || data.wilayaName || '').trim() || undefined,
+        commune: String(data.commune || '').trim() || undefined,
+        deliveryType: parsedDeliveryType,
+        status: mapSheetStatusToOrderStatus(data.orderStatus),
+        trackingCode: String(data.trackingCode || '').trim() || undefined,
+        total: parsedTotal
+      });
+    };
+
+    try {
+      const targetUrl = new URL(cleanUrl);
+      targetUrl.searchParams.set('orderId', cleanId);
+      targetUrl.searchParams.set('callback', cbName);
+      script.src = targetUrl.toString();
+      script.async = true;
+      script.onerror = () => {
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timer);
+          cleanup();
+          resolve(null);
+        }
+      };
+      document.head.appendChild(script);
+    } catch {
+      window.clearTimeout(timer);
+      cleanup();
+      resolve(null);
+    }
+  });
 }
 
 export function normalizeWhatsAppNumber(raw?: string): string {
@@ -208,3 +372,4 @@ export const ORDER_STAGE_LABELS: Record<OrderStatus, string> = {
   delivered: 'التسليم',
   cancelled: 'ملغي'
 };
+
