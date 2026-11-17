@@ -1,282 +1,291 @@
-import { Store, Product, Order, User, OrderStatus } from '../types';
+import {
+  Store,
+  Product,
+  Order,
+  User,
+  OrderStatus,
+  LandingPage,
+  DeliveryType
+} from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { DEFAULT_ASSETS } from '../data/defaultAssets';
+import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
 
 export function isUuid(val?: string | null): boolean {
   if (!val || typeof val !== 'string') return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
 }
 
-const STORES_KEY = 'dokani_stores';
-const PRODUCTS_KEY = 'dokani_products';
-const ORDERS_KEY = 'dokani_orders';
-const USERS_KEY = 'dokani_users';
+const STORES_KEY = 'brightdz_stores';
+const LANDING_PAGES_KEY = 'brightdz_landing_pages';
+const PRODUCTS_KEY = 'brightdz_products';
+const ORDERS_KEY = 'brightdz_orders';
+const USERS_KEY = 'brightdz_users';
 
-// Initial Mock Seed Data for Local Fallback
 const INITIAL_STORES: Store[] = [
   {
-    id: 'store_el_nokhba',
-    ownerId: 'usr_merchant_1',
-    name: 'متجر النخبة للموضة الجزائرية',
-    subdomain: 'el-nokhba',
-    description: 'أرقى الملابس التقليدية والعصرية للرجال والنساء في الجزائر مع توصيل سريع.',
-    logoUrl: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=400&q=80',
-    brandColor: '#059669',
-    freeShippingThreshold: 10000,
+    id: 'store_bright_dz',
+    ownerId: 'usr_owner_1',
+    name: 'Bright DZ',
+    subdomain: 'bright-dz',
+    description: 'متجر الجودة والديكور العصري في الجزائر — منتجات مختارة بعناية مع الدفع بعد المعاينة والاستلام.',
+    announcementText: 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
+    brandColor: '#754b2d',
+    freeShippingThreshold: 0,
     planId: 'plan_pro',
     status: 'active',
-    phone: '0550123456',
-    customWilayaFees: {
-      '16': 350,
-      '09': 400,
-      '31': 550
-    },
+    phone: '0798353165',
+    defaultWhatsapp: '213798353165',
+    defaultPixelId: '',
+    googleSheetWebhook: '',
+    customWilayaFees: {},
+    customWilayaRates: {},
     createdAt: new Date(Date.now() - 30 * 86400000).toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'store_techno_casa',
-    ownerId: 'usr_merchant_2',
-    name: 'تكنو كازا للإلكترونيات',
-    subdomain: 'technocasa',
-    description: 'الهواتف الذكية والإكسسوارات الأصلية مع ضمان محلي في الجزائر.',
-    logoUrl: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=400&q=80',
-    brandColor: '#2563eb',
-    freeShippingThreshold: 15000,
-    planId: 'plan_starter',
-    status: 'active',
-    phone: '0661987654',
-    createdAt: new Date(Date.now() - 15 * 86400000).toISOString(),
     updatedAt: new Date().toISOString()
   }
 ];
 
-const INITIAL_PRODUCTS: Product[] = [
+const INITIAL_LANDING_PAGES: LandingPage[] = [
   {
-    id: 'prod_1',
-    storeId: 'store_el_nokhba',
-    title: 'قفطان جزائري عصري مطرز بالفتلة الحرة',
-    description: 'قفطان فاخر مصنوع يدوياً من حرير الساتان الملكي مع تطريز جزائري أصيل بالفتلة والمجبود. مناسب للأعراس والمناسبات الكبرى.',
-    price: 18500,
-    comparePrice: 22000,
-    costPrice: 11000,
-    category: 'ملابس نسائية',
-    stock: 14,
-    sku: 'KAFT-ALG-01',
-    imageUrl: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?auto=format&fit=crop&w=800&q=80',
-    variants: [
-      { id: 'v1', name: 'المقاس', options: ['M (38-40)', 'L (42-44)', 'XL (46-48)'] },
-      { id: 'v2', name: 'اللون', options: ['أخضر زمردي', 'عنابي ملكي', 'أزرق ليلي'] }
+    id: 'lp_towel_holder',
+    storeId: 'store_bright_dz',
+    slug: 'gravity-towel-holder',
+    title: 'حامل المناشف الخشبي الفاخر',
+    highlightTitle: 'بنظام القفل بالجاذبية',
+    description: 'أضف لمسة جمالية وعصرية لحمامك أو مطبخك! مشبك تثبيت فريد مصنوع من الخشب الطبيعي المحمي ضد الرطوبة بدون ثقب الجدران.',
+    category: 'الديكور والمنزل',
+    stock: 42,
+    badgeText: 'الأكثر طلباً',
+    mainImage: DEFAULT_ASSETS.towelHolderMain,
+    galleryImages: [
+      DEFAULT_ASSETS.towelHolderMain,
+      DEFAULT_ASSETS.towelHolderBathroom,
+      DEFAULT_ASSETS.towelHolderKitchen,
+      DEFAULT_ASSETS.towelHolderDetail
     ],
-    isActive: true,
-    createdAt: new Date(Date.now() - 20 * 86400000).toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'prod_2',
-    storeId: 'store_el_nokhba',
-    title: 'برنوس رجالي صوف أصلي تقرتي ووبر الإبل',
-    description: 'برنوس شتوي تقليدي دافئ مصنوع من أجود أنواع صوف الوبر الطبيعي، خياطة يدوية متقنة تمنحك هيبة وأصالة.',
-    price: 14800,
-    comparePrice: 17500,
-    costPrice: 8500,
-    category: 'ملابس رجالية',
-    stock: 8,
-    sku: 'BARN-WOOL-02',
-    imageUrl: 'https://images.unsplash.com/photo-1544441893-675973e31985?auto=format&fit=crop&w=800&q=80',
-    variants: [
-      { id: 'v1', name: 'اللون', options: ['بني وبر', 'أبيض سكري', 'رمادي غامق'] }
+    offers: [
+      {
+        id: 'pack1',
+        title: 'العرض العادي (قطعة واحدة)',
+        subtitle: 'مناسب لحمام واحد أو مطبخ',
+        quantity: 1,
+        price: 1900,
+        isDefault: false
+      },
+      {
+        id: 'pack2',
+        title: 'عرض القطعتين (باك المطبخ والحمام)',
+        subtitle: 'قطعتين لتغطية المنزل بالكامل',
+        quantity: 2,
+        price: 3300,
+        comparePrice: 3800,
+        badge: 'توفير رائع',
+        isDefault: true
+      },
+      {
+        id: 'pack4',
+        title: 'العرض العائلي الفاخر (4 قطع)',
+        subtitle: 'أقصى توفير للعائلات الكبيرة',
+        quantity: 4,
+        price: 6200,
+        comparePrice: 7600,
+        isDefault: false
+      }
     ],
-    isActive: true,
-    createdAt: new Date(Date.now() - 18 * 86400000).toISOString(),
+    theme: LANDING_THEME_PRESETS[0],
+    integrations: {
+      pixelId: '',
+      whatsappNumber: '213798353165',
+      googleSheetWebhook: ''
+    },
+    isPublished: true,
+    createdAt: new Date(Date.now() - 12 * 86400000).toISOString(),
     updatedAt: new Date().toISOString()
   },
   {
-    id: 'prod_3',
-    storeId: 'store_el_nokhba',
-    title: 'حذاء جلدي كلاسيكي مريح صناعة محلية فاخرة',
-    description: 'حذاء رجالي مصنوع من الجلد الطبيعي 100% بنعل طبي مريح للمشي الطويل والاستخدام اليومي أو المناسبات الرسمية.',
-    price: 6900,
-    comparePrice: 8500,
-    costPrice: 4200,
-    category: 'أحذية',
-    stock: 3,
-    sku: 'SHOE-LEA-03',
-    imageUrl: 'https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?auto=format&fit=crop&w=800&q=80',
-    variants: [
-      { id: 'v1', name: 'المقاس', options: ['40', '41', '42', '43', '44'] },
-      { id: 'v2', name: 'اللون', options: ['أسود كلاسيك', 'بني كراميل'] }
+    id: 'lp_organizer_shelf',
+    storeId: 'store_bright_dz',
+    slug: 'wooden-bathroom-shelf',
+    title: 'رف الحمام الخشبي العصري',
+    highlightTitle: 'مع خطافات نحاسية بدون ثقب',
+    description: 'نظم مستلزمات الحمام والعطور بأناقة دون الحاجة لحفر الجدران. خشب معالج ضد الماء مع تثبيت لاصق فائق القوة يتحمل حتى 8 كغ.',
+    category: 'تنظيم الحمام',
+    stock: 26,
+    badgeText: 'وصل حديثاً',
+    mainImage: DEFAULT_ASSETS.organizerShelfHero,
+    galleryImages: [
+      DEFAULT_ASSETS.organizerShelfHero,
+      DEFAULT_ASSETS.towelHolderBathroom,
+      DEFAULT_ASSETS.towelHolderDetail,
+      DEFAULT_ASSETS.towelHolderKitchen
     ],
-    isActive: true,
-    createdAt: new Date(Date.now() - 14 * 86400000).toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'prod_4',
-    storeId: 'store_el_nokhba',
-    title: 'ساعة يد كوارتز فاخرة مقاومة للماء مع حزام ستانلس ستيل',
-    description: 'ساعة أنيقة عالية الدقة بتصميم عصري جذاب وعلبة هدية فخمة، مقاومة لرذاذ الماء وضمان لمدة 12 شهر.',
-    price: 4500,
-    comparePrice: 5900,
-    costPrice: 2400,
-    category: 'إكسسوارات',
-    stock: 22,
-    sku: 'WATCH-QZ-04',
-    imageUrl: 'https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=800&q=80',
-    isActive: true,
-    createdAt: new Date(Date.now() - 10 * 86400000).toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'prod_5',
-    storeId: 'store_el_nokhba',
-    title: 'حقيبة يد نسائية جلدية أنيقة بتصميم إيطالي',
-    description: 'حقيبة يد عملية ومتينة مزودة بحزام كتف قابل للتعديل ومقصورات متعددة لتنظيم الأغراض الشخصية.',
-    price: 5200,
-    comparePrice: 6500,
-    costPrice: 3100,
-    category: 'حقائب',
-    stock: 2,
-    sku: 'BAG-LEA-05',
-    imageUrl: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80',
-    isActive: true,
-    createdAt: new Date(Date.now() - 8 * 86400000).toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'prod_6',
-    storeId: 'store_el_nokhba',
-    title: 'عطر دهن العود والمسك الأبيض الملكي (100 مل)',
-    description: 'رائحة شرقية ساحرة تدوم لأكثر من 48 ساعة، مكونات نقية مستخلصة بعناية تناسب الرجال والنساء.',
-    price: 7800,
-    comparePrice: 9500,
-    costPrice: 4000,
-    category: 'عطور',
-    stock: 19,
-    sku: 'PERF-OUD-06',
-    imageUrl: 'https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?auto=format&fit=crop&w=800&q=80',
-    isActive: true,
+    offers: [
+      {
+        id: 'shelf1',
+        title: 'رف واحد مع خطافين (قطعة واحدة)',
+        subtitle: 'تثبيت فوري بدون ثقب أو أدوات',
+        quantity: 1,
+        price: 2800,
+        comparePrice: 3400,
+        isDefault: false
+      },
+      {
+        id: 'shelf2',
+        title: 'باك التنظيم الكامل (قطعتين)',
+        subtitle: 'رف رئيسي + رف إضافي للحمام أو المطبخ',
+        quantity: 2,
+        price: 4900,
+        comparePrice: 5600,
+        badge: 'الأكثر مبيعاً',
+        isDefault: true
+      },
+      {
+        id: 'shelf3',
+        title: 'العرض الثلاثي الفاخر (3 قطع)',
+        subtitle: 'تغطية شاملة للحمام والمطبخ والمدخل',
+        quantity: 3,
+        price: 6800,
+        comparePrice: 8400,
+        isDefault: false
+      }
+    ],
+    theme: LANDING_THEME_PRESETS[1],
+    integrations: {
+      pixelId: '',
+      whatsappNumber: '213798353165',
+      googleSheetWebhook: ''
+    },
+    isPublished: true,
     createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
     updatedAt: new Date().toISOString()
   }
 ];
 
+const INITIAL_PRODUCTS: Product[] = [];
+
 const INITIAL_ORDERS: Order[] = [
   {
-    id: 'ord_101',
+    id: 'ord_201',
     orderNumber: 'DZ-9821A4B2',
-    storeId: 'store_el_nokhba',
-    customerName: 'أمين بلقاسم',
+    storeId: 'store_bright_dz',
+    landingPageId: 'lp_towel_holder',
+    bundleLabel: 'عرض القطعتين (باك المطبخ والحمام) (الكمية: 2)',
+    customerName: 'محمد الأمين بن عمارة',
     customerPhone: '0550123456',
     wilayaId: '16',
     wilayaName: 'الجزائر العاصمة',
-    address: 'حي 11 ديسمبر، دالي إبراهيم، عمارة ب رقم 12',
+    commune: 'دالي إبراهيم',
+    deliveryType: 'home',
+    address: 'الجزائر العاصمة - دالي إبراهيم',
     items: [
       {
-        productId: 'prod_2',
-        title: 'برنوس رجالي صوف أصلي تقرتي ووبر الإبل',
-        price: 14800,
+        productId: 'lp_towel_holder',
+        title: 'حامل المناشف الخشبي الفاخر',
+        price: 3300,
         quantity: 1,
-        variantText: 'اللون: بني وبر',
-        imageUrl: 'https://images.unsplash.com/photo-1544441893-675973e31985?auto=format&fit=crop&w=300&q=80'
+        variantText: 'عرض القطعتين (باك المطبخ والحمام) (الكمية: 2)',
+        imageUrl: DEFAULT_ASSETS.towelHolderMain
       }
     ],
-    subtotal: 14800,
-    shippingFee: 0,
-    total: 14800,
+    subtotal: 3300,
+    shippingFee: 600,
+    total: 3900,
     status: 'shipping',
+    trackingCode: '28-H8G9NDFX0V-ZR',
     statusHistory: [
-      { status: 'new', timestamp: new Date(Date.now() - 3 * 86400000).toISOString(), note: 'تم تسجيل الطلب عبر المتجر والدفع عند الاستلام' },
+      { status: 'new', timestamp: new Date(Date.now() - 3 * 86400000).toISOString(), note: 'تم تسجيل الطلب والدفع عند الاستلام' },
       { status: 'confirmed', timestamp: new Date(Date.now() - 2 * 86400000).toISOString(), note: 'تم تأكيد الطلب هاتفياً مع الزبون' },
-      { status: 'shipping', timestamp: new Date(Date.now() - 1 * 86400000).toISOString(), note: 'تم تسليم الطرد لشركة ياليدين اكسبريس' }
+      { status: 'shipping', timestamp: new Date(Date.now() - 1 * 86400000).toISOString(), note: 'تم إرسال الطرد عبر ZR Express' }
     ],
     paymentMethod: 'cod',
     createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 1 * 86400000).toISOString()
   },
   {
-    id: 'ord_102',
+    id: 'ord_202',
     orderNumber: 'DZ-7140B8F9',
-    storeId: 'store_el_nokhba',
-    customerName: 'فاطمة الزهراء بن علي',
+    storeId: 'store_bright_dz',
+    landingPageId: 'lp_towel_holder',
+    bundleLabel: 'العرض العائلي الفاخر (4 قطع) (الكمية: 4)',
+    customerName: 'ياسمين قاسمي',
     customerPhone: '0661234567',
     wilayaId: '31',
     wilayaName: 'وهران',
-    address: 'شارع العربي بن مهيدي، حي ميرامار',
+    commune: 'بئر الجير',
+    deliveryType: 'stop',
+    address: 'وهران - بئر الجير (مكتب الشحن Stop Desk)',
     items: [
       {
-        productId: 'prod_1',
-        title: 'قفطان جزائري عصري مطرز بالفتلة الحرة',
-        price: 18500,
+        productId: 'lp_towel_holder',
+        title: 'حامل المناشف الخشبي الفاخر',
+        price: 6200,
         quantity: 1,
-        variantText: 'المقاس: M (38-40) | اللون: أخضر زمردي',
-        imageUrl: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?auto=format&fit=crop&w=300&q=80'
+        variantText: 'العرض العائلي الفاخر (4 قطع) (الكمية: 4)',
+        imageUrl: DEFAULT_ASSETS.towelHolderMain
       }
     ],
-    subtotal: 18500,
-    shippingFee: 0,
-    total: 18500,
+    subtotal: 6200,
+    shippingFee: 450,
+    total: 6650,
     status: 'delivered',
+    trackingCode: 'YAL-3109941',
     statusHistory: [
       { status: 'new', timestamp: new Date(Date.now() - 6 * 86400000).toISOString(), note: 'تم تسجيل الطلب' },
       { status: 'confirmed', timestamp: new Date(Date.now() - 5 * 86400000).toISOString() },
       { status: 'shipping', timestamp: new Date(Date.now() - 4 * 86400000).toISOString() },
-      { status: 'delivered', timestamp: new Date(Date.now() - 1 * 86400000).toISOString(), note: 'تم تحصيل المبلغ 18,500 د.ج نقداً من الزبونة' }
+      { status: 'delivered', timestamp: new Date(Date.now() - 1 * 86400000).toISOString(), note: 'تم تسليم الطرد وتحصيل المبلغ' }
     ],
     paymentMethod: 'cod',
     createdAt: new Date(Date.now() - 6 * 86400000).toISOString(),
     updatedAt: new Date(Date.now() - 1 * 86400000).toISOString()
   },
   {
-    id: 'ord_103',
+    id: 'ord_203',
     orderNumber: 'DZ-3392E1C4',
-    storeId: 'store_el_nokhba',
+    storeId: 'store_bright_dz',
+    landingPageId: 'lp_organizer_shelf',
+    bundleLabel: 'باك التنظيم الكامل (قطعتين) (الكمية: 2)',
     customerName: 'كريم مزياني',
     customerPhone: '0770345678',
     wilayaId: '19',
     wilayaName: 'سطيف',
-    address: 'حي بيلير قرب مسجد العتيق',
+    commune: 'العلمة',
+    deliveryType: 'home',
+    address: 'سطيف - العلمة',
     items: [
       {
-        productId: 'prod_3',
-        title: 'حذاء جلدي كلاسيكي مريح صناعة محلية فاخرة',
-        price: 6900,
+        productId: 'lp_organizer_shelf',
+        title: 'رف الحمام الخشبي العصري',
+        price: 4900,
         quantity: 1,
-        variantText: 'المقاس: 42 | اللون: بني كراميل',
-        imageUrl: 'https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?auto=format&fit=crop&w=300&q=80'
+        variantText: 'باك التنظيم الكامل (قطعتين) (الكمية: 2)',
+        imageUrl: DEFAULT_ASSETS.organizerShelfHero
       }
     ],
-    subtotal: 6900,
+    subtotal: 4900,
     shippingFee: 600,
-    total: 7500,
+    total: 5500,
     status: 'new',
     statusHistory: [
-      { status: 'new', timestamp: new Date(Date.now() - 4 * 3600000).toISOString(), note: 'طلب جديد بانتظار الاتصال الهاتفي للتأكيد' }
+      { status: 'new', timestamp: new Date(Date.now() - 3 * 3600000).toISOString(), note: 'طلب جديد بانتظار الاتصال الهاتفي للتأكيد' }
     ],
     paymentMethod: 'cod',
-    createdAt: new Date(Date.now() - 4 * 3600000).toISOString(),
-    updatedAt: new Date(Date.now() - 4 * 3600000).toISOString()
+    createdAt: new Date(Date.now() - 3 * 3600000).toISOString(),
+    updatedAt: new Date(Date.now() - 3 * 3600000).toISOString()
   }
 ];
 
 const INITIAL_USERS: User[] = [
   {
-    id: 'usr_merchant_1',
-    name: 'سفيان بلحاج',
-    email: 'merchant@dokani.dz',
-    phone: '0550123456',
+    id: 'usr_owner_1',
+    name: 'صاحب متجر Bright DZ',
+    email: 'owner@brightdz.dz',
+    phone: '0798353165',
     role: 'merchant',
-    storeId: 'store_el_nokhba'
-  },
-  {
-    id: 'usr_admin',
-    name: 'مسؤول المنصة الجزائري',
-    email: 'admin@dokani.dz',
-    phone: '021000000',
-    role: 'admin'
+    storeId: 'store_bright_dz'
   }
 ];
 
-// Helper to map DB store row to Store interface
 function mapDbStore(row: any): Store {
   return {
     id: row.id,
@@ -284,19 +293,46 @@ function mapDbStore(row: any): Store {
     name: row.name,
     subdomain: row.subdomain,
     description: row.description || '',
+    announcementText: row.announcement_text || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
     logoUrl: row.logo_url,
-    brandColor: row.brand_color || '#059669',
-    freeShippingThreshold: Number(row.free_shipping_threshold || 10000),
-    planId: row.plan_id || 'plan_trial',
+    brandColor: row.brand_color || '#754b2d',
+    freeShippingThreshold: Number(row.free_shipping_threshold || 0),
+    planId: row.plan_id || 'plan_pro',
     status: row.status || 'active',
     phone: row.phone || '',
+    defaultWhatsapp: row.default_whatsapp || row.phone || '',
+    defaultPixelId: row.default_pixel_id || '',
+    googleSheetWebhook: row.google_sheet_webhook || '',
     customWilayaFees: row.custom_wilaya_fees || {},
+    customWilayaRates: row.custom_wilaya_rates || {},
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
 }
 
-// Helper to map DB product row to Product interface
+function mapDbLandingPage(row: any): LandingPage {
+  const theme = row.theme && row.theme.primaryColor ? row.theme : LANDING_THEME_PRESETS[0];
+  return {
+    id: row.id,
+    storeId: row.store_id,
+    slug: row.slug,
+    title: row.title,
+    highlightTitle: row.highlight_title || '',
+    description: row.description || '',
+    category: row.category || 'عام',
+    stock: Number(row.stock || 0),
+    badgeText: row.badge_text || '',
+    mainImage: row.main_image || DEFAULT_ASSETS.towelHolderMain,
+    galleryImages: Array.isArray(row.gallery_images) ? row.gallery_images : [],
+    offers: Array.isArray(row.offers) ? row.offers : [],
+    theme,
+    integrations: row.integrations || {},
+    isPublished: Boolean(row.is_published),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function mapDbProduct(row: any, costPrice?: number): Product {
   return {
     id: row.id,
@@ -318,22 +354,26 @@ function mapDbProduct(row: any, costPrice?: number): Product {
   };
 }
 
-// Helper to map DB order row to Order interface
 function mapDbOrder(row: any): Order {
   return {
     id: row.id,
     orderNumber: row.order_number,
     storeId: row.store_id,
+    landingPageId: row.landing_page_id || undefined,
+    bundleLabel: row.bundle_label || undefined,
     customerName: row.customer_name,
     customerPhone: row.customer_phone,
     wilayaId: row.wilaya_id,
     wilayaName: row.wilaya_name,
+    commune: row.commune || undefined,
+    deliveryType: (row.delivery_type === 'stop' ? 'stop' : 'home') as DeliveryType,
     address: row.address,
     items: row.items || [],
     subtotal: Number(row.subtotal),
     shippingFee: Number(row.shipping_fee || 0),
     total: Number(row.total),
     status: row.status as OrderStatus,
+    trackingCode: row.tracking_code || undefined,
     statusHistory: row.status_history || [],
     paymentMethod: 'cod',
     notes: row.notes,
@@ -344,9 +384,26 @@ function mapDbOrder(row: any): Order {
 
 class StorageService {
   private initLocal(): void {
-    if (!localStorage.getItem(STORES_KEY)) {
+    try {
+      const rawStores = localStorage.getItem(STORES_KEY);
+      const parsedStores = rawStores ? JSON.parse(rawStores) : null;
+      if (!Array.isArray(parsedStores) || parsedStores.length === 0) {
+        localStorage.setItem(STORES_KEY, JSON.stringify(INITIAL_STORES));
+      }
+    } catch {
       localStorage.setItem(STORES_KEY, JSON.stringify(INITIAL_STORES));
     }
+
+    try {
+      const rawPages = localStorage.getItem(LANDING_PAGES_KEY);
+      const parsedPages = rawPages ? JSON.parse(rawPages) : null;
+      if (!Array.isArray(parsedPages)) {
+        localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));
+      }
+    } catch {
+      localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));
+    }
+
     if (!localStorage.getItem(PRODUCTS_KEY)) {
       localStorage.setItem(PRODUCTS_KEY, JSON.stringify(INITIAL_PRODUCTS));
     }
@@ -358,17 +415,46 @@ class StorageService {
     }
   }
 
+  private demoOverride: boolean = (() => {
+    try {
+      return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('brightdz_demo_override') === '1';
+    } catch {
+      return false;
+    }
+  })();
+
+  isDemoOverride(): boolean {
+    return this.demoOverride;
+  }
+
+  setDemoOverride(enabled: boolean): void {
+    this.demoOverride = enabled;
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        if (enabled) sessionStorage.setItem('brightdz_demo_override', '1');
+        else sessionStorage.removeItem('brightdz_demo_override');
+      }
+    } catch {
+      // ignore
+    }
+    this.initLocal();
+  }
+
+  private useSupabase(): boolean {
+    return isSupabaseConfigured && Boolean(supabase) && !this.demoOverride;
+  }
+
   constructor() {
     this.initLocal();
   }
 
   // --- STORES ---
   async getStores(): Promise<Store[]> {
-    if (isSupabaseConfigured && supabase) {
+    if (this.useSupabase() && supabase) {
       const { data, error } = await supabase
         .from('stores')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: true });
       if (error) {
         console.error('Supabase getStores error:', error);
         return [];
@@ -378,30 +464,45 @@ class StorageService {
     return this.getLocalStores();
   }
 
+  async getPrimaryStoreDetailed(): Promise<{ store?: Store; error?: string }> {
+    if (this.useSupabase() && supabase) {
+      const { data, error } = await supabase
+        .from('stores')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        console.error('Supabase getPrimaryStore error:', error);
+        return { error: error.message };
+      }
+      return { store: data ? mapDbStore(data) : undefined };
+    }
+    return { store: this.getLocalStores()[0] };
+  }
+
+  async getPrimaryStore(): Promise<Store | undefined> {
+    const res = await this.getPrimaryStoreDetailed();
+    return res.store;
+  }
+
   getLocalStores(): Store[] {
     try {
       const data = localStorage.getItem(STORES_KEY);
-      return data ? JSON.parse(data) : INITIAL_STORES;
+      const parsed = data ? JSON.parse(data) : null;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      localStorage.setItem(STORES_KEY, JSON.stringify(INITIAL_STORES));
+      return INITIAL_STORES;
     } catch {
       return INITIAL_STORES;
     }
   }
 
   async getStoreById(id: string): Promise<Store | undefined> {
-    if (isSupabaseConfigured && supabase) {
-      if (!isUuid(id)) {
-        return undefined;
-      }
-      const { data, error } = await supabase
-        .from('stores')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-      if (error) {
-        console.error('Supabase getStoreById error:', error);
-        return undefined;
-      }
-      if (!data) return undefined;
+    if (this.useSupabase() && supabase) {
+      if (!isUuid(id)) return undefined;
+      const { data, error } = await supabase.from('stores').select('*').eq('id', id).maybeSingle();
+      if (error || !data) return undefined;
       return mapDbStore(data);
     }
     return this.getLocalStores().find(s => s.id === id);
@@ -409,35 +510,35 @@ class StorageService {
 
   async getStoreBySubdomain(subdomain: string): Promise<Store | undefined> {
     const clean = subdomain.toLowerCase().trim();
-    if (isSupabaseConfigured && supabase) {
+    if (this.useSupabase() && supabase) {
       const { data, error } = await supabase
         .from('stores')
         .select('*')
         .ilike('subdomain', clean)
         .maybeSingle();
-      if (error) {
-        console.error('Supabase getStoreBySubdomain error:', error);
-        throw error;
-      }
-      if (!data) return undefined;
+      if (error) throw error;
+      if (!data) return this.getPrimaryStore();
       return mapDbStore(data);
     }
-    return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean);
+    return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean) || this.getLocalStores()[0];
   }
 
   async saveStore(store: Store): Promise<{ success: boolean; error?: string; store?: Store }> {
-    if (isSupabaseConfigured && supabase) {
-      // Check if updating or creating
-      if (store.id && !store.id.startsWith('store_')) {
-        // Update existing store (never send plan_id or status from regular merchant UI)
+    if (this.useSupabase() && supabase) {
+      if (store.id && isUuid(store.id)) {
         const updatePayload: any = {
           name: store.name,
-          description: store.description,
-          logo_url: store.logoUrl,
-          brand_color: store.brandColor,
-          free_shipping_threshold: store.freeShippingThreshold,
-          phone: store.phone,
+          description: store.description || '',
+          announcement_text: store.announcementText || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
+          logo_url: store.logoUrl || null,
+          brand_color: store.brandColor || '#754b2d',
+          free_shipping_threshold: Number(store.freeShippingThreshold || 0),
+          phone: store.phone || '',
+          default_whatsapp: store.defaultWhatsapp || '',
+          default_pixel_id: store.defaultPixelId || '',
+          google_sheet_webhook: store.googleSheetWebhook || '',
           custom_wilaya_fees: store.customWilayaFees || {},
+          custom_wilaya_rates: store.customWilayaRates || {},
           updated_at: new Date().toISOString()
         };
 
@@ -448,23 +549,24 @@ class StorageService {
           .select()
           .single();
 
-        if (error) {
-          console.error('Supabase saveStore update error:', error);
-          return { success: false, error: error.message };
-        }
+        if (error) return { success: false, error: error.message };
         return { success: true, store: mapDbStore(data) };
       } else {
-        // Insert new store with only permitted columns
         const insertPayload: any = {
           owner_id: store.ownerId,
           name: store.name,
           subdomain: store.subdomain.toLowerCase().trim(),
           description: store.description || '',
-          logo_url: store.logoUrl,
-          brand_color: store.brandColor || '#059669',
-          free_shipping_threshold: store.freeShippingThreshold || 10000,
+          announcement_text: store.announcementText || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
+          logo_url: store.logoUrl || null,
+          brand_color: store.brandColor || '#754b2d',
+          free_shipping_threshold: Number(store.freeShippingThreshold || 0),
           phone: store.phone || '',
-          custom_wilaya_fees: store.customWilayaFees || {}
+          default_whatsapp: store.defaultWhatsapp || '',
+          default_pixel_id: store.defaultPixelId || '',
+          google_sheet_webhook: store.googleSheetWebhook || '',
+          custom_wilaya_fees: store.customWilayaFees || {},
+          custom_wilaya_rates: store.customWilayaRates || {}
         };
 
         const { data, error } = await supabase
@@ -473,15 +575,11 @@ class StorageService {
           .select()
           .single();
 
-        if (error) {
-          console.error('Supabase saveStore insert error:', error);
-          return { success: false, error: error.message };
-        }
+        if (error) return { success: false, error: error.message };
         return { success: true, store: mapDbStore(data) };
       }
     }
 
-    // LocalStorage fallback
     const stores = this.getLocalStores();
     const idx = stores.findIndex(s => s.id === store.id);
     if (idx >= 0) {
@@ -493,71 +591,167 @@ class StorageService {
     return { success: true, store };
   }
 
-  // Admin RPC to change store plan or status
-  async adminSetStore(storeId: string, status: string, planId: string): Promise<{ success: boolean; error?: string }> {
-    if (isSupabaseConfigured && supabase && isUuid(storeId)) {
-      const { error } = await supabase.rpc('admin_set_store', {
-        p_store_id: storeId,
-        p_status: status,
-        p_plan_id: planId
-      });
+  // --- LANDING PAGES ---
+  async getLandingPages(storeId?: string): Promise<LandingPage[]> {
+    if (this.useSupabase() && supabase) {
+      if (storeId && !isUuid(storeId)) return [];
+      let query = supabase.from('landing_pages').select('*');
+      if (storeId) query = query.eq('store_id', storeId);
+      const { data, error } = await query.order('created_at', { ascending: false });
       if (error) {
-        console.error('Supabase admin_set_store error:', error);
-        return { success: false, error: error.message };
+        console.error('Supabase getLandingPages error:', error);
+        throw error;
       }
-      return { success: true };
+      return (data || []).map(mapDbLandingPage);
+    }
+    return this.getLocalLandingPages(storeId);
+  }
+
+  getLocalLandingPages(storeId?: string): LandingPage[] {
+    try {
+      const data = localStorage.getItem(LANDING_PAGES_KEY);
+      const all: LandingPage[] = data ? JSON.parse(data) : INITIAL_LANDING_PAGES;
+      if (storeId) return all.filter(p => p.storeId === storeId);
+      return all;
+    } catch {
+      return INITIAL_LANDING_PAGES;
+    }
+  }
+
+  async getLandingPageBySlug(slug: string): Promise<LandingPage | undefined> {
+    const clean = slug.trim().toLowerCase();
+    if (this.useSupabase() && supabase) {
+      const { data, error } = await supabase
+        .from('landing_pages')
+        .select('*')
+        .ilike('slug', clean)
+        .maybeSingle();
+      if (error || !data) return undefined;
+      return mapDbLandingPage(data);
+    }
+    return this.getLocalLandingPages().find(p => p.slug.toLowerCase() === clean);
+  }
+
+  async saveLandingPage(page: LandingPage): Promise<{ success: boolean; error?: string; page?: LandingPage }> {
+    const cleanSlug = page.slug
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    if (!cleanSlug || cleanSlug.length < 3) {
+      return { success: false, error: 'يجب أن يحتوي رابط الصفحة (Slug) على 3 أحرف إنجليزية أو أرقام على الأقل' };
     }
 
-    // Local fallback
-    const stores = this.getLocalStores();
-    const target = stores.find(s => s.id === storeId);
-    if (target) {
-      target.status = status as any;
-      target.planId = planId;
-      target.updatedAt = new Date().toISOString();
-      localStorage.setItem(STORES_KEY, JSON.stringify(stores));
+    if (this.useSupabase() && supabase) {
+      const isExisting = page.id && isUuid(page.id);
+      const payload: any = {
+        store_id: page.storeId,
+        slug: cleanSlug,
+        title: page.title.trim(),
+        highlight_title: page.highlightTitle?.trim() || null,
+        description: page.description.trim(),
+        category: page.category || 'عام',
+        stock: Math.max(0, Number(page.stock) || 0),
+        badge_text: page.badgeText?.trim() || null,
+        main_image: page.mainImage,
+        gallery_images: page.galleryImages || [],
+        offers: page.offers || [],
+        theme: page.theme || LANDING_THEME_PRESETS[0],
+        integrations: page.integrations || {},
+        is_published: page.isPublished,
+        updated_at: new Date().toISOString()
+      };
+
+      if (isExisting) {
+        const { data, error } = await supabase
+          .from('landing_pages')
+          .update(payload)
+          .eq('id', page.id)
+          .select()
+          .single();
+        if (error) return { success: false, error: error.message };
+        return { success: true, page: mapDbLandingPage(data) };
+      } else {
+        const { data, error } = await supabase
+          .from('landing_pages')
+          .insert(payload)
+          .select()
+          .single();
+        if (error) return { success: false, error: error.message };
+        return { success: true, page: mapDbLandingPage(data) };
+      }
     }
+
+    const all = this.getLocalLandingPages();
+    const duplicateSlug = all.find(p => p.slug.toLowerCase() === cleanSlug && p.id !== page.id);
+    if (duplicateSlug) {
+      return { success: false, error: 'هذا الرابط (Slug) مستخدم في صفحة أخرى، اختر رابطاً مختلفاً' };
+    }
+
+    const saved: LandingPage = {
+      ...page,
+      slug: cleanSlug,
+      updatedAt: new Date().toISOString()
+    };
+    const idx = all.findIndex(p => p.id === page.id);
+    if (idx >= 0) {
+      all[idx] = saved;
+    } else {
+      all.unshift(saved);
+    }
+    localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(all));
+    return { success: true, page: saved };
+  }
+
+  async deleteLandingPage(id: string): Promise<{ success: boolean; error?: string }> {
+    if (this.useSupabase() && supabase && isUuid(id)) {
+      const { error } = await supabase.from('landing_pages').delete().eq('id', id);
+      if (error) return { success: false, error: error.message };
+      return { success: true };
+    }
+    const all = this.getLocalLandingPages().filter(p => p.id !== id);
+    localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(all));
     return { success: true };
   }
 
-  // --- PRODUCTS ---
-  async getProducts(storeId?: string): Promise<Product[]> {
-    if (isSupabaseConfigured && supabase) {
-      if (storeId && !isUuid(storeId)) {
-        return [];
-      }
-      let query = supabase.from('products').select('*');
-      if (storeId) {
-        query = query.eq('store_id', storeId);
-      }
-      const { data: prods, error } = await query.order('created_at', { ascending: false });
-      if (error) {
-        console.error('Supabase getProducts error:', error);
-        throw error;
-      }
+  async seedStarterLandingPages(storeId: string): Promise<void> {
+    try {
+      const existing = await this.getLandingPages(storeId);
+      if (existing.length > 0) return;
 
-      // Try fetching confidential cost prices for store owner from product_costs
-      const productIds = (prods || []).map(p => p.id).filter(id => isUuid(id));
-      let costMap: Record<string, number> = {};
-      if (productIds.length > 0) {
-        try {
-          const { data: costs } = await supabase
-            .from('product_costs')
-            .select('product_id, cost_price')
-            .in('product_id', productIds);
-          if (costs) {
-            costs.forEach((c: any) => {
-              costMap[c.product_id] = Number(c.cost_price);
-            });
-          }
-        } catch {
-          // Normal: public storefront cannot read product_costs due to RLS
+      const suffix = Math.random().toString(36).substring(2, 6);
+      for (const tpl of INITIAL_LANDING_PAGES) {
+        const res = await this.saveLandingPage({
+          ...tpl,
+          id: '',
+          storeId
+        });
+        if (!res.success && res.error?.toLowerCase().includes('duplicate')) {
+          await this.saveLandingPage({
+            ...tpl,
+            id: '',
+            storeId,
+            slug: `${tpl.slug}-${suffix}`
+          });
         }
       }
-
-      return (prods || []).map(p => mapDbProduct(p, costMap[p.id]));
+    } catch (err) {
+      console.warn('Starter landing page seeding skipped:', err);
     }
+  }
 
+  // --- PRODUCTS (Legacy fallback kept clean) ---
+  async getProducts(storeId?: string): Promise<Product[]> {
+    if (this.useSupabase() && supabase) {
+      if (storeId && !isUuid(storeId)) return [];
+      let query = supabase.from('products').select('*');
+      if (storeId) query = query.eq('store_id', storeId);
+      const { data: prods, error } = await query.order('created_at', { ascending: false });
+      if (error) return [];
+      return (prods || []).map(p => mapDbProduct(p));
+    }
     return this.getLocalProducts(storeId);
   }
 
@@ -565,141 +759,28 @@ class StorageService {
     try {
       const data = localStorage.getItem(PRODUCTS_KEY);
       const all: Product[] = data ? JSON.parse(data) : INITIAL_PRODUCTS;
-      if (storeId) {
-        return all.filter(p => p.storeId === storeId);
-      }
+      if (storeId) return all.filter(p => p.storeId === storeId);
       return all;
     } catch {
       return INITIAL_PRODUCTS;
     }
   }
 
-  async getProductById(id: string): Promise<Product | undefined> {
-    if (isSupabaseConfigured && supabase) {
-      if (!isUuid(id)) {
-        return undefined;
-      }
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-      if (error) {
-        console.error('Supabase getProductById error:', error);
-        return undefined;
-      }
-      if (!data) return undefined;
-
-      // Fetch cost if available
-      let costPrice: number | undefined;
-      try {
-        const { data: costData } = await supabase
-          .from('product_costs')
-          .select('cost_price')
-          .eq('product_id', id)
-          .maybeSingle();
-        if (costData) costPrice = Number(costData.cost_price);
-      } catch {
-        /* ignore RLS for non-owners */
-      }
-
-      return mapDbProduct(data, costPrice);
-    }
-
-    return this.getLocalProducts().find(p => p.id === id);
-  }
-
   async saveProduct(product: Product): Promise<{ success: boolean; error?: string; product?: Product }> {
-    if (isSupabaseConfigured && supabase) {
-      const isExisting = product.id && !product.id.startsWith('prod_');
-      const payload: any = {
-        store_id: product.storeId,
-        title: product.title,
-        description: product.description,
-        price: product.price,
-        compare_price: product.comparePrice || null,
-        category: product.category,
-        stock: product.stock,
-        sku: product.sku || null,
-        image_url: product.imageUrl,
-        additional_images: product.additionalImages || [],
-        variants: product.variants || [],
-        is_active: product.isActive,
-        updated_at: new Date().toISOString()
-      };
-
-      let savedDbProduct: any;
-      if (isExisting) {
-        const { data, error } = await supabase
-          .from('products')
-          .update(payload)
-          .eq('id', product.id)
-          .select()
-          .single();
-        if (error) return { success: false, error: error.message };
-        savedDbProduct = data;
-      } else {
-        const { data, error } = await supabase
-          .from('products')
-          .insert(payload)
-          .select()
-          .single();
-        if (error) return { success: false, error: error.message };
-        savedDbProduct = data;
-      }
-
-      // Update or insert cost_price in product_costs table and surface RLS/database errors.
-      if (savedDbProduct && product.costPrice !== undefined) {
-        const { error: costError } = await supabase
-          .from('product_costs')
-          .upsert({
-            product_id: savedDbProduct.id,
-            cost_price: product.costPrice
-          }, { onConflict: 'product_id' });
-
-        if (costError) {
-          console.error('Supabase product cost save error:', costError);
-          return { success: false, error: 'تم حفظ بيانات المنتج، لكن تعذر حفظ سعر التكلفة: ' + costError.message };
-        }
-      }
-
-      return { success: true, product: mapDbProduct(savedDbProduct, product.costPrice) };
-    }
-
-    // Local fallback
     const all = this.getLocalProducts();
     const idx = all.findIndex(p => p.id === product.id);
-    if (idx >= 0) {
-      all[idx] = { ...product, updatedAt: new Date().toISOString() };
-    } else {
-      all.unshift(product);
-    }
+    if (idx >= 0) all[idx] = { ...product, updatedAt: new Date().toISOString() };
+    else all.unshift(product);
     localStorage.setItem(PRODUCTS_KEY, JSON.stringify(all));
     return { success: true, product };
   }
 
-  async deleteProduct(id: string): Promise<{ success: boolean; error?: string }> {
-    if (isSupabaseConfigured && supabase && isUuid(id)) {
-      const { error } = await supabase.from('products').delete().eq('id', id);
-      if (error) return { success: false, error: error.message };
-      return { success: true };
-    }
-
-    const all = this.getLocalProducts().filter(p => p.id !== id);
-    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(all));
-    return { success: true };
-  }
-
   // --- ORDERS ---
   async getOrders(storeId?: string): Promise<Order[]> {
-    if (isSupabaseConfigured && supabase) {
-      if (storeId && !isUuid(storeId)) {
-        return [];
-      }
+    if (this.useSupabase() && supabase) {
+      if (storeId && !isUuid(storeId)) return [];
       let query = supabase.from('orders').select('*');
-      if (storeId) {
-        query = query.eq('store_id', storeId);
-      }
+      if (storeId) query = query.eq('store_id', storeId);
       const { data, error } = await query.order('created_at', { ascending: false });
       if (error) {
         console.error('Supabase getOrders error:', error);
@@ -714,43 +795,30 @@ class StorageService {
     try {
       const data = localStorage.getItem(ORDERS_KEY);
       const all: Order[] = data ? JSON.parse(data) : INITIAL_ORDERS;
-      if (storeId) {
-        return all.filter(o => o.storeId === storeId);
-      }
+      if (storeId) return all.filter(o => o.storeId === storeId);
       return all;
     } catch {
       return INITIAL_ORDERS;
     }
   }
 
-  async getOrderById(id: string): Promise<Order | undefined> {
-    if (isSupabaseConfigured && supabase) {
-      if (!isUuid(id)) {
-        return this.getLocalOrders().find(o => o.id === id);
-      }
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-      if (error || !data) return undefined;
-      return mapDbOrder(data);
-    }
-    return this.getLocalOrders().find(o => o.id === id);
-  }
-
-  // Atomic Place Order via Supabase RPC (Server-side price loading, stock locking & Algerian phone validation)
   async placeOrder(params: {
     storeId: string;
+    landingPageId?: string;
+    offerId?: string;
     customerName: string;
     customerPhone: string;
     wilayaId: string;
     wilayaName: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
     address: string;
-    items: { productId: string; quantity: number; variantText?: string }[];
+    items?: { productId: string; quantity: number; variantText?: string }[];
     notes?: string;
   }): Promise<{ success: boolean; error?: string; order?: Order }> {
-    if (isSupabaseConfigured && supabase && isUuid(params.storeId)) {
+    const deliveryType: DeliveryType = params.deliveryType === 'stop' ? 'stop' : 'home';
+
+    if (this.useSupabase() && supabase && isUuid(params.storeId)) {
       const { data, error } = await supabase.rpc('place_order', {
         p_store_id: params.storeId,
         p_customer_name: params.customerName,
@@ -758,8 +826,12 @@ class StorageService {
         p_wilaya_id: params.wilayaId,
         p_wilaya_name: params.wilayaName,
         p_address: params.address,
-        p_items: params.items,
-        p_notes: params.notes || null
+        p_items: params.items || [],
+        p_notes: params.notes || null,
+        p_landing_page_id: params.landingPageId && isUuid(params.landingPageId) ? params.landingPageId : null,
+        p_offer_id: params.offerId || null,
+        p_commune: params.commune || null,
+        p_delivery_type: deliveryType
       });
 
       if (error) {
@@ -773,15 +845,19 @@ class StorageService {
           id: data.id,
           orderNumber: data.orderNumber,
           storeId: data.storeId,
+          landingPageId: data.landingPageId || params.landingPageId,
+          bundleLabel: data.bundleLabel,
           customerName: data.customerName,
           customerPhone: params.customerPhone,
           wilayaId: params.wilayaId,
           wilayaName: data.wilayaName,
+          commune: data.commune || params.commune,
+          deliveryType: data.deliveryType || deliveryType,
           address: params.address,
-          items: params.items.map(it => ({
+          items: (params.items || []).map(it => ({
             productId: it.productId,
-            title: '',
-            price: 0,
+            title: data.bundleLabel || '',
+            price: Number(data.subtotal),
             quantity: it.quantity,
             variantText: it.variantText
           })),
@@ -797,29 +873,75 @@ class StorageService {
       };
     }
 
-    // Local fallback order placement
-    const cleanPhone = params.customerPhone.replace(/\s+/g, '');
+    // Local fallback
+    const cleanPhone = params.customerPhone.replace(/[\s\-\.]/g, '');
+    if (!/^(\+213|00213|0)[0-9]{8,9}$/.test(cleanPhone)) {
+      return { success: false, error: 'يرجى إدخال رقم هاتف جزائري صحيح (مثال: 0550123456)' };
+    }
+
+    const store = this.getLocalStores().find(s => s.id === params.storeId) || this.getLocalStores()[0];
+    const wilaya = ALGERIA_WILAYAS.find(w => w.id === params.wilayaId) || ALGERIA_WILAYAS[15];
     const uniqueOrderNumber = this.generateLocalOrderNumber();
 
-    const orderItems = params.items.map(it => {
-      const p = this.getLocalProducts().find(x => x.id === it.productId);
-      return {
-        productId: it.productId,
-        title: p?.title || 'منتج',
-        price: p?.price || 0,
-        quantity: it.quantity,
-        variantText: it.variantText,
-        imageUrl: p?.imageUrl
-      };
-    });
+    let subtotal = 0;
+    let bundleLabel = '';
+    let orderItems: Order['items'] = [];
 
-    const subtotal = orderItems.reduce((s, it) => s + it.price * it.quantity, 0);
-    const store = this.getLocalStores().find(s => s.id === params.storeId);
-    let shippingFee = 600;
-    if (store?.customWilayaFees?.[params.wilayaId] !== undefined) {
-      shippingFee = store.customWilayaFees[params.wilayaId];
+    if (params.landingPageId) {
+      const pages = this.getLocalLandingPages();
+      const page = pages.find(p => p.id === params.landingPageId);
+      if (!page) return { success: false, error: 'صفحة المنتج غير موجودة' };
+      const offer =
+        page.offers.find(o => o.id === params.offerId) ||
+        page.offers.find(o => o.isDefault) ||
+        page.offers[0];
+      if (!offer) return { success: false, error: 'العرض المختار غير متوفر' };
+      const bundleQty = Math.max(1, offer.quantity || 1);
+      if (page.stock < bundleQty) {
+        return { success: false, error: `عذراً، الكمية المتوفرة حالياً هي ${page.stock} قطع فقط` };
+      }
+
+      // Deduct landing page stock
+      page.stock = Math.max(0, page.stock - bundleQty);
+      page.updatedAt = new Date().toISOString();
+      localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
+
+      subtotal = offer.price;
+      bundleLabel = `${offer.title} (الكمية: ${bundleQty})`;
+      orderItems = [
+        {
+          productId: page.id,
+          title: page.title,
+          price: offer.price,
+          quantity: 1,
+          variantText: bundleLabel,
+          imageUrl: page.mainImage
+        }
+      ];
+    } else {
+      orderItems = (params.items || []).map(it => {
+        const p = this.getLocalProducts().find(x => x.id === it.productId);
+        return {
+          productId: it.productId,
+          title: p?.title || 'منتج',
+          price: p?.price || 0,
+          quantity: it.quantity,
+          variantText: it.variantText,
+          imageUrl: p?.imageUrl
+        };
+      });
+      subtotal = orderItems.reduce((s, it) => s + it.price * it.quantity, 0);
     }
-    if (store?.freeShippingThreshold && subtotal >= store.freeShippingThreshold) {
+
+    // Calculate delivery fee (custom rates -> custom home fee -> wilaya home/stop default)
+    let shippingFee = deliveryType === 'stop' ? wilaya.stopFee : wilaya.homeFee;
+    const customRate = store?.customWilayaRates?.[wilaya.id];
+    if (customRate && customRate[deliveryType] !== undefined) {
+      shippingFee = customRate[deliveryType];
+    } else if (deliveryType === 'home' && store?.customWilayaFees?.[wilaya.id] !== undefined) {
+      shippingFee = store.customWilayaFees[wilaya.id];
+    }
+    if (store?.freeShippingThreshold && store.freeShippingThreshold > 0 && subtotal >= store.freeShippingThreshold) {
       shippingFee = 0;
     }
 
@@ -827,10 +949,14 @@ class StorageService {
       id: 'ord_' + Math.random().toString(36).substring(2, 9),
       orderNumber: uniqueOrderNumber,
       storeId: params.storeId,
+      landingPageId: params.landingPageId,
+      bundleLabel,
       customerName: params.customerName.trim(),
       customerPhone: cleanPhone,
-      wilayaId: params.wilayaId,
-      wilayaName: params.wilayaName,
+      wilayaId: wilaya.id,
+      wilayaName: wilaya.nameAr,
+      commune: params.commune || '',
+      deliveryType,
       address: params.address.trim(),
       items: orderItems,
       subtotal,
@@ -849,33 +975,27 @@ class StorageService {
     const all = this.getLocalOrders();
     all.unshift(newOrder);
     localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
-
-    // Deduct stock in local products
-    orderItems.forEach(it => {
-      const p = this.getLocalProducts().find(x => x.id === it.productId);
-      if (p) {
-        this.saveProduct({ ...p, stock: Math.max(0, p.stock - it.quantity) });
-      }
-    });
-
     return { success: true, order: newOrder };
   }
 
-  // Update status via Supabase RPC with automatic inventory restock on cancellation
-  async updateOrderStatus(orderId: string, newStatus: OrderStatus, note?: string): Promise<{ success: boolean; error?: string }> {
-    if (isSupabaseConfigured && supabase && isUuid(orderId)) {
+  async updateOrderStatus(
+    orderId: string,
+    newStatus: OrderStatus,
+    note?: string,
+    trackingCode?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (this.useSupabase() && supabase && isUuid(orderId)) {
       const { error } = await supabase.rpc('update_order_status', {
         p_order_id: orderId,
         p_new_status: newStatus,
-        p_note: note || null
+        p_note: note || null,
+        p_tracking_code: trackingCode !== undefined ? trackingCode : null
       });
-
       if (error) {
         console.error('Supabase update_order_status RPC error:', error);
         return { success: false, error: error.message };
       }
 
-      // Read the saved value back from Supabase; never report success based only on the RPC response.
       const { data: savedOrder, error: verifyError } = await supabase
         .from('orders')
         .select('status')
@@ -883,47 +1003,50 @@ class StorageService {
         .maybeSingle();
 
       if (verifyError) {
-        console.error('Supabase order status verification error:', verifyError);
-        return { success: false, error: 'تم إرسال التحديث لكن تعذر التحقق من حفظه في قاعدة البيانات: ' + verifyError.message };
+        return { success: false, error: 'تعذر التحقق من حفظ الحالة: ' + verifyError.message };
       }
       if (!savedOrder || savedOrder.status !== newStatus) {
-        return { success: false, error: 'لم تتطابق حالة الطلب المحفوظة في Supabase مع الحالة المطلوبة.' };
+        return { success: false, error: 'لم يتم تحديث الحالة في قاعدة البيانات' };
       }
       return { success: true };
     }
 
-    // Local fallback
     const all = this.getLocalOrders();
     const order = all.find(o => o.id === orderId);
     if (!order) return { success: false, error: 'الطلب غير موجود' };
 
-    if (order.status !== 'cancelled' && newStatus === 'cancelled') {
-      order.items.forEach(it => {
-        const p = this.getLocalProducts().find(x => x.id === it.productId);
-        if (p) this.saveProduct({ ...p, stock: p.stock + it.quantity });
-      });
-    } else if (order.status === 'cancelled' && newStatus !== 'cancelled') {
-      order.items.forEach(it => {
-        const p = this.getLocalProducts().find(x => x.id === it.productId);
-        if (p) this.saveProduct({ ...p, stock: Math.max(0, p.stock - it.quantity) });
-      });
+    if (order.landingPageId) {
+      const pages = this.getLocalLandingPages();
+      const page = pages.find(p => p.id === order.landingPageId);
+      if (page) {
+        const match = order.bundleLabel?.match(/الكمية:\s*(\d+)/);
+        const qty = match ? parseInt(match[1], 10) : 1;
+        if (order.status !== 'cancelled' && newStatus === 'cancelled') {
+          page.stock += qty;
+        } else if (order.status === 'cancelled' && newStatus !== 'cancelled') {
+          page.stock = Math.max(0, page.stock - qty);
+        }
+        localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
+      }
     }
 
     order.status = newStatus;
+    if (trackingCode !== undefined && trackingCode.trim()) {
+      order.trackingCode = trackingCode.trim();
+    }
     order.statusHistory.push({
       status: newStatus,
       timestamp: new Date().toISOString(),
-      note: note || `تغيير الحالة إلى ${newStatus}`
+      note: note || `تحديث الحالة`
     });
     order.updatedAt = new Date().toISOString();
     localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
     return { success: true };
   }
 
-  // Public Order Tracking via Supabase RPC (Safe, hides PII)
   async trackOrder(orderNumber: string): Promise<any> {
     const cleanNum = orderNumber.trim().toUpperCase();
-    if (isSupabaseConfigured && supabase) {
+    if (this.useSupabase() && supabase) {
       const { data, error } = await supabase.rpc('track_order', {
         p_order_number: cleanNum
       });
@@ -934,7 +1057,6 @@ class StorageService {
       return data;
     }
 
-    // Local fallback
     const order = this.getLocalOrders().find(o => o.orderNumber.toUpperCase() === cleanNum);
     if (!order) return null;
     return {
@@ -942,14 +1064,17 @@ class StorageService {
       orderNumber: order.orderNumber,
       customerFirstName: order.customerName.split(' ')[0],
       wilayaName: order.wilayaName,
+      commune: order.commune,
+      deliveryType: order.deliveryType || 'home',
+      bundleLabel: order.bundleLabel || order.items[0]?.title || '',
       total: order.total,
       status: order.status,
+      trackingCode: order.trackingCode,
       statusHistory: order.statusHistory,
       createdAt: order.createdAt
     };
   }
 
-  // Generates unique DZ-1A2B3C4D format
   generateLocalOrderNumber(): string {
     const chars = '0123456789ABCDEF';
     let hex = '';
@@ -959,7 +1084,6 @@ class StorageService {
     return `DZ-${hex}`;
   }
 
-  // --- USERS (Local) ---
   getUsers(): User[] {
     try {
       const data = localStorage.getItem(USERS_KEY);
@@ -969,19 +1093,9 @@ class StorageService {
     }
   }
 
-  saveUser(user: User): void {
-    const users = this.getUsers();
-    const idx = users.findIndex(u => u.id === user.id);
-    if (idx >= 0) {
-      users[idx] = user;
-    } else {
-      users.push(user);
-    }
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  }
-
   resetDemoData(): void {
     localStorage.setItem(STORES_KEY, JSON.stringify(INITIAL_STORES));
+    localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));
     localStorage.setItem(PRODUCTS_KEY, JSON.stringify(INITIAL_PRODUCTS));
     localStorage.setItem(ORDERS_KEY, JSON.stringify(INITIAL_ORDERS));
     localStorage.setItem(USERS_KEY, JSON.stringify(INITIAL_USERS));
