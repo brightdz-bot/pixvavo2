@@ -1219,6 +1219,110 @@ class StorageService {
     };
   }
 
+  async syncOrderFromSheet(params: {
+    orderId: string;
+    status?: OrderStatus;
+    trackingCode?: string;
+    bundleLabel?: string;
+    wilayaId?: string;
+    wilayaName?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+    subtotal?: number;
+    shippingFee?: number;
+    total?: number;
+    customerName?: string;
+    customerPhone?: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    if (this.useSupabase() && supabase && isUuid(params.orderId)) {
+      const { error } = await supabase.rpc('sync_order_from_sheet', {
+        p_order_id: params.orderId,
+        p_status: params.status || null,
+        p_tracking_code: params.trackingCode !== undefined ? params.trackingCode : null,
+        p_bundle_label: params.bundleLabel !== undefined ? params.bundleLabel : null,
+        p_wilaya_id: params.wilayaId || null,
+        p_wilaya_name: params.wilayaName !== undefined ? params.wilayaName : null,
+        p_commune: params.commune !== undefined ? params.commune : null,
+        p_delivery_type: params.deliveryType || null,
+        p_subtotal: params.subtotal !== undefined ? params.subtotal : null,
+        p_shipping_fee: params.shippingFee !== undefined ? params.shippingFee : null,
+        p_total: params.total !== undefined ? params.total : null,
+        p_customer_name: params.customerName !== undefined ? params.customerName : null,
+        p_customer_phone: params.customerPhone !== undefined ? params.customerPhone : null
+      });
+      if (error) {
+        console.error('Supabase sync_order_from_sheet RPC error:', error);
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    }
+
+    const all = this.getLocalOrders();
+    const order = all.find(o => o.id === params.orderId);
+    if (!order) return { success: false, error: 'الطلب غير موجود' };
+
+    const nextStatus = params.status || order.status;
+    if (order.landingPageId) {
+      const pages = this.getLocalLandingPages();
+      const page = pages.find(p => p.id === order.landingPageId);
+      if (page) {
+        const match = order.bundleLabel?.match(/الكمية:\s*(\d+)/);
+        const qty = match ? parseInt(match[1], 10) : 1;
+        if (order.status !== 'cancelled' && nextStatus === 'cancelled') {
+          page.stock += qty;
+        } else if (order.status === 'cancelled' && nextStatus !== 'cancelled') {
+          page.stock = Math.max(0, page.stock - qty);
+        }
+        localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
+      }
+    }
+
+    order.status = nextStatus;
+    if (params.trackingCode !== undefined) {
+      order.trackingCode = params.trackingCode.trim() || undefined;
+    }
+    if (params.bundleLabel !== undefined && params.bundleLabel.trim()) {
+      order.bundleLabel = params.bundleLabel.trim();
+      if (order.items.length > 0) {
+        order.items[0] = {
+          ...order.items[0],
+          variantText: order.bundleLabel,
+          price: params.subtotal !== undefined ? params.subtotal : order.items[0].price
+        };
+      }
+    }
+    if (params.wilayaId) order.wilayaId = params.wilayaId;
+    if (params.wilayaName !== undefined && params.wilayaName.trim()) {
+      order.wilayaName = params.wilayaName.trim();
+    }
+    if (params.commune !== undefined) order.commune = params.commune.trim();
+    if (params.deliveryType) order.deliveryType = params.deliveryType;
+    if (params.subtotal !== undefined) order.subtotal = Math.max(0, params.subtotal);
+    if (params.shippingFee !== undefined) order.shippingFee = Math.max(0, params.shippingFee);
+    if (params.total !== undefined) {
+      order.total = Math.max(0, params.total);
+    } else {
+      order.total = order.subtotal + order.shippingFee;
+    }
+    if (params.customerName !== undefined && params.customerName.trim()) {
+      order.customerName = params.customerName.trim();
+    }
+    if (params.customerPhone !== undefined && params.customerPhone.trim()) {
+      order.customerPhone = params.customerPhone.trim();
+    }
+    order.address = `${order.wilayaName}${order.commune ? ' - ' + order.commune : ''}${
+      order.deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''
+    }`;
+    order.updatedAt = new Date().toISOString();
+    order.statusHistory.push({
+      status: order.status,
+      timestamp: order.updatedAt,
+      note: 'مزامنة التعديلات من Google Sheet'
+    });
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
+    return { success: true };
+  }
+
   async trackOrder(orderNumber: string): Promise<any> {
     const cleanNum = orderNumber.trim().toUpperCase();
     if (this.useSupabase() && supabase) {

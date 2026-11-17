@@ -781,6 +781,139 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.sync_order_from_sheet(
+    p_order_id UUID,
+    p_status TEXT DEFAULT NULL,
+    p_tracking_code TEXT DEFAULT NULL,
+    p_bundle_label TEXT DEFAULT NULL,
+    p_wilaya_id TEXT DEFAULT NULL,
+    p_wilaya_name TEXT DEFAULT NULL,
+    p_commune TEXT DEFAULT NULL,
+    p_delivery_type TEXT DEFAULT NULL,
+    p_subtotal NUMERIC DEFAULT NULL,
+    p_shipping_fee NUMERIC DEFAULT NULL,
+    p_total NUMERIC DEFAULT NULL,
+    p_customer_name TEXT DEFAULT NULL,
+    p_customer_phone TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+    v_order RECORD;
+    v_item JSONB;
+    v_qty INTEGER;
+    v_new_status TEXT;
+    v_new_wilaya_id TEXT;
+    v_new_wilaya_name TEXT;
+    v_new_commune TEXT;
+    v_new_delivery TEXT;
+    v_new_bundle TEXT;
+    v_new_subtotal NUMERIC;
+    v_new_shipping NUMERIC;
+    v_new_total NUMERIC;
+    v_new_tracking TEXT;
+    v_new_name TEXT;
+    v_new_phone TEXT;
+    v_new_address TEXT;
+    v_items JSONB;
+    v_history JSONB;
+    i INTEGER;
+BEGIN
+    SELECT * INTO v_order FROM public.orders WHERE id = p_order_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'الطلب غير موجود';
+    END IF;
+
+    IF NOT (public.owns_store(v_order.store_id) OR public.is_admin()) THEN
+        RAISE EXCEPTION 'غير مصرح لك بمزامنة هذا الطلب';
+    END IF;
+
+    v_new_status := COALESCE(NULLIF(trim(COALESCE(p_status, '')), ''), v_order.status);
+    IF v_new_status NOT IN ('new', 'confirmed', 'shipping', 'delivered', 'cancelled') THEN
+        v_new_status := v_order.status;
+    END IF;
+
+    IF v_order.status <> 'cancelled' AND v_new_status = 'cancelled' THEN
+        FOR i IN 0 .. jsonb_array_length(v_order.items) - 1 LOOP
+            v_item := v_order.items -> i;
+            v_qty := COALESCE((v_item ->> 'bundleQuantity')::INTEGER, (v_item ->> 'quantity')::INTEGER, 1);
+            IF v_order.landing_page_id IS NOT NULL THEN
+                UPDATE public.landing_pages SET stock = stock + v_qty WHERE id = v_order.landing_page_id;
+            ELSE
+                UPDATE public.products SET stock = stock + v_qty WHERE id = (v_item ->> 'productId')::UUID;
+            END IF;
+        END LOOP;
+    ELSIF v_order.status = 'cancelled' AND v_new_status <> 'cancelled' THEN
+        FOR i IN 0 .. jsonb_array_length(v_order.items) - 1 LOOP
+            v_item := v_order.items -> i;
+            v_qty := COALESCE((v_item ->> 'bundleQuantity')::INTEGER, (v_item ->> 'quantity')::INTEGER, 1);
+            IF v_order.landing_page_id IS NOT NULL THEN
+                UPDATE public.landing_pages SET stock = GREATEST(0, stock - v_qty) WHERE id = v_order.landing_page_id;
+            ELSE
+                UPDATE public.products SET stock = GREATEST(0, stock - v_qty) WHERE id = (v_item ->> 'productId')::UUID;
+            END IF;
+        END LOOP;
+    END IF;
+
+    v_new_wilaya_id := COALESCE(NULLIF(trim(COALESCE(p_wilaya_id, '')), ''), v_order.wilaya_id);
+    v_new_wilaya_name := COALESCE(NULLIF(left(trim(COALESCE(p_wilaya_name, '')), 100), ''), v_order.wilaya_name);
+    v_new_commune := COALESCE(left(trim(COALESCE(p_commune, v_order.commune, '')), 120), '');
+    v_new_delivery := CASE
+        WHEN COALESCE(NULLIF(trim(COALESCE(p_delivery_type, '')), ''), v_order.delivery_type, 'home') = 'stop'
+        THEN 'stop'
+        ELSE 'home'
+    END;
+    v_new_bundle := COALESCE(NULLIF(left(trim(COALESCE(p_bundle_label, '')), 200), ''), v_order.bundle_label);
+    v_new_subtotal := GREATEST(0, COALESCE(p_subtotal, v_order.subtotal));
+    v_new_shipping := GREATEST(0, COALESCE(p_shipping_fee, v_order.shipping_fee));
+    v_new_total := GREATEST(0, COALESCE(p_total, v_new_subtotal + v_new_shipping));
+    v_new_tracking := CASE
+        WHEN p_tracking_code IS NULL THEN v_order.tracking_code
+        ELSE NULLIF(left(trim(p_tracking_code), 120), '')
+    END;
+    v_new_name := COALESCE(NULLIF(left(trim(COALESCE(p_customer_name, '')), 100), ''), v_order.customer_name);
+    v_new_phone := COALESCE(NULLIF(left(trim(COALESCE(p_customer_phone, '')), 30), ''), v_order.customer_phone);
+    v_new_address := v_new_wilaya_name
+        || CASE WHEN v_new_commune <> '' THEN ' - ' || v_new_commune ELSE '' END
+        || CASE WHEN v_new_delivery = 'stop' THEN ' (مكتب الشحن Stop Desk)' ELSE '' END;
+
+    v_items := v_order.items;
+    IF jsonb_typeof(v_items) = 'array' AND jsonb_array_length(v_items) > 0 THEN
+        IF v_new_bundle IS NOT NULL THEN
+            v_items := jsonb_set(v_items, '{0,variantText}', to_jsonb(v_new_bundle), true);
+        END IF;
+        v_items := jsonb_set(v_items, '{0,price}', to_jsonb(v_new_subtotal), true);
+    END IF;
+
+    v_history := v_order.status_history || jsonb_build_object(
+        'status', v_new_status,
+        'timestamp', now(),
+        'note', 'مزامنة التعديلات من Google Sheet'
+    );
+
+    UPDATE public.orders
+    SET status = v_new_status,
+        tracking_code = v_new_tracking,
+        bundle_label = v_new_bundle,
+        items = v_items,
+        wilaya_id = v_new_wilaya_id,
+        wilaya_name = v_new_wilaya_name,
+        commune = v_new_commune,
+        delivery_type = v_new_delivery,
+        address = v_new_address,
+        subtotal = v_new_subtotal,
+        shipping_fee = v_new_shipping,
+        total = v_new_total,
+        customer_name = v_new_name,
+        customer_phone = v_new_phone,
+        status_history = v_history
+    WHERE id = v_order.id;
+
+    RETURN jsonb_build_object('id', v_order.id, 'status', v_new_status, 'total', v_new_total);
+END;
+$$;
+
 -- ==============================================================================
 -- 5. PRIVILEGES
 -- ==============================================================================
@@ -822,6 +955,7 @@ GRANT EXECUTE ON FUNCTION public.place_order(UUID, TEXT, TEXT, TEXT, TEXT, TEXT,
 GRANT EXECUTE ON FUNCTION public.track_order(TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.update_order_details(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.update_order_status(UUID, TEXT, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.sync_order_from_sheet(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, NUMERIC, NUMERIC, NUMERIC, TEXT, TEXT) TO authenticated;
 
 -- ==============================================================================
 -- 6. SEED DATA

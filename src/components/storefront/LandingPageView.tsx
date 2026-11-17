@@ -325,6 +325,10 @@ export const LandingPageView: React.FC<Props> = ({
       Boolean(dbData?.updatedAt && dbData?.createdAt) &&
       new Date(dbData.updatedAt).getTime() - new Date(dbData.createdAt).getTime() > 2500;
 
+    const sheetUpdatedTs = sheetData?.sheetUpdatedAt ? new Date(sheetData.sheetUpdatedAt).getTime() : 0;
+    const dbUpdatedTs = dbData?.updatedAt ? new Date(dbData.updatedAt).getTime() : 0;
+    const sheetIsNewerThanDb = sheetUpdatedTs > 0 && sheetUpdatedTs > dbUpdatedTs + 1000;
+
     if (sheetData) {
       lastSheetSnapshotRef.current = {
         bundleLabel: sheetData.bundleLabel,
@@ -337,7 +341,7 @@ export const LandingPageView: React.FC<Props> = ({
       lastSheetSnapshotRef.current = null;
     }
 
-    const preferDbDetails = hasDbEditAfterCreate && Boolean(dbData);
+    const preferDbDetails = !sheetIsNewerThanDb && hasDbEditAfterCreate && Boolean(dbData);
     const resolvedWilayaName = preferDbDetails
       ? dbData?.wilayaName || sheetData?.wilayaName || ''
       : sheetData?.wilayaName || dbData?.wilayaName || '';
@@ -345,7 +349,7 @@ export const LandingPageView: React.FC<Props> = ({
       ALGERIA_WILAYAS.find(w => w.id === dbData?.wilayaId) ||
       ALGERIA_WILAYAS.find(w => w.nameAr === resolvedWilayaName);
 
-    setDbEditedInSession(hasDbEditAfterCreate);
+    setDbEditedInSession(!sheetIsNewerThanDb && hasDbEditAfterCreate);
     setIsEditingTrackedOrder(false);
     setTrackedEditError(null);
     setTrackedEditSuccess(null);
@@ -406,6 +410,10 @@ export const LandingPageView: React.FC<Props> = ({
               sheetFresh.deliveryType !== prevSheet.deliveryType ||
               sheetFresh.total !== prevSheet.total)
         );
+        const sheetFreshTs = sheetFresh?.sheetUpdatedAt ? new Date(sheetFresh.sheetUpdatedAt).getTime() : 0;
+        const dbFreshTs = fresh?.updatedAt ? new Date(fresh.updatedAt).getTime() : 0;
+        const sheetStrictlyNewer = sheetFreshTs > 0 && sheetFreshTs > dbFreshTs + 1000;
+
         if (sheetFresh) {
           lastSheetSnapshotRef.current = {
             bundleLabel: sheetFresh.bundleLabel,
@@ -415,7 +423,8 @@ export const LandingPageView: React.FC<Props> = ({
             total: sheetFresh.total
           };
         }
-        const useDbDetails = (dbEditedInSession && !sheetDetailsChanged && Boolean(fresh)) || !sheetFresh;
+        const useDbDetails =
+          (!sheetStrictlyNewer && !sheetDetailsChanged && dbEditedInSession && Boolean(fresh)) || !sheetFresh;
 
         setTrackedOrder(prev => {
           if (!prev) return prev;

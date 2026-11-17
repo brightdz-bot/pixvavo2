@@ -202,6 +202,34 @@ export interface SheetTrackedOrder {
   status: OrderStatus;
   trackingCode?: string;
   total: number;
+  sheetUpdatedAt?: string;
+}
+
+export interface SheetOrderRow {
+  orderId: string;
+  fullName: string;
+  phone: string;
+  wilaya: string;
+  commune: string;
+  deliveryType?: DeliveryType;
+  orderName: string;
+  orderStatus: string;
+  status: OrderStatus;
+  shippingCost: number;
+  productPrice: number;
+  discount: number;
+  total: number;
+  trackingCode: string;
+  sheetUpdatedAt?: string;
+}
+
+function normalizeSheetPhone(raw: unknown): string {
+  const digits = String(raw || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.length === 9 && (digits.startsWith('5') || digits.startsWith('6') || digits.startsWith('7'))) {
+    return '0' + digits;
+  }
+  return String(raw || '').trim();
 }
 
 export async function fetchOrderFromGoogleSheet(
@@ -268,13 +296,117 @@ export async function fetchOrderFromGoogleSheet(
         deliveryType: parsedDeliveryType,
         status: mapSheetStatusToOrderStatus(data.orderStatus),
         trackingCode: String(data.trackingCode || '').trim() || undefined,
-        total: parsedTotal
+        total: parsedTotal,
+        sheetUpdatedAt: data.sheetUpdatedAt ? String(data.sheetUpdatedAt).trim() : undefined
       });
     };
 
     try {
       const targetUrl = new URL(cleanUrl);
       targetUrl.searchParams.set('orderId', cleanId);
+      targetUrl.searchParams.set('callback', cbName);
+      script.src = targetUrl.toString();
+      script.async = true;
+      script.onerror = () => {
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timer);
+          cleanup();
+          resolve(null);
+        }
+      };
+      document.head.appendChild(script);
+    } catch {
+      window.clearTimeout(timer);
+      cleanup();
+      resolve(null);
+    }
+  });
+}
+
+export async function fetchAllOrdersFromGoogleSheet(
+  webhookUrl: string | undefined
+): Promise<SheetOrderRow[] | null> {
+  const cleanUrl = webhookUrl?.trim();
+  if (!cleanUrl || typeof window === 'undefined' || typeof document === 'undefined') {
+    return null;
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    const cbName = '__dzSheetListCb_' + Math.random().toString(36).slice(2, 10);
+    const script = document.createElement('script');
+
+    const cleanup = () => {
+      try {
+        delete (window as any)[cbName];
+      } catch {
+        (window as any)[cbName] = undefined;
+      }
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+
+    const timer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        resolve(null);
+      }
+    }, 6500);
+
+    (window as any)[cbName] = (data: any) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      cleanup();
+
+      if (!data || data.status !== 'success' || !Array.isArray(data.orders)) {
+        resolve(null);
+        return;
+      }
+
+      const rows: SheetOrderRow[] = data.orders
+        .filter((r: any) => r && String(r.orderId || '').trim())
+        .map((r: any) => {
+          const rawShippingType = String(r.shippingType || r.deliveryType || '').trim().toLowerCase();
+          const parsedDeliveryType: DeliveryType | undefined = rawShippingType
+            ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
+              ? 'stop'
+              : 'home'
+            : undefined;
+          const shippingCost = Number(r.shippingCost) || 0;
+          const productPrice = Number(r.productPrice) || 0;
+          const discount = Number(r.discount) || 0;
+          const rawTotal = String(r.total ?? '').replace(/[^\d.]/g, '');
+          const parsedTotal = parseFloat(rawTotal) || Math.max(0, shippingCost + productPrice - discount);
+
+          return {
+            orderId: String(r.orderId).trim(),
+            fullName: String(r.fullName || '').trim(),
+            phone: normalizeSheetPhone(r.phone),
+            wilaya: String(r.wilaya || '').trim(),
+            commune: String(r.commune || '').trim(),
+            deliveryType: parsedDeliveryType,
+            orderName: String(r.orderName || '').trim(),
+            orderStatus: String(r.orderStatus || '').trim(),
+            status: mapSheetStatusToOrderStatus(r.orderStatus),
+            shippingCost,
+            productPrice,
+            discount,
+            total: parsedTotal,
+            trackingCode: String(r.trackingCode || '').trim(),
+            sheetUpdatedAt: r.sheetUpdatedAt ? String(r.sheetUpdatedAt).trim() : undefined
+          };
+        });
+
+      resolve(rows);
+    };
+
+    try {
+      const targetUrl = new URL(cleanUrl);
+      targetUrl.searchParams.set('action', 'list');
       targetUrl.searchParams.set('callback', cbName);
       script.src = targetUrl.toString();
       script.async = true;

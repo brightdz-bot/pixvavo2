@@ -15,7 +15,8 @@ import {
   Printer,
   MessageCircle,
   Tag,
-  Pencil
+  Pencil,
+  RefreshCw
 } from 'lucide-react';
 
 interface Props {
@@ -36,6 +37,8 @@ interface Props {
     commune?: string;
     deliveryType?: DeliveryType;
   }) => Promise<boolean>;
+  onSyncFromGoogleSheet?: () => void;
+  isSyncingSheet?: boolean;
   selectedOrder?: Order | null;
   onSelectOrder: (order: Order | null) => void;
 }
@@ -46,6 +49,8 @@ export const OrdersTab: React.FC<Props> = ({
   landingPages = [],
   onUpdateStatus,
   onUpdateOrderDetails,
+  onSyncFromGoogleSheet,
+  isSyncingSheet,
   selectedOrder,
   onSelectOrder
 }) => {
@@ -91,7 +96,7 @@ export const OrdersTab: React.FC<Props> = ({
       setEditCommune(selectedOrder.commune || '');
       setEditDeliveryType(selectedOrder.deliveryType === 'stop' ? 'stop' : 'home');
     }
-  }, [selectedOrder?.id, selectedOrder?.bundleLabel, selectedOrder?.wilayaId, selectedOrder?.commune, selectedOrder?.deliveryType, landingPages]);
+  }, [selectedOrder?.id]);
 
   const statusConfigs: Record<OrderStatus, { label: string; badgeClass: string; icon: any }> = {
     new: {
@@ -236,13 +241,27 @@ export const OrdersTab: React.FC<Props> = ({
         onCancel={() => setOrderToCancel(null)}
       />
 
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-          إدارة الطلبات وعمليات الشحن
-        </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          تتبع مراحل الطلب الـ 4 وإدخال رموز التتبع لشركات التوصيل (Yalidine / ZR Express)
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+            إدارة الطلبات وعمليات الشحن
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            تتبع مراحل الطلب الـ 4 وإدخال رموز التتبع لشركات التوصيل (Yalidine / ZR Express)
+          </p>
+        </div>
+
+        {onSyncFromGoogleSheet && (
+          <button
+            type="button"
+            onClick={onSyncFromGoogleSheet}
+            disabled={isSyncingSheet}
+            className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-emerald-400 text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingSheet ? 'animate-spin' : ''}`} />
+            <span>{isSyncingSheet ? 'جارٍ المزامنة...' : 'مزامنة من Google Sheet'}</span>
+          </button>
+        )}
       </div>
 
       {/* Status Filter Tabs */}

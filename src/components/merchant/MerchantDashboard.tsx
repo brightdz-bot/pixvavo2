@@ -1,14 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
 import { DeliveryType, LandingPage, Order, OrderStatus, Store } from '../../types';
+import { ALGERIA_WILAYAS } from '../../data/wilayas';
 import { OverviewTab } from './OverviewTab';
 import { LandingPagesTab } from './LandingPagesTab';
 import { OrdersTab } from './OrdersTab';
 import { SettingsTab } from './SettingsTab';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { LoginModal } from '../visitor/LoginModal';
-import { ORDER_STAGE_LABELS, updateOrderInGoogleSheet } from '../../services/integrations';
+import {
+  ORDER_STAGE_LABELS,
+  updateOrderInGoogleSheet,
+  fetchAllOrdersFromGoogleSheet
+} from '../../services/integrations';
 import {
   LayoutDashboard,
   Layers,
@@ -59,6 +64,13 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
+
+  const recentSitePushRef = useRef<Record<string, number>>({});
+  const sheetRowSigRef = useRef<Record<string, string>>({});
+  const isSyncingRef = useRef(false);
+  const selectedOrderRef = useRef<Order | null>(null);
+  selectedOrderRef.current = selectedOrder;
 
   const store = currentStore || (!isSupabaseMode ? storage.getLocalStores()[0] : null);
 
@@ -66,6 +78,162 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
+
+  const syncOrdersWithGoogleSheets = useCallback(
+    async (currentOrders: Order[], currentPages: LandingPage[], showFeedback = false) => {
+      if (!store?.id || isSyncingRef.current) return;
+      const webhookUrls = Array.from(
+        new Set(
+          [
+            store.googleSheetWebhook?.trim(),
+            ...currentPages.map(p => p.integrations?.googleSheetWebhook?.trim())
+          ].filter((u): u is string => Boolean(u))
+        )
+      );
+
+      if (webhookUrls.length === 0) {
+        if (showFeedback) {
+          showToast('لا يوجد رابط Google Sheet مفعّل في إعدادات المتجر أو الصفحات');
+        }
+        return;
+      }
+
+      isSyncingRef.current = true;
+      if (showFeedback) setIsSyncingSheet(true);
+
+      try {
+        const sheetBatches = await Promise.all(webhookUrls.map(url => fetchAllOrdersFromGoogleSheet(url)));
+        const allSheetRows = sheetBatches.flatMap(b => (Array.isArray(b) ? b : []));
+        if (allSheetRows.length === 0) {
+          if (showFeedback) showToast('لا توجد تغييرات جديدة في Google Sheet');
+          return;
+        }
+
+        const normalizeDigits = (val: string) => {
+          const d = (val || '').replace(/[^\d]/g, '');
+          return d.startsWith('0') ? d.slice(1) : d;
+        };
+
+        let syncedCount = 0;
+
+        for (const row of allSheetRows) {
+          const key = row.orderId.toUpperCase();
+          const dbOrder = currentOrders.find(o => o.orderNumber.toUpperCase() === key);
+          if (!dbOrder) continue;
+
+          const rowSig = JSON.stringify({
+            status: row.status,
+            trackingCode: row.trackingCode,
+            orderName: row.orderName,
+            wilaya: row.wilaya,
+            commune: row.commune,
+            deliveryType: row.deliveryType,
+            shippingCost: row.shippingCost,
+            productPrice: row.productPrice,
+            total: row.total,
+            fullName: row.fullName,
+            phone: normalizeDigits(row.phone)
+          });
+          const prevSig = sheetRowSigRef.current[key];
+          sheetRowSigRef.current[key] = rowSig;
+
+          const pushTs = recentSitePushRef.current[key] || 0;
+          const sheetTs = row.sheetUpdatedAt ? new Date(row.sheetUpdatedAt).getTime() : 0;
+          const dbUpdatedTs = new Date(dbOrder.updatedAt).getTime();
+          const dbCreatedTs = new Date(dbOrder.createdAt).getTime();
+
+          // Ignore stale sheet snapshot right after a push from Dashboard/Site
+          if (Date.now() - pushTs < 15000 && (!sheetTs || sheetTs <= pushTs)) {
+            continue;
+          }
+
+          const nextDelivery: DeliveryType = row.deliveryType || dbOrder.deliveryType || 'home';
+          const nextTotal = row.total > 0 ? row.total : dbOrder.total;
+          const nextSubtotal = row.productPrice > 0 ? row.productPrice : dbOrder.subtotal;
+          const nextShipping = row.shippingCost >= 0 && (row.productPrice > 0 || row.total > 0)
+            ? row.shippingCost
+            : dbOrder.shippingFee;
+
+          const phoneChanged =
+            Boolean(row.phone) &&
+            normalizeDigits(row.phone) !== normalizeDigits(dbOrder.customerPhone);
+
+          const hasDiff =
+            row.status !== dbOrder.status ||
+            row.trackingCode !== (dbOrder.trackingCode || '') ||
+            (Boolean(row.orderName) && row.orderName !== (dbOrder.bundleLabel || '')) ||
+            (Boolean(row.wilaya) && row.wilaya !== dbOrder.wilayaName) ||
+            (row.commune !== '' && row.commune !== (dbOrder.commune || '')) ||
+            nextDelivery !== (dbOrder.deliveryType || 'home') ||
+            Math.abs(nextShipping - dbOrder.shippingFee) > 0.01 ||
+            Math.abs(nextSubtotal - dbOrder.subtotal) > 0.01 ||
+            Math.abs(nextTotal - dbOrder.total) > 0.01 ||
+            (Boolean(row.fullName) && row.fullName !== dbOrder.customerName) ||
+            phoneChanged;
+
+          if (!hasDiff) continue;
+
+          const sheetTimestampNewer = sheetTs > 0 && sheetTs > dbUpdatedTs + 1000;
+          const neverEditedInDb = Math.abs(dbUpdatedTs - dbCreatedTs) <= 2500;
+          const sigChangedInSession = Boolean(prevSig && prevSig !== rowSig);
+
+          if (!sheetTimestampNewer && !neverEditedInDb && !sigChangedInSession && !showFeedback) {
+            continue;
+          }
+
+          const cleanWilaya = (row.wilaya || '').trim();
+          const matchedWilaya = cleanWilaya
+            ? ALGERIA_WILAYAS.find(
+                w => w.nameAr === cleanWilaya || w.id === cleanWilaya || cleanWilaya.includes(w.nameAr)
+              )
+            : undefined;
+
+          const res = await storage.syncOrderFromSheet({
+            orderId: dbOrder.id,
+            status: row.status,
+            trackingCode: row.trackingCode,
+            bundleLabel: row.orderName || undefined,
+            wilayaId: matchedWilaya?.id,
+            wilayaName: cleanWilaya || undefined,
+            commune: row.commune,
+            deliveryType: nextDelivery,
+            subtotal: nextSubtotal,
+            shippingFee: nextShipping,
+            total: nextTotal,
+            customerName: row.fullName || undefined,
+            customerPhone: phoneChanged ? row.phone : undefined
+          });
+          if (res.success) {
+            syncedCount += 1;
+          }
+        }
+
+        if (syncedCount > 0) {
+          const [refreshedOrders, refreshedPages] = await Promise.all([
+            storage.getOrders(store.id),
+            storage.getLandingPages(store.id)
+          ]);
+          setOrders(refreshedOrders);
+          setLandingPages(refreshedPages);
+          const curSel = selectedOrderRef.current;
+          if (curSel) {
+            const updatedSel = refreshedOrders.find(o => o.id === curSel.id);
+            if (updatedSel) setSelectedOrder(updatedSel);
+          }
+          showToast(`تمت مزامنة ${syncedCount} طلب من Google Sheet`);
+        } else if (showFeedback) {
+          showToast('البيانات متطابقة مع Google Sheet بالفعل');
+        }
+      } catch (err) {
+        console.warn('Google Sheet sync error:', err);
+        if (showFeedback) showToast('تعذر الاتصال بـ Google Sheet حالياً');
+      } finally {
+        isSyncingRef.current = false;
+        if (showFeedback) setIsSyncingSheet(false);
+      }
+    },
+    [store?.id, store?.googleSheetWebhook]
+  );
 
   const loadData = useCallback(async () => {
     if (!store?.id) {
@@ -81,17 +249,26 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       ]);
       setLandingPages(loadedPages);
       setOrders(loadedOrders);
+      void syncOrdersWithGoogleSheets(loadedOrders, loadedPages, false);
     } catch (err) {
       console.error('Failed to load store data:', err);
       setLoadError('تعذر تحميل بيانات المتجر، يرجى إعادة المحاولة');
     } finally {
       setIsDataLoading(false);
     }
-  }, [store?.id]);
+  }, [store?.id, syncOrdersWithGoogleSheets]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!store?.id || isDataLoading) return;
+    const timer = setInterval(() => {
+      void syncOrdersWithGoogleSheets(orders, landingPages, false);
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [store?.id, isDataLoading, orders, landingPages, syncOrdersWithGoogleSheets]);
 
   const handleSaveLandingPage = async (page: LandingPage): Promise<boolean> => {
     const res = await storage.saveLandingPage(page);
@@ -145,6 +322,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         setSelectedOrder(updatedOrder);
       }
       if (updatedOrder) {
+        recentSitePushRef.current[updatedOrder.orderNumber.toUpperCase()] = Date.now();
         const lp = updatedPages.find(p => p.id === updatedOrder.landingPageId);
         const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
         updateOrderInGoogleSheet(webhook, {
@@ -181,6 +359,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         setSelectedOrder(found);
       }
       if (res.updated) {
+        recentSitePushRef.current[res.updated.orderNumber.toUpperCase()] = Date.now();
         const lp = updatedPages.find(p => p.id === (res.updated?.landingPageId || found?.landingPageId));
         const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
         updateOrderInGoogleSheet(webhook, {
@@ -553,6 +732,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   landingPages={landingPages}
                   onUpdateStatus={handleUpdateOrderStatus}
                   onUpdateOrderDetails={handleUpdateOrderDetails}
+                  onSyncFromGoogleSheet={() => syncOrdersWithGoogleSheets(orders, landingPages, true)}
+                  isSyncingSheet={isSyncingSheet}
                   selectedOrder={selectedOrder}
                   onSelectOrder={setSelectedOrder}
                 />
