@@ -45,7 +45,6 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [loginModalMode, setLoginModalMode] = useState<'login' | 'register'>('login');
 
   // First-time private store setup form (in Supabase mode when DB has no store yet)
   const [setupStoreName, setSetupStoreName] = useState('Bright DZ');
@@ -181,9 +180,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center">
         <LoginModal
           isOpen={loginModalOpen}
-          initialMode={loginModalMode}
           onClose={() => setLoginModalOpen(false)}
-          onOpenSignup={() => setLoginModalOpen(false)}
           onSuccess={() => setLoginModalOpen(false)}
         />
         <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
@@ -194,14 +191,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
             لوحة إدارة متجرك الخاصة
           </h2>
           <p className="text-xs text-slate-500 leading-relaxed">
-            سجّل الدخول بحساب مالك المتجر أو أنشئ حسابك لأول مرة لتهيئة متجرك والوصول إلى منشئ صفحات الهبوط والطلبات.
+            سجّل الدخول بحساب مالك المتجر للوصول إلى منشئ صفحات الهبوط والطلبات.
           </p>
           <div className="flex flex-col gap-2">
             <button
-              onClick={() => {
-                setLoginModalMode('login');
-                setLoginModalOpen(true);
-              }}
+              onClick={() => setLoginModalOpen(true)}
               className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer"
             >
               تسجيل دخول المالك

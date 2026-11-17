@@ -37,7 +37,6 @@ interface Props {
   store: Store;
   page: LandingPage;
   onBackToCatalog?: () => void;
-  onGoToMerchant?: () => void;
 }
 
 interface TrackedOrderState {
@@ -55,8 +54,7 @@ interface TrackedOrderState {
 export const LandingPageView: React.FC<Props> = ({
   store,
   page,
-  onBackToCatalog,
-  onGoToMerchant
+  onBackToCatalog
 }) => {
   const theme = page.theme;
   const offers = page.offers && page.offers.length > 0 ? page.offers : [];
@@ -404,16 +402,6 @@ export const LandingPageView: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {onGoToMerchant && (
-              <button
-                type="button"
-                onClick={onGoToMerchant}
-                className="hidden md:inline-flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs font-semibold border whitespace-nowrap transition-opacity hover:opacity-80"
-                style={{ borderColor: theme.borderColor, color: theme.textColor }}
-              >
-                <span>لوحة المتجر</span>
-              </button>
-            )}
             <button
               type="button"
               onClick={() => scrollToElement('track-search-section')}

@@ -18,11 +18,22 @@ function getInitialSlugFromUrl(): string | null {
   }
 }
 
+function isAdminRouteFromUrl(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === '1' || params.get('admin') === 'true') return true;
+    return window.location.pathname.replace(/\/+$/, '').endsWith('/admin');
+  } catch {
+    return false;
+  }
+}
+
 function AppContent() {
   const { currentStore, currentUser, isSupabaseMode, isLoading, currentSubdomain } = useAuth();
   const [initialSlug, setInitialSlug] = useState<string | null>(() => getInitialSlugFromUrl());
   const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => {
     if (getInitialSlugFromUrl()) return 'storefront';
+    if (isAdminRouteFromUrl()) return 'merchant';
     return isSupabaseMode ? 'storefront' : 'merchant';
   });
   const hasInitializedRef = useRef(false);
@@ -32,6 +43,8 @@ function AppContent() {
       hasInitializedRef.current = true;
       if (getInitialSlugFromUrl()) {
         setCurrentView('storefront');
+      } else if (isAdminRouteFromUrl()) {
+        setCurrentView('merchant');
       } else if (isSupabaseMode) {
         setCurrentView(currentUser ? 'merchant' : 'storefront');
       } else {
@@ -53,14 +66,17 @@ function AppContent() {
 
   const handleGoToStorefront = (slug?: string) => {
     setInitialSlug(slug || null);
-    if (slug) {
-      try {
-        const url = new URL(window.location.href);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('admin');
+      if (slug) {
         url.searchParams.set('p', slug);
-        window.history.replaceState({}, '', url.toString());
-      } catch {
-        // ignore
+      } else {
+        url.searchParams.delete('p');
       }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore
     }
     setCurrentView('storefront');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -87,7 +103,6 @@ function AppContent() {
           <PublicStorefront
             subdomain={currentStore?.subdomain || currentSubdomain}
             initialSlug={initialSlug}
-            onGoToMerchant={() => setCurrentView('merchant')}
           />
         )}
       </div>
@@ -102,3 +117,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

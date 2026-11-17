@@ -13,7 +13,6 @@ import {
   Truck,
   PackageOpen,
   AlertCircle,
-  LayoutDashboard,
   X,
   ImageOff
 } from 'lucide-react';
@@ -21,15 +20,13 @@ import {
 interface Props {
   subdomain: string;
   initialSlug?: string | null;
-  onGoToMerchant: () => void;
 }
 
 export const PublicStorefront: React.FC<Props> = ({
   subdomain,
-  initialSlug,
-  onGoToMerchant
+  initialSlug
 }) => {
-  const { isSupabaseMode, enableDemoPreview } = useAuth();
+  const { isSupabaseMode } = useAuth();
   const [store, setStore] = useState<Store | null>(null);
   const [pages, setPages] = useState<LandingPage[]>([]);
   const [activePageSlug, setActivePageSlug] = useState<string | null>(initialSlug || null);
@@ -151,25 +148,11 @@ export const PublicStorefront: React.FC<Props> = ({
         <div className="max-w-md w-full bg-white rounded-3xl p-8 border border-[#e8d5b7] shadow-lg space-y-4">
           <AlertCircle className="w-12 h-12 text-amber-600 mx-auto" />
           <h1 className="text-xl font-black text-slate-900">
-            {loadError ? 'تعذر تحميل المتجر' : 'لم يتم إعداد المتجر بعد'}
+            {loadError ? 'تعذر تحميل المتجر' : 'المتجر قيد التجهيز حالياً'}
           </h1>
           <p className="text-xs text-slate-600 leading-relaxed">
-            {loadError || 'انتقل إلى لوحة الإدارة لتسجيل دخول المالك (أو إنشاء حساب جديد) وتهيئة متجرك وإضافة صفحات الهبوط.'}
+            {loadError || 'نعمل حالياً على تجهيز المنتجات والعروض، يرجى العودة لاحقاً.'}
           </p>
-          <div className="flex flex-col gap-2.5 pt-1">
-            <button
-              onClick={onGoToMerchant}
-              className="w-full py-3 rounded-xl bg-[#754b2d] hover:opacity-95 text-white text-xs font-bold cursor-pointer"
-            >
-              فتح لوحة المتجر
-            </button>
-            <button
-              onClick={() => enableDemoPreview(true)}
-              className="w-full py-3 rounded-xl bg-[#f7f1e5] hover:bg-[#efe4cf] border border-[#e8d5b7] text-[#432818] text-xs font-bold cursor-pointer"
-            >
-              تشغيل المتجر التجريبي مباشرة (بدون تسجيل)
-            </button>
-          </div>
         </div>
       </div>
     );
@@ -186,7 +169,6 @@ export const PublicStorefront: React.FC<Props> = ({
         store={store}
         page={activePage}
         onBackToCatalog={closeLandingPage}
-        onGoToMerchant={onGoToMerchant}
       />
     );
   }
@@ -244,15 +226,6 @@ export const PublicStorefront: React.FC<Props> = ({
               <Search className="w-3.5 h-3.5" style={{ color: store.brandColor }} />
               <span>تتبع طلبك</span>
             </button>
-
-            <button
-              onClick={onGoToMerchant}
-              className="px-3 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shadow-sm cursor-pointer"
-              style={{ backgroundColor: store.brandColor || '#754b2d' }}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">إدارة الصفحات</span>
-            </button>
           </div>
         </div>
       </header>
@@ -294,17 +267,10 @@ export const PublicStorefront: React.FC<Props> = ({
         {filteredPages.length === 0 ? (
           <div className="p-12 rounded-3xl bg-white border border-[#e8d5b7] text-center space-y-3">
             <ShoppingBag className="w-12 h-12 text-slate-300 mx-auto" />
-            <h2 className="text-lg font-bold">لا توجد صفحات هبوط منشورة حالياً</h2>
+            <h2 className="text-lg font-bold">لا توجد عروض متاحة حالياً</h2>
             <p className="text-xs text-slate-500">
-              يمكنك إنشاء ونشر صفحات الهبوط وتخصيص ألوانها وباقاتها من لوحة المتجر.
+              يرجى التحقق مجدداً قريباً لاكتشاف أحدث المنتجات والعروض.
             </p>
-            <button
-              onClick={onGoToMerchant}
-              className="px-5 py-2.5 rounded-xl text-white text-xs font-bold"
-              style={{ backgroundColor: store.brandColor || '#754b2d' }}
-            >
-              فتح منشئ صفحات الهبوط
-            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
