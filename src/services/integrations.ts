@@ -1,5 +1,5 @@
 import { CourierProvider, DeliveryType, Order, OrderStatus, StoreApiConfig } from '../types';
-import { formatDZD } from '../data/wilayas';
+import { formatPlainDZD } from '../data/wilayas';
 
 declare global {
   interface Window {
@@ -277,15 +277,15 @@ export async function sendOrderToGoogleSheet(
     formData.append('commune', payload.commune);
     formData.append(
       'shippingType',
-      payload.deliveryType === 'home' ? 'توصيل للمنزل 🏠' : 'مكتب الشحن Stop Desk 🏢'
+      payload.deliveryType === 'home' ? 'توصيل للمنزل' : 'مكتب الشحن Stop Desk'
     );
     formData.append('order', payload.orderDetails);
     formData.append('status', payload.statusLabel);
-    formData.append('shippingCost', String(payload.shippingCost));
-    formData.append('productPrice', String(payload.productPrice));
-    formData.append('discount', String(payload.discount || 0));
+    formData.append('shippingCost', String(Math.round(payload.shippingCost || 0)));
+    formData.append('productPrice', String(Math.round(payload.productPrice || 0)));
+    formData.append('discount', String(Math.round(payload.discount || 0)));
     formData.append('discountReason', payload.discountReason || '');
-    formData.append('totalPrice', formatDZD(payload.totalPrice));
+    formData.append('totalPrice', String(Math.round(payload.totalPrice || 0)));
     formData.append('trackingCode', payload.trackingCode || '');
 
     await fetch(cleanUrl, {
@@ -324,13 +324,13 @@ export async function updateOrderInGoogleSheet(
     if (payload.deliveryType !== undefined) {
       formData.append(
         'shippingType',
-        payload.deliveryType === 'home' ? 'توصيل للمنزل 🏠' : 'مكتب الشحن Stop Desk 🏢'
+        payload.deliveryType === 'home' ? 'توصيل للمنزل' : 'مكتب الشحن Stop Desk'
       );
     }
     if (payload.orderDetails !== undefined) formData.append('order', payload.orderDetails);
     if (payload.statusLabel !== undefined) formData.append('status', payload.statusLabel);
-    if (payload.shippingCost !== undefined) formData.append('shippingCost', String(payload.shippingCost));
-    if (payload.productPrice !== undefined) formData.append('productPrice', String(payload.productPrice));
+    if (payload.shippingCost !== undefined) formData.append('shippingCost', String(Math.round(payload.shippingCost || 0)));
+    if (payload.productPrice !== undefined) formData.append('productPrice', String(Math.round(payload.productPrice || 0)));
     if (payload.trackingCode !== undefined) formData.append('trackingCode', payload.trackingCode);
 
     await fetch(cleanUrl, {
@@ -604,8 +604,8 @@ export function buildOrderConfirmationWhatsAppUrl(
         storeName,
         bundle: params.bundleDetails,
         deliveryType: deliveryLabel,
-        shippingCost: formatDZD(params.shippingCost),
-        total: formatDZD(params.total),
+        shippingCost: formatPlainDZD(params.shippingCost),
+        total: formatPlainDZD(params.total),
         wilaya: params.wilayaName,
         commune: params.commune,
         storePhone: displayPhone
@@ -616,8 +616,8 @@ export function buildOrderConfirmationWhatsAppUrl(
         storeName,
         bundle: params.bundleDetails,
         deliveryType: deliveryLabel,
-        shippingCost: formatDZD(params.shippingCost),
-        total: formatDZD(params.total),
+        shippingCost: formatPlainDZD(params.shippingCost),
+        total: formatPlainDZD(params.total),
         wilaya: params.wilayaName,
         commune: params.commune,
         storePhone: displayPhone
@@ -650,7 +650,7 @@ export function buildOrderTrackingWhatsAppUrl(
       storeName,
       bundle: params.bundleDetails,
       trackingCode: params.trackingCode || '',
-      total: formatDZD(params.total)
+      total: formatPlainDZD(params.total)
     });
   } else {
     msg = `مرحباً ${storeName}، أود الاستفسار ومتابعة حالة طلبي رقم ${params.orderNumber}.`;
@@ -843,8 +843,8 @@ export function buildAutoOrderTextMessage(
       storeName,
       bundle,
       deliveryType: deliveryLabel,
-      shippingCost: formatDZD(order.shippingFee || 0),
-      total: formatDZD(order.total),
+      shippingCost: formatPlainDZD(order.shippingFee || 0),
+      total: formatPlainDZD(order.total),
       wilaya: order.wilayaName,
       commune: order.commune || '',
       trackingCode: order.trackingCode || ''
@@ -856,7 +856,7 @@ export function buildAutoOrderTextMessage(
       `طلبيتك رقم ${order.orderNumber} من متجر ${storeName} خرجت مع شركة التوصيل وفي الطريق إليك.\n` +
       `المنتج: ${bundle}\n` +
       (order.trackingCode ? `رمز التتبع: ${order.trackingCode}\n` : '') +
-      `المبلغ عند الاستلام: ${formatDZD(order.total)}\n` +
+      `المبلغ عند الاستلام: ${formatPlainDZD(order.total)}\n` +
       `شكراً لثقتك بنا.`
     );
   }
@@ -865,7 +865,7 @@ export function buildAutoOrderTextMessage(
     `تم استلام وتأكيد طلبك رقم ${order.orderNumber} من متجر ${storeName}.\n` +
     `الطلب: ${bundle}\n` +
     `العنوان: ${order.wilayaName}${order.commune ? ' - ' + order.commune : ''}\n` +
-    `المبلغ عند الاستلام: ${formatDZD(order.total)}\n` +
+    `المبلغ عند الاستلام: ${formatPlainDZD(order.total)}\n` +
     `سنخبرك فور خروج الطرد للتوصيل.`
   );
 }

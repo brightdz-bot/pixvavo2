@@ -121,11 +121,18 @@ function normalizeLocalPhone(raw?: string): string {
   return String(raw || '').replace(/[^\d]/g, '');
 }
 
+function normalizeHttpsUrl(raw: string): string {
+  const clean = (raw || '').trim().replace(/\/+$/, '');
+  if (!clean) return '';
+  if (/^https?:\/\//i.test(clean)) return clean;
+  return `https://${clean}`;
+}
+
 function getCourierDefaults(
   provider: CourierProvider,
   customBaseUrl?: string
 ): { baseUrl: string; label: string } {
-  const cleanOverride = (customBaseUrl || '').trim().replace(/\/+$/, '');
+  const cleanOverride = normalizeHttpsUrl(customBaseUrl || '');
   switch (provider) {
     case 'ecotrack': {
       const origin = (cleanOverride || 'https://48hr.ecotrack.dz').replace(/\/api\/v1$/i, '');
@@ -183,6 +190,254 @@ function mapCourierStatusToAppStatus(
     return 'confirmed';
   }
   return 'shipping';
+}
+
+const WILAYA_ENTRIES: Array<{ code: string; nameAr: string; nameFr: string }> = [
+  { code: '01', nameAr: 'أدرار', nameFr: 'Adrar' },
+  { code: '02', nameAr: 'الشلف', nameFr: 'Chlef' },
+  { code: '03', nameAr: 'الأغواط', nameFr: 'Laghouat' },
+  { code: '04', nameAr: 'أم البواقي', nameFr: 'Oum El Bouaghi' },
+  { code: '05', nameAr: 'باتنة', nameFr: 'Batna' },
+  { code: '06', nameAr: 'بجاية', nameFr: 'Béjaïa' },
+  { code: '07', nameAr: 'بسكرة', nameFr: 'Biskra' },
+  { code: '08', nameAr: 'بشار', nameFr: 'Béchar' },
+  { code: '09', nameAr: 'البليدة', nameFr: 'Blida' },
+  { code: '10', nameAr: 'البويرة', nameFr: 'Bouira' },
+  { code: '11', nameAr: 'تمنراست', nameFr: 'Tamanrasset' },
+  { code: '12', nameAr: 'تبسة', nameFr: 'Tébessa' },
+  { code: '13', nameAr: 'تلمسان', nameFr: 'Tlemcen' },
+  { code: '14', nameAr: 'تيارت', nameFr: 'Tiaret' },
+  { code: '15', nameAr: 'تيزي وزو', nameFr: 'Tizi Ouzou' },
+  { code: '16', nameAr: 'الجزائر العاصمة', nameFr: 'Alger' },
+  { code: '17', nameAr: 'الجلفة', nameFr: 'Djelfa' },
+  { code: '18', nameAr: 'جيجل', nameFr: 'Jijel' },
+  { code: '19', nameAr: 'سطيف', nameFr: 'Sétif' },
+  { code: '20', nameAr: 'سعيدة', nameFr: 'Saïda' },
+  { code: '21', nameAr: 'سكيكدة', nameFr: 'Skikda' },
+  { code: '22', nameAr: 'سيدي بلعباس', nameFr: 'Sidi Bel Abbès' },
+  { code: '23', nameAr: 'عنابة', nameFr: 'Annaba' },
+  { code: '24', nameAr: 'قالمة', nameFr: 'Guelma' },
+  { code: '25', nameAr: 'قسنطينة', nameFr: 'Constantine' },
+  { code: '26', nameAr: 'المدية', nameFr: 'Médéa' },
+  { code: '27', nameAr: 'مستغانم', nameFr: 'Mostaganem' },
+  { code: '28', nameAr: 'المسيلة', nameFr: "M'Sila" },
+  { code: '29', nameAr: 'معسكر', nameFr: 'Mascara' },
+  { code: '30', nameAr: 'ورقلة', nameFr: 'Ouargla' },
+  { code: '31', nameAr: 'وهران', nameFr: 'Oran' },
+  { code: '32', nameAr: 'البيض', nameFr: 'El Bayadh' },
+  { code: '33', nameAr: 'إليزي', nameFr: 'Illizi' },
+  { code: '34', nameAr: 'برج بوعريريج', nameFr: 'Bordj Bou Arréridj' },
+  { code: '35', nameAr: 'بومرداس', nameFr: 'Boumerdès' },
+  { code: '36', nameAr: 'الطارف', nameFr: 'El Tarf' },
+  { code: '37', nameAr: 'تندوف', nameFr: 'Tindouf' },
+  { code: '38', nameAr: 'تيسمسيلت', nameFr: 'Tissemsilt' },
+  { code: '39', nameAr: 'الوادي', nameFr: 'El Oued' },
+  { code: '40', nameAr: 'خنشلة', nameFr: 'Khenchela' },
+  { code: '41', nameAr: 'سوق أهراس', nameFr: 'Souk Ahras' },
+  { code: '42', nameAr: 'تيبازة', nameFr: 'Tipaza' },
+  { code: '43', nameAr: 'ميلة', nameFr: 'Mila' },
+  { code: '44', nameAr: 'عين الدفلى', nameFr: 'Aïn Defla' },
+  { code: '45', nameAr: 'النعامة', nameFr: 'Naâma' },
+  { code: '46', nameAr: 'عين تموشنت', nameFr: 'Aïn Témouchent' },
+  { code: '47', nameAr: 'غرداية', nameFr: 'Ghardaïa' },
+  { code: '48', nameAr: 'غليزان', nameFr: 'Relizane' },
+  { code: '49', nameAr: 'تيميمون', nameFr: 'Timimoun' },
+  { code: '50', nameAr: 'برج باجي مختار', nameFr: 'Bordj Badji Mokhtar' },
+  { code: '51', nameAr: 'أولاد جلال', nameFr: 'Ouled Djellal' },
+  { code: '52', nameAr: 'بني عباس', nameFr: 'Béni Abbès' },
+  { code: '53', nameAr: 'عين صالح', nameFr: 'In Salah' },
+  { code: '54', nameAr: 'عين قزام', nameFr: 'In Guezzam' },
+  { code: '55', nameAr: 'تقرت', nameFr: 'Touggourt' },
+  { code: '56', nameAr: 'جانت', nameFr: 'Djanet' },
+  { code: '57', nameAr: 'المغير', nameFr: "El M'Ghair" },
+  { code: '58', nameAr: 'المنيعة', nameFr: 'El Menia' }
+];
+
+function stripLatinDiacritics(input: string): string {
+  return String(input || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasArabicChars(input?: string): boolean {
+  return /[\u0600-\u06FF]/.test(String(input || ''));
+}
+
+function resolveWilayaMeta(wilayaIdRaw?: string, wilayaNameRaw?: string) {
+  const numId = parseInt(String(wilayaIdRaw || ''), 10);
+  if (numId >= 1 && numId <= 58) {
+    const code = String(numId).padStart(2, '0');
+    const found = WILAYA_ENTRIES.find(w => w.code === code);
+    if (found) return found;
+  }
+  const cleanName = String(wilayaNameRaw || '').trim();
+  const normLatin = stripLatinDiacritics(cleanName);
+  const byMatch = WILAYA_ENTRIES.find(
+    w =>
+      w.nameAr === cleanName ||
+      cleanName.includes(w.nameAr) ||
+      (normLatin && stripLatinDiacritics(w.nameFr) === normLatin)
+  );
+  return byMatch || WILAYA_ENTRIES[15];
+}
+
+function transliterateArabicToLatin(raw: string): string {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/^ال(?=[اأإآبتثجحخدذرزسشصضطظعغفقكلمنهوي])/, 'el ')
+    .replace(/\s+ال/g, ' el ')
+    .replace(/أولاد|اولاد/g, 'ouled')
+    .replace(/سيدي/g, 'sidi')
+    .replace(/عين/g, 'ain')
+    .replace(/بني/g, 'beni')
+    .replace(/وادي|واد/g, 'oued')
+    .replace(/برج/g, 'bordj')
+    .replace(/بئر/g, 'bir')
+    .replace(/حاسي/g, 'hassi')
+    .replace(/باب/g, 'bab')
+    .replace(/الجزائر الوسطى/g, 'alger centre')
+    .replace(/أم/g, 'oum')
+    .replace(/بو/g, 'bou')
+    .replace(/بن/g, 'ben')
+    .replace(/ش/g, 'ch')
+    .replace(/ث/g, 'th')
+    .replace(/ذ/g, 'dh')
+    .replace(/خ/g, 'kh')
+    .replace(/غ/g, 'gh')
+    .replace(/ص/g, 's')
+    .replace(/ض/g, 'd')
+    .replace(/ط/g, 't')
+    .replace(/ظ/g, 'z')
+    .replace(/ق/g, 'k')
+    .replace(/ف/g, 'f')
+    .replace(/ع/g, 'a')
+    .replace(/ح/g, 'h')
+    .replace(/ه/g, 'h')
+    .replace(/خ/g, 'kh')
+    .replace(/ج/g, 'j')
+    .replace(/د/g, 'd')
+    .replace(/ر/g, 'r')
+    .replace(/ز/g, 'z')
+    .replace(/س/g, 's')
+    .replace(/ت/g, 't')
+    .replace(/ن/g, 'n')
+    .replace(/م/g, 'm')
+    .replace(/ل/g, 'l')
+    .replace(/ك/g, 'k')
+    .replace(/ب/g, 'b')
+    .replace(/و/g, 'ou')
+    .replace(/ي|ى/g, 'i')
+    .replace(/ة/g, 'a')
+    .replace(/ا|أ|إ|آ/g, 'a')
+    .replace(/ئ|ء|ؤ/g, 'a');
+  return stripLatinDiacritics(cleaned);
+}
+
+function bigramScore(a: string, b: string): number {
+  const s1 = a.replace(/\s+/g, '');
+  const s2 = b.replace(/\s+/g, '');
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1;
+  if (s1.length < 2 || s2.length < 2) return s1[0] === s2[0] ? 0.5 : 0;
+  const map = new Map<string, number>();
+  for (let i = 0; i < s1.length - 1; i++) {
+    const bg = s1.slice(i, i + 2);
+    map.set(bg, (map.get(bg) || 0) + 1);
+  }
+  let matches = 0;
+  for (let i = 0; i < s2.length - 1; i++) {
+    const bg = s2.slice(i, i + 2);
+    const c = map.get(bg) || 0;
+    if (c > 0) {
+      map.set(bg, c - 1);
+      matches++;
+    }
+  }
+  return (2 * matches) / (s1.length - 1 + (s2.length - 1));
+}
+
+function pickBestCandidateName(
+  desiredRaw: string,
+  candidates: Array<{ name: string; arName?: string; preferred?: boolean }>,
+  wilayaFallbackFr?: string
+): string {
+  if (candidates.length === 0) return desiredRaw;
+  const desiredTrim = String(desiredRaw || '').trim();
+  const desiredArExact = candidates.find(c => c.arName && c.arName.trim() === desiredTrim);
+  if (desiredArExact) return desiredArExact.name;
+
+  const desiredLatin = hasArabicChars(desiredTrim)
+    ? transliterateArabicToLatin(desiredTrim)
+    : stripLatinDiacritics(desiredTrim);
+
+  let best = candidates.find(c => c.preferred) || candidates[0];
+  let bestScore = -1;
+  const wilayaNorm = stripLatinDiacritics(wilayaFallbackFr || '');
+
+  for (const cand of candidates) {
+    const candLatin = stripLatinDiacritics(cand.name);
+    if (!candLatin) continue;
+    let score = bigramScore(desiredLatin, candLatin);
+    if (candLatin === desiredLatin) score += 1;
+    if (cand.preferred) score += 0.05;
+    if (wilayaNorm && (candLatin === wilayaNorm || candLatin === `${wilayaNorm} centre`)) {
+      score += 0.04;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = cand;
+    }
+  }
+
+  return best.name;
+}
+
+const courierMetaCache = new Map<string, { expiresAt: number; data: any }>();
+
+async function cachedCourierGet(
+  cacheKey: string,
+  url: string,
+  headers: Record<string, string>
+): Promise<any | null> {
+  const cached = courierMetaCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+  try {
+    const res = await fetchJsonWithTimeout(url, { method: 'GET', headers }, 7000);
+    if (res.ok && res.json) {
+      courierMetaCache.set(cacheKey, {
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        data: res.json
+      });
+      return res.json;
+    }
+  } catch {
+    // non-fatal metadata lookup fallback
+  }
+  return null;
+}
+
+function extractCourierApiError(json: any, fallbackText: string): string {
+  if (json && typeof json === 'object') {
+    if (json.errors && typeof json.errors === 'object') {
+      const msgs: string[] = [];
+      Object.entries(json.errors).forEach(([field, val]) => {
+        if (Array.isArray(val)) msgs.push(`${field}: ${val.join(', ')}`);
+        else if (val) msgs.push(`${field}: ${String(val)}`);
+      });
+      if (msgs.length > 0) return msgs.join(' | ');
+    }
+    if (typeof json.message === 'string' && json.message.trim()) return json.message.trim();
+    if (typeof json.Message === 'string' && json.Message.trim()) return json.Message.trim();
+    if (typeof json.error === 'string' && json.error.trim()) return json.error.trim();
+    if (typeof json.detail === 'string' && json.detail.trim()) return json.detail.trim();
+  }
+  return String(fallbackText || '').trim().slice(0, 220);
 }
 
 async function fetchJsonWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 10000) {
@@ -622,6 +877,19 @@ export function createApiApp(): Express {
       res.json({ ok: false, message: 'مفتاح API Token لشركة التوصيل غير مضبوط' });
       return;
     }
+    if (
+      (provider === 'yalidine' ||
+        provider === 'guepex' ||
+        provider === 'zrexpress' ||
+        provider === 'procolis') &&
+      !apiId
+    ) {
+      res.json({
+        ok: false,
+        message: 'يرجى إدخال API ID / API Key بجانب التوكن السري في "إعدادات الـ API" وحفظ التغييرات'
+      });
+      return;
+    }
 
     const { baseUrl, label } = getCourierDefaults(provider, cfg.courierBaseUrl);
     const nameParts = String(order.customerName || 'زبون').trim().split(/\s+/);
@@ -630,38 +898,120 @@ export function createApiApp(): Express {
     const cleanPhone = normalizeLocalPhone(order.customerPhone);
     const isStopDesk = order.deliveryType === 'stop';
     const productList = String(order.bundleLabel || 'منتج').trim();
-    const fromWilayaName = (cfg.courierFromWilayaName || 'Alger').trim();
+    const toWilayaMeta = resolveWilayaMeta(order.wilayaId, order.wilayaName);
+    const fromWilayaMeta = resolveWilayaMeta(cfg.courierFromWilayaId, cfg.courierFromWilayaName);
+    const toWilayaCode = parseInt(toWilayaMeta.code, 10) || 16;
+    const fromWilayaCode = parseInt(fromWilayaMeta.code, 10) || 16;
 
     try {
       if (provider === 'yalidine' || provider === 'guepex') {
-        const payload = [
-          {
-            order_id: order.orderNumber,
-            from_wilaya_name: fromWilayaName,
-            firstname: firstName,
-            familyname: familyName,
-            contact_phone: cleanPhone,
-            address: order.address || `${order.wilayaName} - ${order.commune || ''}`,
-            to_commune_name: order.commune || order.wilayaName,
-            to_wilaya_name: order.wilayaName,
-            product_list: productList,
-            price: Math.round(Number(order.total || 0)),
-            do_insurance: false,
-            declared_value: Math.round(Number(order.total || 0)),
-            freeshipping: Number(order.shippingFee || 0) === 0,
-            is_stopdesk: isStopDesk,
-            has_exchange: false
+        const yalHeaders = {
+          'X-API-ID': apiId,
+          'X-API-TOKEN': apiToken,
+          Accept: 'application/json'
+        };
+
+        const [wilayasJson, communesJson, centersJson] = await Promise.all([
+          cachedCourierGet(`${provider}:${baseUrl}:wilayas`, `${baseUrl}/wilayas/`, yalHeaders),
+          cachedCourierGet(
+            `${provider}:${baseUrl}:communes:${toWilayaCode}`,
+            `${baseUrl}/communes/?wilaya_id=${toWilayaCode}`,
+            yalHeaders
+          ),
+          isStopDesk
+            ? cachedCourierGet(
+                `${provider}:${baseUrl}:centers:${toWilayaCode}`,
+                `${baseUrl}/centers/?wilaya_id=${toWilayaCode}`,
+                yalHeaders
+              )
+            : Promise.resolve(null)
+        ]);
+
+        const wilayasList: any[] = Array.isArray(wilayasJson?.data) ? wilayasJson.data : [];
+        const matchedFromWilaya = wilayasList.find(w => Number(w.id) === fromWilayaCode);
+        const matchedToWilaya = wilayasList.find(w => Number(w.id) === toWilayaCode);
+
+        const fromWilayaResolved =
+          matchedFromWilaya?.name ||
+          (hasArabicChars(cfg.courierFromWilayaName)
+            ? stripLatinDiacritics(fromWilayaMeta.nameFr) === 'alger'
+              ? 'Alger'
+              : fromWilayaMeta.nameFr
+            : (cfg.courierFromWilayaName || fromWilayaMeta.nameFr).trim());
+
+        const toWilayaResolved = matchedToWilaya?.name || toWilayaMeta.nameFr;
+
+        const communesList: any[] = Array.isArray(communesJson?.data) ? communesJson.data : [];
+        const deliverableCommunes = communesList.filter(c => c?.is_deliverable !== false);
+        const poolCommunes = deliverableCommunes.length > 0 ? deliverableCommunes : communesList;
+        const communeCandidates = poolCommunes
+          .map(c => ({
+            name: String(c?.name || '').trim(),
+            preferred: Boolean(c?.has_stop_desk)
+          }))
+          .filter(c => Boolean(c.name));
+
+        const desiredCommune = String(order.commune || toWilayaMeta.nameFr).trim();
+        let toCommuneResolved = desiredCommune;
+        if (communeCandidates.length > 0) {
+          toCommuneResolved = pickBestCandidateName(
+            desiredCommune,
+            communeCandidates,
+            toWilayaResolved
+          );
+        } else if (hasArabicChars(desiredCommune)) {
+          toCommuneResolved = toWilayaResolved;
+        }
+
+        let stopdeskId: number | undefined;
+        if (isStopDesk) {
+          const centersList: any[] = Array.isArray(centersJson?.data) ? centersJson.data : [];
+          if (centersList.length > 0) {
+            const centerByCommune = centersList.find(
+              c =>
+                stripLatinDiacritics(c?.commune_name || '') ===
+                stripLatinDiacritics(toCommuneResolved)
+            );
+            const chosenCenter = centerByCommune || centersList[0];
+            if (chosenCenter?.center_id) {
+              stopdeskId = Number(chosenCenter.center_id);
+              if (chosenCenter.commune_name) {
+                toCommuneResolved = String(chosenCenter.commune_name).trim();
+              }
+            }
           }
-        ];
+        }
+
+        const parcelItem: Record<string, any> = {
+          order_id: order.orderNumber,
+          from_wilaya_name: fromWilayaResolved,
+          firstname: firstName,
+          familyname: familyName,
+          contact_phone: cleanPhone,
+          address: order.address || `${toWilayaResolved} - ${toCommuneResolved}`,
+          to_commune_name: toCommuneResolved,
+          to_wilaya_name: toWilayaResolved,
+          product_list: productList,
+          price: Math.round(Number(order.total || 0)),
+          do_insurance: false,
+          declared_value: Math.round(Number(order.total || 0)),
+          freeshipping: Number(order.shippingFee || 0) === 0,
+          is_stopdesk: isStopDesk,
+          has_exchange: false
+        };
+        if (isStopDesk && stopdeskId) {
+          parcelItem.stopdesk_id = stopdeskId;
+        }
 
         const result = await fetchJsonWithTimeout(`${baseUrl}/parcels/`, {
           method: 'POST',
           headers: {
             'X-API-ID': apiId,
             'X-API-TOKEN': apiToken,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
           },
-          body: JSON.stringify(payload)
+          body: JSON.stringify([parcelItem])
         });
 
         const orderEntry = result.json?.[order.orderNumber] || Object.values(result.json || {})[0];
@@ -678,7 +1028,8 @@ export function createApiApp(): Express {
           });
           return;
         }
-        const errDetail = orderEntry?.message || result.json?.message || result.text.slice(0, 180);
+        const errDetail =
+          orderEntry?.message || extractCourierApiError(result.json, result.text);
         res.json({
           ok: false,
           latencyMs: result.latencyMs,
@@ -688,7 +1039,6 @@ export function createApiApp(): Express {
       }
 
       if (provider === 'zrexpress' || provider === 'procolis') {
-        const wilayaCode = parseInt(String(order.wilayaId || '16'), 10) || 16;
         const payload = {
           Colis: [
             {
@@ -700,8 +1050,8 @@ export function createApiApp(): Express {
               MobileA: cleanPhone,
               MobileB: '',
               Adresse: order.address || `${order.wilayaName} - ${order.commune || ''}`,
-              IDWilaya: String(wilayaCode),
-              Commune: order.commune || order.wilayaName,
+              IDWilaya: String(toWilayaCode),
+              Commune: order.commune || toWilayaMeta.nameFr,
               Total: String(Math.round(Number(order.total || 0))),
               Note: order.notes || '',
               TProduit: productList
@@ -714,14 +1064,21 @@ export function createApiApp(): Express {
           headers: {
             token: apiToken,
             key: apiId,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
           },
           body: JSON.stringify(payload)
         });
 
         const firstRes = Array.isArray(result.json?.Colis) ? result.json.Colis[0] : result.json;
         const trackingCode = firstRes?.Tracking || result.json?.Tracking || order.orderNumber;
-        if (result.ok && result.json?.Statut !== 'Error') {
+        const hasZrError =
+          !result.ok ||
+          result.json?.Statut === 'Error' ||
+          firstRes?.Statut === 'Error' ||
+          firstRes?.Retour === 'Error';
+
+        if (!hasZrError) {
           res.json({
             ok: true,
             trackingCode,
@@ -732,23 +1089,61 @@ export function createApiApp(): Express {
           });
           return;
         }
+        const zrErr =
+          firstRes?.Message ||
+          result.json?.Message ||
+          extractCourierApiError(result.json, result.text);
         res.json({
           ok: false,
           latencyMs: result.latencyMs,
-          message: `فشل إرسال الطرد إلى ${label}: ${result.json?.Message || result.text.slice(0, 160)}`
+          message: `فشل إرسال الطرد إلى ${label}: ${zrErr || `HTTP ${result.status}`}`
         });
         return;
       }
 
       if (provider === 'ecotrack') {
-        const wilayaCode = parseInt(String(order.wilayaId || '16'), 10) || 16;
+        const ecoHeaders = {
+          Authorization: `Bearer ${apiToken}`,
+          Accept: 'application/json'
+        };
+        const communesJson = await cachedCourierGet(
+          `ecotrack:${baseUrl}:communes:${toWilayaCode}`,
+          `${baseUrl}/get/communes?wilaya_id=${toWilayaCode}`,
+          ecoHeaders
+        );
+        const rawCommunesList: any[] = Array.isArray(communesJson)
+          ? communesJson
+          : Array.isArray(communesJson?.data)
+          ? communesJson.data
+          : communesJson && typeof communesJson === 'object'
+          ? Object.values(communesJson).filter(v => v && typeof v === 'object')
+          : [];
+        const ecoCandidates = rawCommunesList
+          .map(c => ({
+            name: String(c?.nom || c?.commune || c?.name || '').trim(),
+            arName: String(c?.ar_name || c?.nom_ar || '').trim()
+          }))
+          .filter(c => Boolean(c.name));
+
+        const desiredCommune = String(order.commune || toWilayaMeta.nameFr).trim();
+        let resolvedCommune = desiredCommune;
+        if (ecoCandidates.length > 0) {
+          resolvedCommune = pickBestCandidateName(
+            desiredCommune,
+            ecoCandidates,
+            toWilayaMeta.nameFr
+          );
+        } else if (hasArabicChars(desiredCommune)) {
+          resolvedCommune = toWilayaMeta.nameFr;
+        }
+
         const payload = {
           reference: order.orderNumber,
           nom_client: order.customerName,
           telephone: cleanPhone,
-          adresse: order.address || `${order.wilayaName} - ${order.commune || ''}`,
-          code_wilaya: wilayaCode,
-          commune: order.commune || order.wilayaName,
+          adresse: order.address || `${toWilayaMeta.nameFr} - ${resolvedCommune}`,
+          code_wilaya: toWilayaCode,
+          commune: resolvedCommune,
           montant: Math.round(Number(order.total || 0)),
           type: 1,
           stop_desk: isStopDesk ? 1 : 0,
@@ -791,7 +1186,7 @@ export function createApiApp(): Express {
           });
           return;
         }
-        const errDetail = result.json?.message || result.json?.error || result.text.slice(0, 180);
+        const errDetail = extractCourierApiError(result.json, result.text);
         res.json({
           ok: false,
           latencyMs: result.latencyMs,
@@ -801,13 +1196,12 @@ export function createApiApp(): Express {
       }
 
       if (provider === 'maystro') {
-        const wilayaIdNum = parseInt(String(order.wilayaId || '16'), 10) || 16;
         const payload = {
           external_id: order.orderNumber,
           customer_name: order.customerName,
           customer_phone: cleanPhone,
-          wilaya: wilayaIdNum,
-          commune_name: order.commune || order.wilayaName,
+          wilaya: toWilayaCode,
+          commune_name: order.commune || toWilayaMeta.nameFr,
           destination_text: order.address || `${order.wilayaName} - ${order.commune || ''}`,
           delivery_type: isStopDesk ? 2 : 1,
           total_price: Math.round(Number(order.total || 0)),
@@ -819,7 +1213,8 @@ export function createApiApp(): Express {
           method: 'POST',
           headers: {
             Authorization: `Token ${apiToken}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
           },
           body: JSON.stringify(payload)
         });
@@ -836,10 +1231,11 @@ export function createApiApp(): Express {
           });
           return;
         }
+        const errDetail = extractCourierApiError(result.json, result.text);
         res.json({
           ok: false,
           latencyMs: result.latencyMs,
-          message: `فشل إرسال الطرد إلى ${label}: ${JSON.stringify(result.json || result.text).slice(0, 180)}`
+          message: `فشل إرسال الطرد إلى ${label}: ${errDetail || `HTTP ${result.status}`}`
         });
       }
     } catch (err: any) {

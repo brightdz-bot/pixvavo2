@@ -92,6 +92,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [apiConfig, setApiConfig] = useState<StoreApiConfig | null>(null);
   const [needsSqlMigration, setNeedsSqlMigration] = useState(false);
   const [courierBusyOrderId, setCourierBusyOrderId] = useState<string | null>(null);
+  const [lastCourierError, setLastCourierError] = useState<{
+    orderNumber: string;
+    message: string;
+    timestamp: string;
+  } | null>(null);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSyncingSheet, setIsSyncingSheet] = useState(false);
@@ -357,7 +362,6 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     options?: { skipAutoCourier?: boolean }
   ) => {
     if (!store?.id) return;
-    const prevOrder = orders.find(o => o.id === orderId);
     const res = await storage.updateOrderStatus(orderId, newStatus, note, trackingCode, courierMeta);
     if (res.success) {
       const [updatedOrders, updatedPages] = await Promise.all([
@@ -422,15 +426,14 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         setApiConfig(updatedCfg);
       }
 
-      // Optional auto-create parcel when confirming a new order
+      // Optional auto-create parcel when confirming or shipping an order without tracking yet
       if (
         !options?.skipAutoCourier &&
-        newStatus === 'confirmed' &&
-        prevOrder?.status === 'new' &&
+        (newStatus === 'confirmed' || newStatus === 'shipping') &&
         updatedOrder &&
         apiConfig?.courierProvider &&
         apiConfig.courierProvider !== 'none' &&
-        apiConfig.courierAutoSendOnConfirm &&
+        apiConfig.courierAutoSendOnConfirm !== false &&
         !updatedOrder.trackingCode
       ) {
         await handleSendOrderToCourier(updatedOrder);
@@ -442,7 +445,13 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
   const handleSendOrderToCourier = async (order: Order) => {
     if (!store?.id || !apiConfig || apiConfig.courierProvider === 'none') {
-      showToast('يرجى تفعيل شركة التوصيل في "إعدادات الـ API" أولاً');
+      const msg = 'يرجى اختيار شركة التوصيل وحفظ المفتاح في "إعدادات الـ API" أولاً';
+      setLastCourierError({
+        orderNumber: order.orderNumber,
+        message: msg,
+        timestamp: new Date().toISOString()
+      });
+      showToast(msg);
       return;
     }
     setCourierBusyOrderId(order.id);
@@ -460,6 +469,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     setApiConfig(nextCfg);
 
     if (res.ok && res.trackingCode) {
+      setLastCourierError(null);
       const nextSt: OrderStatus = order.status === 'new' ? 'confirmed' : order.status;
       await handleUpdateOrderStatus(
         order.id,
@@ -471,7 +481,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       );
       showToast(res.message);
     } else {
-      showToast('تعذر الإرسال: ' + res.message);
+      setLastCourierError({
+        orderNumber: order.orderNumber,
+        message: res.message,
+        timestamp: new Date().toISOString()
+      });
+      showToast('تعذر الإرسال إلى شركة التوصيل: ' + res.message);
     }
     setCourierBusyOrderId(null);
   };
@@ -632,6 +647,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const handleBulkUpdateStatus = async (orderIds: string[], newStatus: OrderStatus, note?: string) => {
     if (!store?.id || orderIds.length === 0) return;
     let successCount = 0;
+    const updatedOrderIds: string[] = [];
     for (const orderId of orderIds) {
       const target = orders.find(o => o.id === orderId);
       if (!target || target.status === newStatus) continue;
@@ -642,6 +658,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       );
       if (res.success) {
         successCount += 1;
+        updatedOrderIds.push(orderId);
         recentSitePushRef.current[target.orderNumber.toUpperCase()] = Date.now();
         const lp = landingPages.find(p => p.id === target.landingPageId);
         const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
@@ -660,6 +677,20 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       setOrders(updatedOrders);
       setLandingPages(updatedPages);
       showToast(`تم تحديث حالة ${successCount} طلبات إلى "${ORDER_STAGE_LABELS[newStatus]}"`);
+
+      if (
+        (newStatus === 'confirmed' || newStatus === 'shipping') &&
+        apiConfig?.courierProvider &&
+        apiConfig.courierProvider !== 'none' &&
+        apiConfig.courierAutoSendOnConfirm !== false
+      ) {
+        const eligibleForCourier = updatedOrders.filter(
+          o => updatedOrderIds.includes(o.id) && !o.trackingCode
+        );
+        if (eligibleForCourier.length > 0) {
+          await handleBulkSendToCourier(eligibleForCourier);
+        }
+      }
     } else {
       showToast('لم يتم تعديل أي طلب (الحالة مطابقة بالفعل)');
     }
@@ -671,7 +702,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       return;
     }
     const eligible = ordersToSend.filter(
-      o => !o.trackingCode && (o.status === 'new' || o.status === 'confirmed')
+      o => !o.trackingCode && (o.status === 'new' || o.status === 'confirmed' || o.status === 'shipping')
     );
     if (eligible.length === 0) {
       showToast('الطلبات المحددة مرسلة بالفعل أو غير مؤهلة للشحن');
@@ -680,6 +711,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
     let sent = 0;
     let failed = 0;
+    let lastFailedErr: { orderNumber: string; message: string; timestamp: string } | null = null;
     for (const ord of eligible) {
       setCourierBusyOrderId(ord.id);
       const res = await createCourierParcel(ord, apiConfig);
@@ -716,13 +748,28 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           });
         } else {
           failed += 1;
+          lastFailedErr = {
+            orderNumber: ord.orderNumber,
+            message: stRes.error || 'تعذر حفظ رمز التتبع بعد الإنشاء',
+            timestamp: new Date().toISOString()
+          };
         }
       } else {
         failed += 1;
+        lastFailedErr = {
+          orderNumber: ord.orderNumber,
+          message: res.message,
+          timestamp: new Date().toISOString()
+        };
       }
     }
 
     setCourierBusyOrderId(null);
+    if (lastFailedErr) {
+      setLastCourierError(lastFailedErr);
+    } else if (sent > 0) {
+      setLastCourierError(null);
+    }
     const [updatedOrders, updatedPages] = await Promise.all([
       storage.getOrders(store.id),
       storage.getLandingPages(store.id)
@@ -732,7 +779,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     showToast(
       failed === 0
         ? `تم إرسال ${sent} طرود إلى ${COURIER_PROVIDER_INFO[apiConfig.courierProvider].name} بنجاح`
-        : `تم إرسال ${sent} طرود بنجاح، وتعذر إرسال ${failed} طلبات (راجع سجل التشخيص)`
+        : `تم إرسال ${sent} طرود بنجاح، وتعذر إرسال ${failed} طلبات: ${lastFailedErr?.message || ''}`
     );
   };
 
@@ -1165,6 +1212,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   landingPages={landingPages}
                   apiConfig={apiConfig}
                   courierBusyOrderId={courierBusyOrderId}
+                  lastCourierError={lastCourierError}
+                  onDismissCourierError={() => setLastCourierError(null)}
+                  onGoToApiConfig={() => setActiveTab('api')}
                   onUpdateStatus={handleUpdateOrderStatus}
                   onBulkUpdateStatus={handleBulkUpdateStatus}
                   onBulkSendToCourier={handleBulkSendToCourier}

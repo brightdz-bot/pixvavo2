@@ -265,6 +265,10 @@ export function formatDZD(amount: number): string {
   return new Intl.NumberFormat('fr-DZ').format(Math.round(amount)) + ' دج';
 }
 
+export function formatPlainDZD(amount: number): string {
+  return `${Math.round(amount || 0)} دج`;
+}
+
 export const LANDING_THEME_PRESETS: LandingPageTheme[] = [
   {
     presetId: 'wood-luxury',

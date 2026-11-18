@@ -8,7 +8,7 @@ import {
   Store,
   StoreApiConfig
 } from '../../types';
-import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
+import { ALGERIA_WILAYAS, formatDZD, formatPlainDZD } from '../../data/wilayas';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import {
   COURIER_PROVIDER_INFO,
@@ -54,6 +54,13 @@ interface Props {
   landingPages?: LandingPage[];
   apiConfig?: StoreApiConfig | null;
   courierBusyOrderId?: string | null;
+  lastCourierError?: {
+    orderNumber: string;
+    message: string;
+    timestamp: string;
+  } | null;
+  onDismissCourierError?: () => void;
+  onGoToApiConfig?: () => void;
   onUpdateStatus: (
     orderId: string,
     newStatus: OrderStatus,
@@ -113,6 +120,9 @@ export const OrdersTab: React.FC<Props> = ({
   landingPages = [],
   apiConfig,
   courierBusyOrderId,
+  lastCourierError,
+  onDismissCourierError,
+  onGoToApiConfig,
   onUpdateStatus,
   onBulkUpdateStatus,
   onBulkSendToCourier,
@@ -506,12 +516,12 @@ export const OrdersTab: React.FC<Props> = ({
         `طلبيتك من ${store.name} خرجت مع شركة التوصيل وفي الطريق إليك.\n` +
         `المنتج: ${bundle}\n` +
         (code ? `رمز التتبع: ${code}\n` : '') +
-        `حضّر المبلغ ${formatDZD(order.total)} وخلّي هاتفك مفتوحاً.\n` +
+        `حضّر المبلغ ${formatPlainDZD(order.total)} وخلّي هاتفك مفتوحاً.\n` +
         `شكراً لثقتك.`;
     } else {
       msg =
         `السلام عليكم ${order.customerName}،\n` +
-        `بخصوص طلبيتك رقم ${order.orderNumber} من متجر ${store.name} (${bundle})، المبلغ ${formatDZD(order.total)}. نؤكد معك التوصيل إلى ${order.wilayaName}${order.commune ? ' - ' + order.commune : ''}.`;
+        `بخصوص طلبيتك رقم ${order.orderNumber} من متجر ${store.name} (${bundle})، المبلغ ${formatPlainDZD(order.total)}. نؤكد معك التوصيل إلى ${order.wilayaName}${order.commune ? ' - ' + order.commune : ''}.`;
     }
     return `https://wa.me/${customerWa}?text=${encodeURIComponent(msg)}`;
   };
@@ -708,6 +718,42 @@ export const OrdersTab: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* Persistent Courier Error Diagnostic Banner */}
+      {lastCourierError && (
+        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-start gap-2.5 text-xs">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <div className="font-extrabold">
+                تعذر إرسال الطلب #{lastCourierError.orderNumber} إلى شركة التوصيل:
+              </div>
+              <div className="font-mono text-[11px] leading-relaxed">{lastCourierError.message}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {onGoToApiConfig && (
+              <button
+                type="button"
+                onClick={onGoToApiConfig}
+                className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
+              >
+                فحص إعدادات الـ API
+              </button>
+            )}
+            {onDismissCourierError && (
+              <button
+                type="button"
+                onClick={onDismissCourierError}
+                className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/50 cursor-pointer"
+                title="إغلاق التنبيه"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Status Filter Tabs (Including Fraud / Duplicate Alert Filter) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -1403,7 +1449,9 @@ export const OrdersTab: React.FC<Props> = ({
                 {apiConfig?.courierProvider && apiConfig.courierProvider !== 'none' && (
                   <div className="flex flex-wrap items-center gap-2">
                     {!selectedOrder.trackingCode &&
-                      (selectedOrder.status === 'new' || selectedOrder.status === 'confirmed') &&
+                      (selectedOrder.status === 'new' ||
+                        selectedOrder.status === 'confirmed' ||
+                        selectedOrder.status === 'shipping') &&
                       onSendOrderToCourier && (
                         <button
                           type="button"

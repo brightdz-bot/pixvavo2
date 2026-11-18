@@ -137,6 +137,7 @@ export const LandingPageView: React.FC<Props> = ({
     whatsappUrl: string;
     tracked: TrackedOrderState;
   } | null>(null);
+  const [lastOrderWhatsappUrl, setLastOrderWhatsappUrl] = useState<string>('');
 
   const [newOrderModalOpen, setNewOrderModalOpen] = useState(false);
   const [orderPromptModalOpen, setOrderPromptModalOpen] = useState(false);
@@ -184,6 +185,7 @@ export const LandingPageView: React.FC<Props> = ({
     setPromoError(null);
     setIsTrackingMode(false);
     setSuccessModalData(null);
+    setLastOrderWhatsappUrl('');
     setFormError(null);
     setIsEditingTrackedOrder(false);
     setTrackedEditError(null);
@@ -395,8 +397,40 @@ export const LandingPageView: React.FC<Props> = ({
     if (!el) return;
     const offset = 88;
     const y = el.getBoundingClientRect().top + window.scrollY - offset;
-    window.scrollTo({ top: y, behavior: 'smooth' });
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
   };
+
+  const scrollToElementWhenReady = (id: string) => {
+    if (typeof window === 'undefined') return;
+    const startedAt = Date.now();
+    const attempt = () => {
+      const el = document.getElementById(id);
+      if (el) {
+        const offset = 88;
+        const y = el.getBoundingClientRect().top + window.scrollY - offset;
+        window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+        window.setTimeout(() => {
+          const settled = document.getElementById(id);
+          if (!settled) return;
+          const nextY = settled.getBoundingClientRect().top + window.scrollY - offset;
+          if (Math.abs(window.scrollY - nextY) > 24) {
+            window.scrollTo({ top: Math.max(0, nextY), behavior: 'smooth' });
+          }
+        }, 260);
+        return;
+      }
+      if (Date.now() - startedAt < 1000) {
+        window.requestAnimationFrame(attempt);
+      }
+    };
+    window.requestAnimationFrame(attempt);
+  };
+
+  useEffect(() => {
+    if (isTrackingMode && trackedOrder?.orderNumber) {
+      scrollToElementWhenReady('tracking-container');
+    }
+  }, [isTrackingMode, trackedOrder?.orderNumber]);
 
   const handleHeaderOrderClick = () => {
     if (isTrackingMode) {
@@ -409,12 +443,13 @@ export const LandingPageView: React.FC<Props> = ({
   const resetToNewOrder = (targetSection: 'form-container' | 'offers-section' = 'form-container') => {
     setIsTrackingMode(false);
     setTrackedOrder(null);
+    setLastOrderWhatsappUrl('');
     setNewOrderModalOpen(false);
     setOrderPromptModalOpen(false);
     setFullName('');
     setPhone('');
     setFormError(null);
-    setTimeout(() => scrollToElement(targetSection), 60);
+    scrollToElementWhenReady(targetSection);
   };
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
@@ -520,23 +555,27 @@ export const LandingPageView: React.FC<Props> = ({
       waTemplates.confirm
     );
 
-    setSuccessModalData({
+    lastSheetSnapshotRef.current = null;
+    setDbEditedInSession(false);
+    setIsEditingTrackedOrder(false);
+    setTrackedEditError(null);
+    setTrackedEditSuccess(null);
+    setSuccessModalData(null);
+    setLastOrderWhatsappUrl(whatsappUrl);
+    setTrackedOrder({
       orderNumber: orderNum,
-      bundleDetails,
-      whatsappUrl,
-      tracked: {
-        orderNumber: orderNum,
-        landingPageId: page.id,
-        customerFirstName: fullName.trim().split(' ')[0],
-        wilayaId: selectedWilaya.id,
-        wilayaName: selectedWilaya.nameAr,
-        commune: selectedCommune,
-        deliveryType,
-        bundleLabel: bundleDetails,
-        total: finalTotalDisplay,
-        status: 'new'
-      }
+      landingPageId: page.id,
+      customerFirstName: fullName.trim().split(' ')[0],
+      wilayaId: selectedWilaya.id,
+      wilayaName: selectedWilaya.nameAr,
+      commune: selectedCommune,
+      deliveryType,
+      bundleLabel: bundleDetails,
+      total: finalTotalDisplay,
+      status: 'new'
     });
+    setIsTrackingMode(true);
+    scrollToElementWhenReady('tracking-container');
   };
 
   const handleSearchOrder = async () => {
@@ -611,7 +650,7 @@ export const LandingPageView: React.FC<Props> = ({
       trackingCode: sheetData?.trackingCode || dbData?.trackingCode
     });
     setIsTrackingMode(true);
-    setTimeout(() => scrollToElement('tracking-container'), 80);
+    scrollToElementWhenReady('tracking-container');
   };
 
   const handleProceedToTrackingFromSuccess = () => {
@@ -621,10 +660,11 @@ export const LandingPageView: React.FC<Props> = ({
     setIsEditingTrackedOrder(false);
     setTrackedEditError(null);
     setTrackedEditSuccess(null);
+    setLastOrderWhatsappUrl(successModalData.whatsappUrl);
     setTrackedOrder(successModalData.tracked);
     setSuccessModalData(null);
     setIsTrackingMode(true);
-    setTimeout(() => scrollToElement('tracking-container'), 80);
+    scrollToElementWhenReady('tracking-container');
   };
 
   // Poll order status periodically while in tracking mode so DB or Google Sheet updates show live
@@ -1235,15 +1275,15 @@ export const LandingPageView: React.FC<Props> = ({
           borderColor: theme.borderColor
         }}
       >
-        <div className="max-w-3xl mx-auto px-4">
+        <div className="max-w-3xl mx-auto px-4 min-h-[540px]">
           <AnimatePresence mode="wait" initial={false}>
           {!isTrackingMode ? (
             <motion.div
               key="checkout-mode"
               initial={{ opacity: 0, y: 12, filter: 'blur(4px)' }}
               animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
-              transition={{ duration: 0.24, ease: EASE_OUT_EXPO }}
+              exit={{ opacity: 0, y: -8, filter: 'blur(2px)' }}
+              transition={{ duration: 0.14, ease: EASE_OUT_EXPO }}
             >
               {/* Inline Order Search Box */}
               <div
@@ -1693,6 +1733,12 @@ export const LandingPageView: React.FC<Props> = ({
                   >
                     <CheckCircle2 className="w-7 h-7" />
                   </motion.div>
+                  {trackedOrder.status === 'new' && (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-extrabold">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>تم تسجيل طلبك بنجاح!</span>
+                    </div>
+                  )}
                   <h2 className="text-2xl font-black">تفاصيل وتتبع طلبك</h2>
                   <p className={`text-xs ${mutedTextClass}`}>
                     شكراً لثقتك بـ {store.name}. يمكنك متابعة حالة طلبك أدناه
@@ -1706,11 +1752,26 @@ export const LandingPageView: React.FC<Props> = ({
                     borderColor: theme.borderColor
                   }}
                 >
-                  <div className="flex justify-between border-b pb-2" style={{ borderColor: theme.borderColor }}>
+                  <div className="flex justify-between items-center border-b pb-2" style={{ borderColor: theme.borderColor }}>
                     <span className={mutedTextClass}>رقم الطلب:</span>
-                    <span className="font-bold font-mono" style={{ color: theme.primaryColor }}>
-                      {trackedOrder.orderNumber}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold font-mono" style={{ color: theme.primaryColor }}>
+                        {trackedOrder.orderNumber}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopyOrderNumber}
+                        className="px-2 py-0.5 rounded-lg border text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        style={{
+                          backgroundColor: theme.surfaceColor,
+                          borderColor: theme.borderColor,
+                          color: theme.primaryColor
+                        }}
+                      >
+                        {copiedOrderId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedOrderId ? 'تم النسخ' : 'نسخ'}</span>
+                      </button>
+                    </div>
                   </div>
                   <div className="flex justify-between items-center gap-2 border-b pb-2" style={{ borderColor: theme.borderColor }}>
                     <span className={mutedTextClass}>المنتج / العرض:</span>
@@ -2017,6 +2078,38 @@ export const LandingPageView: React.FC<Props> = ({
                 )}
 
                 <div className="pt-2 space-y-2.5">
+                  {trackedOrder.status === 'new' && effectiveWhatsapp && (
+                    <motion.a
+                      whileHover={{ y: -1.5 }}
+                      whileTap={{ scale: 0.985 }}
+                      transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+                      href={
+                        lastOrderWhatsappUrl ||
+                        buildOrderConfirmationWhatsAppUrl(
+                          effectiveWhatsapp,
+                          store.name,
+                          {
+                            orderNumber: trackedOrder.orderNumber,
+                            customerName: trackedOrder.customerFirstName,
+                            bundleDetails: trackedOrder.bundleLabel,
+                            deliveryType: trackedOrder.deliveryType || 'home',
+                            shippingCost: 0,
+                            total: trackedOrder.total,
+                            wilayaName: trackedOrder.wilayaName,
+                            commune: trackedOrder.commune || ''
+                          },
+                          waTemplates.confirm
+                        )
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-3.5 bg-[#25D366] hover:bg-emerald-600 text-white font-extrabold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-md"
+                    >
+                      <MessageCircle className="w-5 h-5" />
+                      <span>تأكيد الطلب الآن عبر واتساب</span>
+                    </motion.a>
+                  )}
+
                   <motion.a
                     whileHover={{ y: -1.5 }}
                     whileTap={{ scale: 0.985 }}
@@ -2036,7 +2129,20 @@ export const LandingPageView: React.FC<Props> = ({
                     )}
                     target="_blank"
                     rel="noreferrer"
-                    className="w-full py-3 bg-[#25D366] hover:bg-emerald-600 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-md"
+                    className={`w-full py-3 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm ${
+                      trackedOrder.status === 'new'
+                        ? 'border hover:shadow-xs'
+                        : 'bg-[#25D366] hover:bg-emerald-600 text-white shadow-md'
+                    }`}
+                    style={
+                      trackedOrder.status === 'new'
+                        ? {
+                            backgroundColor: theme.surfaceColor,
+                            borderColor: theme.borderColor,
+                            color: theme.textColor
+                          }
+                        : undefined
+                    }
                   >
                     <MessageCircle className="w-4 h-4" />
                     <span>تواصل معنا عبر واتساب لمتابعة الطلب</span>
