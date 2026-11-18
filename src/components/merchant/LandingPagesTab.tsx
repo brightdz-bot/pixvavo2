@@ -119,7 +119,8 @@ export const LandingPagesTab: React.FC<Props> = ({
 
   const handleCopyLink = (slug: string) => {
     try {
-      const url = new URL(window.location.href);
+      const url = new URL(window.location.origin);
+      url.pathname = '/';
       url.searchParams.set('p', slug);
       navigator.clipboard?.writeText(url.toString());
       setCopiedSlug(slug);

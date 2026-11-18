@@ -6,6 +6,7 @@ import { useAuth } from '../../services/authContext';
 import { fetchOrderFromGoogleSheet } from '../../services/integrations';
 import { formatDZD } from '../../data/wilayas';
 import { LandingPageView } from './LandingPageView';
+import { applyBrowserBranding } from '../../services/branding';
 import {
   Search,
   ShoppingBag,
@@ -45,6 +46,8 @@ export const PublicStorefront: React.FC<Props> = ({
   const [trackedResult, setTrackedResult] = useState<any | null>(null);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [isTrackingLoading, setIsTrackingLoading] = useState(false);
+  const [faviconUrl, setFaviconUrl] = useState('');
+  const [logoImgError, setLogoImgError] = useState(false);
 
   useEffect(() => {
     if (initialSlug) setActivePageSlug(initialSlug);
@@ -75,6 +78,19 @@ export const PublicStorefront: React.FC<Props> = ({
           return;
         }
         setStore(s);
+        setLogoImgError(false);
+        const localCfg = storage.getLocalStoreApiConfig(s.id);
+        if (mounted && localCfg?.faviconUrl) {
+          setFaviconUrl(localCfg.faviconUrl);
+        }
+        fetch(`/api/store/public-settings?storeId=${encodeURIComponent(s.id)}`)
+          .then(r => (r.ok ? r.json() : null))
+          .then(data => {
+            if (mounted && data?.ok && data.faviconUrl) {
+              setFaviconUrl(data.faviconUrl);
+            }
+          })
+          .catch(() => {});
         const lps = await storage.getLandingPages(s.id);
         if (mounted) {
           setPages(lps.filter(p => p.isPublished));
@@ -91,6 +107,17 @@ export const PublicStorefront: React.FC<Props> = ({
       mounted = false;
     };
   }, [subdomain, isSupabaseMode]);
+
+  useEffect(() => {
+    if (!store) return;
+    const activeLp = activePageSlug
+      ? pages.find(p => p.slug.toLowerCase() === activePageSlug.toLowerCase())
+      : null;
+    applyBrowserBranding({
+      title: activeLp ? `${activeLp.title} | ${store.name}` : store.name,
+      iconUrl: faviconUrl || store.logoUrl
+    });
+  }, [store, faviconUrl, activePageSlug, pages]);
 
   const openLandingPage = (slug: string) => {
     setActivePageSlug(slug);
@@ -250,10 +277,20 @@ export const PublicStorefront: React.FC<Props> = ({
               <div className="max-w-6xl mx-auto px-4 py-3.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black shadow-sm shrink-0"
+                    className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center text-white font-black shadow-sm shrink-0"
                     style={{ backgroundColor: store.brandColor || '#754b2d' }}
                   >
-                    {store.name.slice(0, 1)}
+                    {store.logoUrl && !logoImgError ? (
+                      <img
+                        src={store.logoUrl}
+                        alt={store.name}
+                        referrerPolicy="no-referrer"
+                        onError={() => setLogoImgError(true)}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      store.name.slice(0, 1)
+                    )}
                   </div>
                   <div className="truncate">
                     <h1 className="font-black text-lg sm:text-xl leading-none truncate">{store.name}</h1>

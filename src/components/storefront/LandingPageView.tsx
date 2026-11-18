@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useScroll, useSpring } from 'motion/react';
 import { Store, LandingPage, DeliveryType, OrderStatus } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import { storage } from '../../services/storage';
+import { applyBrowserBranding } from '../../services/branding';
 import {
   trackMetaPixelPage,
   trackMetaPixelPurchase,
@@ -193,7 +194,7 @@ export const LandingPageView: React.FC<Props> = ({
     });
   }, [page.id]);
 
-  // Fetch non-secret custom WhatsApp templates for store
+  // Fetch non-secret custom WhatsApp templates & browser favicon for store
   useEffect(() => {
     let active = true;
     const localCfg = storage.getLocalStoreApiConfig(store.id);
@@ -203,6 +204,10 @@ export const LandingPageView: React.FC<Props> = ({
         shipping: localCfg.whatsappShippingTemplate || ''
       });
     }
+    applyBrowserBranding({
+      title: `${page.title} | ${store.name}`,
+      iconUrl: localCfg?.faviconUrl || store.logoUrl
+    });
     fetch(`/api/store/public-settings?storeId=${encodeURIComponent(store.id)}`)
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
@@ -211,12 +216,18 @@ export const LandingPageView: React.FC<Props> = ({
           confirm: data.whatsappConfirmTemplate || prev.confirm,
           shipping: data.whatsappShippingTemplate || prev.shipping
         }));
+        if (data.faviconUrl || store.logoUrl) {
+          applyBrowserBranding({
+            title: `${page.title} | ${store.name}`,
+            iconUrl: data.faviconUrl || store.logoUrl
+          });
+        }
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, [store.id]);
+  }, [store.id, store.name, store.logoUrl, page.title]);
 
   // Sync commune list when wilaya changes
   const selectedWilaya = useMemo(
@@ -846,10 +857,19 @@ export const LandingPageView: React.FC<Props> = ({
               </motion.button>
             )}
             <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
+              className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
               style={{ backgroundColor: theme.primaryColor }}
             >
-              {store.name.slice(0, 1)}
+              {store.logoUrl ? (
+                <img
+                  src={store.logoUrl}
+                  alt={store.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                store.name.slice(0, 1)
+              )}
             </div>
             <div className="flex flex-col truncate">
               <span className="font-black text-lg sm:text-xl tracking-tight leading-none truncate">

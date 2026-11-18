@@ -1559,6 +1559,7 @@ class StorageService {
       promoCoupons: [],
       whatsappConfirmTemplate: '',
       whatsappShippingTemplate: '',
+      faviconUrl: '',
       diagnosticLogs: []
     };
   }

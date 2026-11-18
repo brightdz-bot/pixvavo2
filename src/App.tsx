@@ -18,31 +18,14 @@ function getInitialSlugFromUrl(): string | null {
   }
 }
 
-function isStorefrontRouteFromUrl(): boolean {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('p')) return true;
-    if (params.get('shop') === '1' || params.get('view') === 'store') return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 function isAdminRouteFromUrl(): boolean {
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('admin') === '1' || params.get('admin') === 'true') return true;
-    return window.location.pathname.replace(/\/+$/, '').endsWith('/admin');
-  } catch {
-    return false;
-  }
-}
-
-function isPreviewDevHost(): boolean {
-  try {
-    const host = window.location.hostname.toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
+    if (params.get('banana') === '1' || params.get('banana') === 'true') return true;
+    const pathname = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    if (pathname === '/banana' || pathname.startsWith('/banana/')) return true;
+    const hash = window.location.hash.replace(/\/+$/, '').toLowerCase();
+    return hash === '#/banana' || hash.startsWith('#/banana/');
   } catch {
     return false;
   }
@@ -50,8 +33,7 @@ function isPreviewDevHost(): boolean {
 
 function resolveInitialView(): 'merchant' | 'storefront' {
   if (isAdminRouteFromUrl()) return 'merchant';
-  if (isStorefrontRouteFromUrl()) return 'storefront';
-  return isPreviewDevHost() ? 'merchant' : 'storefront';
+  return 'storefront';
 }
 
 function AppContent() {
@@ -59,6 +41,20 @@ function AppContent() {
   const [initialSlug, setInitialSlug] = useState<string | null>(() => getInitialSlugFromUrl());
   const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => resolveInitialView());
   const hasInitializedRef = useRef(false);
+
+  useEffect(() => {
+    // Normalize legacy /admin path to clean root storefront /
+    try {
+      const pathname = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+      if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+        const url = new URL(window.location.href);
+        url.pathname = '/';
+        window.history.replaceState({}, '', url.toString());
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (!isLoading && !hasInitializedRef.current) {
@@ -100,13 +96,14 @@ function AppContent() {
     setInitialSlug(slug || null);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.delete('admin');
+      url.searchParams.delete('banana');
+      url.searchParams.delete('shop');
+      url.searchParams.delete('view');
+      url.pathname = '/';
       if (slug) {
-        url.searchParams.delete('shop');
         url.searchParams.set('p', slug);
       } else {
         url.searchParams.delete('p');
-        url.searchParams.set('shop', '1');
       }
       window.history.pushState({}, '', url.toString());
     } catch {
@@ -122,6 +119,21 @@ function AppContent() {
         <RoleSwitcherBanner
           currentView={currentView}
           setCurrentView={view => {
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('banana');
+              url.searchParams.delete('shop');
+              url.searchParams.delete('view');
+              if (view === 'merchant') {
+                url.searchParams.delete('p');
+                url.pathname = '/banana';
+              } else {
+                url.pathname = '/';
+              }
+              window.history.pushState({}, '', url.toString());
+            } catch {
+              // ignore
+            }
             if (view === 'storefront') {
               setInitialSlug(null);
             }

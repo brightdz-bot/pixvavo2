@@ -10,6 +10,7 @@ import { ApiConfigTab } from './ApiConfigTab';
 import { SettingsTab } from './SettingsTab';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { LoginModal } from '../visitor/LoginModal';
+import { applyBrowserBranding } from '../../services/branding';
 import {
   ORDER_STAGE_LABELS,
   updateOrderInGoogleSheet,
@@ -282,6 +283,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       setOrders(loadedOrders);
       setApiConfig(apiRes.config);
       setNeedsSqlMigration(Boolean(apiRes.needsSqlMigration));
+      applyBrowserBranding({
+        title: `${store.name} | لوحة التحكم`,
+        iconUrl: apiRes.config.faviconUrl || store.logoUrl
+      });
 
       // Keep server runtime cache warm for storefront CAPI / TikTok / auto-WhatsApp
       void fetch('/api/integrations/config', {
@@ -760,7 +765,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     updated: Store,
     apiExtras?: Pick<
       StoreApiConfig,
-      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
     >
   ) => {
     const res = await storage.saveStore(updated);
@@ -775,6 +780,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       await storage.saveStoreApiConfig(syncedCfg);
       setApiConfig(syncedCfg);
       await refreshCurrentStore();
+      applyBrowserBranding({
+        title: updated.name,
+        iconUrl: syncedCfg.faviconUrl || updated.logoUrl
+      });
       showToast('تم حفظ إعدادات المتجر بنجاح');
     } else {
       showToast('خطأ: ' + (res.error || 'تعذر حفظ الإعدادات'));
@@ -785,7 +794,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     patch: Partial<
       Pick<
         StoreApiConfig,
-        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
       >
     >,
     successMsg = 'تم التحديث بنجاح'
@@ -959,10 +968,19 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         <div className="space-y-6">
           <div className="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
             <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold shadow-md shrink-0"
+              className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center text-white font-bold shadow-md shrink-0"
               style={{ backgroundColor: store.brandColor || '#754b2d' }}
             >
-              {store.name.slice(0, 1)}
+              {store.logoUrl ? (
+                <img
+                  src={store.logoUrl}
+                  alt={store.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                store.name.slice(0, 1)
+              )}
             </div>
             <div className="truncate">
               <h2 className="font-bold text-sm truncate">{store.name}</h2>

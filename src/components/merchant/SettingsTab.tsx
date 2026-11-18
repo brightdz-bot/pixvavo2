@@ -6,6 +6,7 @@ import {
   DEFAULT_WHATSAPP_CONFIRM_TEMPLATE,
   DEFAULT_WHATSAPP_SHIPPING_TEMPLATE
 } from '../../services/integrations';
+import { resizeImageToDataUrl, applyBrowserBranding } from '../../services/branding';
 import {
   Palette,
   Truck,
@@ -23,7 +24,10 @@ import {
   Trash2,
   MessageSquareText,
   RotateCcw,
-  Power
+  Power,
+  Image as ImageIcon,
+  Upload,
+  Globe
 } from 'lucide-react';
 
 interface Props {
@@ -33,14 +37,14 @@ interface Props {
     updatedStore: Store,
     apiExtras?: Pick<
       StoreApiConfig,
-      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
     >
   ) => void;
   onSaveStoreExtras?: (
     patch: Partial<
       Pick<
         StoreApiConfig,
-        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
       >
     >,
     successMsg?: string
@@ -81,6 +85,9 @@ export const SettingsTab: React.FC<Props> = ({
   const [announcementText, setAnnouncementText] = useState(
     store.announcementText || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام'
   );
+  const [logoUrl, setLogoUrl] = useState(store.logoUrl || '');
+  const [faviconUrl, setFaviconUrl] = useState(apiConfig?.faviconUrl || store.faviconUrl || '');
+  const [brandingUploadError, setBrandingUploadError] = useState<string | null>(null);
   const [phone, setPhone] = useState(store.phone || '');
   const [defaultWhatsapp, setDefaultWhatsapp] = useState(store.defaultWhatsapp || '');
   const [defaultPixelId, setDefaultPixelId] = useState(store.defaultPixelId || '');
@@ -118,12 +125,44 @@ export const SettingsTab: React.FC<Props> = ({
   const [activeTemplateField, setActiveTemplateField] = useState<'confirm' | 'shipping'>('confirm');
 
   useEffect(() => {
+    setLogoUrl(store.logoUrl || '');
+  }, [store.id, store.logoUrl]);
+
+  useEffect(() => {
     if (apiConfig) {
       setPromoCoupons(apiConfig.promoCoupons || []);
       setWhatsappConfirmTemplate(apiConfig.whatsappConfirmTemplate || '');
       setWhatsappShippingTemplate(apiConfig.whatsappShippingTemplate || '');
+      setFaviconUrl(apiConfig.faviconUrl || '');
     }
   }, [apiConfig?.storeId, apiConfig?.updatedAt]);
+
+  const handleBrandingFileUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'logo' | 'favicon'
+  ) => {
+    setBrandingUploadError(null);
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      setBrandingUploadError('حجم الصورة كبير جداً، يرجى اختيار صورة أقل من 4 ميغابايت.');
+      return;
+    }
+    try {
+      const dataUrl =
+        target === 'favicon'
+          ? await resizeImageToDataUrl(file, 128, true)
+          : await resizeImageToDataUrl(file, 320, false);
+      if (target === 'favicon') {
+        setFaviconUrl(dataUrl);
+      } else {
+        setLogoUrl(dataUrl);
+      }
+    } catch {
+      setBrandingUploadError('تعذر معالجة الصورة، جرب صورة أخرى أو الصق رابطاً مباشراً.');
+    }
+  };
 
   const handleWilayaRateChange = (wilayaId: string, field: 'home' | 'stop', fee: number) => {
     const base = ALGERIA_WILAYAS.find(w => w.id === wilayaId);
@@ -222,11 +261,15 @@ export const SettingsTab: React.FC<Props> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanLogo = logoUrl.trim();
+    const cleanFavicon = faviconUrl.trim();
     const updated: Store = {
       ...store,
       name: name.trim(),
       description: description.trim(),
       announcementText: announcementText.trim(),
+      logoUrl: cleanLogo,
+      faviconUrl: cleanFavicon,
       phone: phone.trim(),
       defaultWhatsapp: defaultWhatsapp.trim(),
       defaultPixelId: defaultPixelId.trim(),
@@ -239,7 +282,12 @@ export const SettingsTab: React.FC<Props> = ({
     onSaveSettings(updated, {
       promoCoupons,
       whatsappConfirmTemplate: whatsappConfirmTemplate.trim(),
-      whatsappShippingTemplate: whatsappShippingTemplate.trim()
+      whatsappShippingTemplate: whatsappShippingTemplate.trim(),
+      faviconUrl: cleanFavicon
+    });
+    applyBrowserBranding({
+      title: name.trim(),
+      iconUrl: cleanFavicon || cleanLogo
     });
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -317,6 +365,142 @@ export const SettingsTab: React.FC<Props> = ({
               onChange={e => setDescription(e.target.value)}
               className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
             />
+          </div>
+
+          {/* Store Header Logo + Google Chrome Tab Favicon */}
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h4 className="text-xs font-extrabold flex items-center gap-1.5 text-slate-800 dark:text-slate-200">
+                <ImageIcon className="w-4 h-4 text-emerald-600" />
+                <span>صورة المتجر (أعلى اليمين) وأيقونة تبويب Google Chrome</span>
+              </h4>
+              {brandingUploadError && (
+                <span className="text-[11px] font-bold text-rose-600">{brandingUploadError}</span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Store Top-Right Logo */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/70 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-100">
+                      صورة المتجر (أعلى اليمين)
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      تظهر في الشريط العلوي لمتجرك وصفحات الهبوط على اليمين بجانب الاسم.
+                    </p>
+                  </div>
+                  <div
+                    className="w-11 h-11 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
+                    style={{ backgroundColor: brandColor || '#754b2d' }}
+                  >
+                    {logoUrl.trim() ? (
+                      <img
+                        src={logoUrl.trim()}
+                        alt="شعار المتجر"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span>{(name || 'B').slice(0, 1)}</span>
+                    )}
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={logoUrl}
+                  onChange={e => setLogoUrl(e.target.value)}
+                  placeholder="https://example.com/store-logo.png"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                />
+
+                <div className="flex items-center gap-2">
+                  <label className="flex-1 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>رفع صورة الشعار من الجهاز</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={e => handleBrandingFileUpload(e, 'logo')}
+                      className="hidden"
+                    />
+                  </label>
+                  {logoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setLogoUrl('')}
+                      title="إزالة صورة المتجر"
+                      className="p-2 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/70 dark:hover:bg-rose-950/40 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Chrome Tab Favicon */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/70 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-100">
+                      صورة تبويب Google Chrome (Favicon)
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      تظهر في أعلى تبويب المتصفح بجانب عنوان المتجر.
+                    </p>
+                  </div>
+                  {/* Mini Chrome tab preview */}
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xs max-w-[140px] shrink-0">
+                    {faviconUrl.trim() || logoUrl.trim() ? (
+                      <img
+                        src={faviconUrl.trim() || logoUrl.trim()}
+                        alt="أيقونة التبويب"
+                        className="w-4 h-4 rounded-sm object-cover shrink-0"
+                      />
+                    ) : (
+                      <Globe className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                    <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                      {name || 'Bright DZ'}
+                    </span>
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={faviconUrl}
+                  onChange={e => setFaviconUrl(e.target.value)}
+                  placeholder="https://example.com/favicon.png"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                />
+
+                <div className="flex items-center gap-2">
+                  <label className="flex-1 py-2 px-3 rounded-lg bg-slate-900 dark:bg-emerald-600 hover:opacity-95 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>رفع أيقونة التبويب من الجهاز</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={e => handleBrandingFileUpload(e, 'favicon')}
+                      className="hidden"
+                    />
+                  </label>
+                  {faviconUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setFaviconUrl('')}
+                      title="إزالة أيقونة التبويب"
+                      className="p-2 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/70 dark:hover:bg-rose-950/40 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 

@@ -171,6 +171,7 @@ export interface Store {
   description?: string;
   announcementText?: string;
   logoUrl?: string;
+  faviconUrl?: string;
   brandColor: string; // Hex e.g. #754b2d
   freeShippingThreshold: number; // DZD (0 = disabled)
   planId: string;
@@ -244,6 +245,7 @@ export interface StoreApiConfig {
   promoCoupons?: PromoCoupon[];
   whatsappConfirmTemplate?: string;
   whatsappShippingTemplate?: string;
+  faviconUrl?: string;
   diagnosticLogs: ApiDiagnosticLog[];
   updatedAt?: string;
 }
