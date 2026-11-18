@@ -210,7 +210,8 @@ async function getOrFetchServerConfig(storeId: string): Promise<ServerStoreApiCo
         method: 'GET',
         headers: {
           apikey: serviceRoleKey,
-          Authorization: `Bearer ${serviceRoleKey}`,
+          // New sb_secret_ keys are not JWTs and must only be sent in `apikey`.
+          ...(serviceRoleKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceRoleKey}` } : {}),
           Accept: 'application/json'
         }
       },
