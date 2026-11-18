@@ -18,6 +18,17 @@ function getInitialSlugFromUrl(): string | null {
   }
 }
 
+function isStorefrontRouteFromUrl(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('p')) return true;
+    if (params.get('shop') === '1' || params.get('view') === 'store') return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function isAdminRouteFromUrl(): boolean {
   try {
     const params = new URLSearchParams(window.location.search);
@@ -29,29 +40,42 @@ function isAdminRouteFromUrl(): boolean {
 }
 
 function AppContent() {
-  const { currentStore, currentUser, isSupabaseMode, isLoading, currentSubdomain } = useAuth();
+  const { currentStore, isSupabaseMode, isLoading, currentSubdomain } = useAuth();
   const [initialSlug, setInitialSlug] = useState<string | null>(() => getInitialSlugFromUrl());
   const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => {
-    if (getInitialSlugFromUrl()) return 'storefront';
     if (isAdminRouteFromUrl()) return 'merchant';
-    return isSupabaseMode ? 'storefront' : 'merchant';
+    if (isStorefrontRouteFromUrl()) return 'storefront';
+    return 'merchant';
   });
   const hasInitializedRef = useRef(false);
 
   useEffect(() => {
     if (!isLoading && !hasInitializedRef.current) {
       hasInitializedRef.current = true;
-      if (getInitialSlugFromUrl()) {
-        setCurrentView('storefront');
-      } else if (isAdminRouteFromUrl()) {
+      if (isAdminRouteFromUrl()) {
         setCurrentView('merchant');
-      } else if (isSupabaseMode) {
-        setCurrentView(currentUser ? 'merchant' : 'storefront');
+      } else if (isStorefrontRouteFromUrl()) {
+        setInitialSlug(getInitialSlugFromUrl());
+        setCurrentView('storefront');
       } else {
         setCurrentView('merchant');
       }
     }
-  }, [isSupabaseMode, currentUser, isLoading]);
+  }, [isLoading]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (isStorefrontRouteFromUrl() && !isAdminRouteFromUrl()) {
+        setInitialSlug(getInitialSlugFromUrl());
+        setCurrentView('storefront');
+      } else {
+        setInitialSlug(null);
+        setCurrentView('merchant');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   if (isLoading && !hasInitializedRef.current) {
     return (
@@ -70,11 +94,13 @@ function AppContent() {
       const url = new URL(window.location.href);
       url.searchParams.delete('admin');
       if (slug) {
+        url.searchParams.delete('shop');
         url.searchParams.set('p', slug);
       } else {
         url.searchParams.delete('p');
+        url.searchParams.set('shop', '1');
       }
-      window.history.replaceState({}, '', url.toString());
+      window.history.pushState({}, '', url.toString());
     } catch {
       // ignore
     }

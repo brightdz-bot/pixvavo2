@@ -36,6 +36,8 @@ export interface Order {
   total: number; // DZD
   status: OrderStatus;
   trackingCode?: string;
+  courierProvider?: string;
+  courierLabelUrl?: string;
   statusHistory: StatusHistoryEntry[];
   paymentMethod: 'cod'; // Cash on Delivery (الدفع عند الاستلام)
   notes?: string;
@@ -95,6 +97,7 @@ export interface LandingPageTheme {
 
 export interface LandingPageIntegrations {
   pixelId?: string;
+  tiktokPixelId?: string;
   whatsappNumber?: string;
   googleSheetWebhook?: string;
 }
@@ -151,11 +154,58 @@ export interface Store {
   phone?: string;
   defaultWhatsapp?: string;
   defaultPixelId?: string;
+  tiktokPixelId?: string;
   googleSheetWebhook?: string;
   customWilayaFees?: Record<string, number>;
   customWilayaRates?: Record<string, WilayaRate>;
   createdAt: string;
   updatedAt: string;
+}
+
+export type CourierProvider = 'none' | 'ecotrack' | 'yalidine' | 'zrexpress' | 'guepex' | 'maystro' | 'procolis';
+
+export type WhatsAppApiProvider = 'none' | 'meta_cloud' | 'evolution' | 'webhook';
+
+export interface ApiDiagnosticLog {
+  id: string;
+  service: 'courier' | 'meta_capi' | 'tiktok' | 'google_sheet' | 'whatsapp';
+  action: string;
+  status: 'success' | 'error';
+  message: string;
+  latencyMs?: number;
+  orderNumber?: string;
+  timestamp: string;
+}
+
+export interface StoreApiConfig {
+  storeId: string;
+  courierProvider: CourierProvider;
+  courierApiId: string;
+  courierApiToken: string;
+  courierFromWilayaId: string;
+  courierFromWilayaName: string;
+  courierSenderName: string;
+  courierBaseUrl: string;
+  courierAutoSendOnConfirm: boolean;
+  metaPixelId: string;
+  metaCapiEnabled: boolean;
+  metaCapiToken: string;
+  metaTestEventCode: string;
+  tiktokPixelId: string;
+  tiktokEventsEnabled: boolean;
+  tiktokEventsToken: string;
+  tiktokTestEventCode: string;
+  whatsappProvider: WhatsAppApiProvider;
+  whatsappApiUrl: string;
+  whatsappInstance: string;
+  whatsappPhoneNumberId: string;
+  whatsappApiToken: string;
+  whatsappTemplateName: string;
+  whatsappAutoSendOnOrder: boolean;
+  whatsappAutoSendOnShipping: boolean;
+  googleSheetWebhook: string;
+  diagnosticLogs: ApiDiagnosticLog[];
+  updatedAt?: string;
 }
 
 export interface Plan {

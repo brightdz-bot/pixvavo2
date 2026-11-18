@@ -6,3 +6,4 @@ coverage/
 *.log
 .env*
 !.env.example
+.brightdz-api-cache.json

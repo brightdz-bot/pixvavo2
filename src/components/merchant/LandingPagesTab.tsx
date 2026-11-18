@@ -611,7 +611,7 @@ export const LandingPagesTab: React.FC<Props> = ({
                 إذا تركت أي حقل فارغاً، سيتم استخدام الإعدادات الافتراضية للمتجر من تبويب "الإعدادات".
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
                   <label className="block text-xs font-bold mb-1">معرّف Facebook Pixel ID</label>
                   <input
@@ -625,6 +625,22 @@ export const LandingPagesTab: React.FC<Props> = ({
                       })
                     }
                     placeholder="1130382356394829"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">معرّف TikTok Pixel ID</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={editingPage.integrations.tiktokPixelId || ''}
+                    onChange={e =>
+                      setEditingPage({
+                        ...editingPage,
+                        integrations: { ...editingPage.integrations, tiktokPixelId: e.target.value }
+                      })
+                    }
+                    placeholder="C9XXXXXXXXXXXX"
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
                   />
                 </div>

@@ -5,7 +5,9 @@ import {
   User,
   OrderStatus,
   LandingPage,
-  DeliveryType
+  DeliveryType,
+  StoreApiConfig,
+  ApiDiagnosticLog
 } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
@@ -21,6 +23,8 @@ const LANDING_PAGES_KEY = 'brightdz_landing_pages';
 const PRODUCTS_KEY = 'brightdz_products';
 const ORDERS_KEY = 'brightdz_orders';
 const USERS_KEY = 'brightdz_users';
+const API_CONFIGS_KEY = 'brightdz_api_configs';
+const ORDER_COURIER_META_KEY = 'brightdz_order_courier_meta';
 
 const INITIAL_STORES: Store[] = [
   {
@@ -302,6 +306,7 @@ function mapDbStore(row: any): Store {
     phone: row.phone || '',
     defaultWhatsapp: row.default_whatsapp || row.phone || '',
     defaultPixelId: row.default_pixel_id || '',
+    tiktokPixelId: row.tiktok_pixel_id || '',
     googleSheetWebhook: row.google_sheet_webhook || '',
     customWilayaFees: row.custom_wilaya_fees || {},
     customWilayaRates: row.custom_wilaya_rates || {},
@@ -354,7 +359,17 @@ function mapDbProduct(row: any, costPrice?: number): Product {
   };
 }
 
+function getLocalOrderCourierMetaMap(): Record<string, { provider?: string; labelUrl?: string }> {
+  try {
+    const raw = localStorage.getItem(ORDER_COURIER_META_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 function mapDbOrder(row: any): Order {
+  const localMeta = getLocalOrderCourierMetaMap()[row.id];
   return {
     id: row.id,
     orderNumber: row.order_number,
@@ -374,6 +389,8 @@ function mapDbOrder(row: any): Order {
     total: Number(row.total),
     status: row.status as OrderStatus,
     trackingCode: row.tracking_code || undefined,
+    courierProvider: row.courier_provider || localMeta?.provider || undefined,
+    courierLabelUrl: row.courier_label_url || localMeta?.labelUrl || undefined,
     statusHistory: row.status_history || [],
     paymentMethod: 'cod',
     notes: row.notes,
@@ -988,8 +1005,22 @@ class StorageService {
     orderId: string,
     newStatus: OrderStatus,
     note?: string,
-    trackingCode?: string
+    trackingCode?: string,
+    courierMeta?: { provider?: string; labelUrl?: string }
   ): Promise<{ success: boolean; error?: string }> {
+    if (courierMeta?.provider || courierMeta?.labelUrl) {
+      try {
+        const metaMap = getLocalOrderCourierMetaMap();
+        metaMap[orderId] = {
+          provider: courierMeta.provider || metaMap[orderId]?.provider,
+          labelUrl: courierMeta.labelUrl || metaMap[orderId]?.labelUrl
+        };
+        localStorage.setItem(ORDER_COURIER_META_KEY, JSON.stringify(metaMap));
+      } catch {
+        // ignore storage quota errors
+      }
+    }
+
     if (this.useSupabase() && supabase && isUuid(orderId)) {
       const { error } = await supabase.rpc('update_order_status', {
         p_order_id: orderId,
@@ -1000,6 +1031,16 @@ class StorageService {
       if (error) {
         console.error('Supabase update_order_status RPC error:', error);
         return { success: false, error: error.message };
+      }
+
+      if (courierMeta?.provider || courierMeta?.labelUrl) {
+        await supabase
+          .from('orders')
+          .update({
+            courier_provider: courierMeta.provider || null,
+            courier_label_url: courierMeta.labelUrl || null
+          })
+          .eq('id', orderId);
       }
 
       const { data: savedOrder, error: verifyError } = await supabase
@@ -1040,6 +1081,8 @@ class StorageService {
     if (trackingCode !== undefined && trackingCode.trim()) {
       order.trackingCode = trackingCode.trim();
     }
+    if (courierMeta?.provider) order.courierProvider = courierMeta.provider;
+    if (courierMeta?.labelUrl) order.courierLabelUrl = courierMeta.labelUrl;
     order.statusHistory.push({
       status: newStatus,
       timestamp: new Date().toISOString(),
@@ -1373,6 +1416,184 @@ class StorageService {
     } catch {
       return INITIAL_USERS;
     }
+  }
+
+  // --- STORE API CONFIGURATIONS & DIAGNOSTICS ---
+  createDefaultStoreApiConfig(store: Store): StoreApiConfig {
+    return {
+      storeId: store.id,
+      courierProvider: 'none',
+      courierApiId: '',
+      courierApiToken: '',
+      courierFromWilayaId: '16',
+      courierFromWilayaName: 'الجزائر العاصمة',
+      courierSenderName: store.name || '',
+      courierBaseUrl: '',
+      courierAutoSendOnConfirm: true,
+      metaPixelId: store.defaultPixelId || '',
+      metaCapiEnabled: false,
+      metaCapiToken: '',
+      metaTestEventCode: '',
+      tiktokPixelId: store.tiktokPixelId || '',
+      tiktokEventsEnabled: false,
+      tiktokEventsToken: '',
+      tiktokTestEventCode: '',
+      whatsappProvider: 'none',
+      whatsappApiUrl: '',
+      whatsappInstance: '',
+      whatsappPhoneNumberId: '',
+      whatsappApiToken: '',
+      whatsappTemplateName: '',
+      whatsappAutoSendOnOrder: false,
+      whatsappAutoSendOnShipping: false,
+      googleSheetWebhook: store.googleSheetWebhook || '',
+      diagnosticLogs: []
+    };
+  }
+
+  private getLocalApiConfigsMap(): Record<string, StoreApiConfig> {
+    try {
+      const raw = localStorage.getItem(API_CONFIGS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private saveLocalApiConfig(config: StoreApiConfig): void {
+    try {
+      const all = this.getLocalApiConfigsMap();
+      all[config.storeId] = config;
+      localStorage.setItem(API_CONFIGS_KEY, JSON.stringify(all));
+    } catch {
+      // ignore localStorage errors
+    }
+  }
+
+  async getStoreApiConfig(store: Store): Promise<{ config: StoreApiConfig; needsSqlMigration?: boolean }> {
+    const fallback = this.createDefaultStoreApiConfig(store);
+    const localSaved = this.getLocalApiConfigsMap()[store.id];
+    const baseMerged: StoreApiConfig = localSaved
+      ? {
+          ...fallback,
+          ...localSaved,
+          metaPixelId: localSaved.metaPixelId || store.defaultPixelId || '',
+          tiktokPixelId: localSaved.tiktokPixelId || store.tiktokPixelId || '',
+          googleSheetWebhook: localSaved.googleSheetWebhook || store.googleSheetWebhook || '',
+          diagnosticLogs: Array.isArray(localSaved.diagnosticLogs) ? localSaved.diagnosticLogs : []
+        }
+      : fallback;
+
+    if (this.useSupabase() && supabase && isUuid(store.id)) {
+      const { data, error } = await supabase
+        .from('store_api_configs')
+        .select('*')
+        .eq('store_id', store.id)
+        .maybeSingle();
+
+      if (error) {
+        const msg = (error.message || '').toLowerCase();
+        const missingTable =
+          error.code === '42P01' ||
+          error.code === 'PGRST205' ||
+          msg.includes('does not exist') ||
+          msg.includes('could not find the table');
+        return { config: baseMerged, needsSqlMigration: missingTable };
+      }
+
+      if (data) {
+        const dbCfg = (data.config || {}) as Partial<StoreApiConfig>;
+        const merged: StoreApiConfig = {
+          ...baseMerged,
+          ...dbCfg,
+          storeId: store.id,
+          metaPixelId: dbCfg.metaPixelId || store.defaultPixelId || baseMerged.metaPixelId,
+          tiktokPixelId: dbCfg.tiktokPixelId || store.tiktokPixelId || baseMerged.tiktokPixelId,
+          googleSheetWebhook: dbCfg.googleSheetWebhook || store.googleSheetWebhook || baseMerged.googleSheetWebhook,
+          diagnosticLogs: Array.isArray(data.diagnostic_logs) ? data.diagnostic_logs : baseMerged.diagnosticLogs,
+          updatedAt: data.updated_at
+        };
+        this.saveLocalApiConfig(merged);
+        return { config: merged };
+      }
+    }
+
+    return { config: baseMerged };
+  }
+
+  async saveStoreApiConfig(
+    config: StoreApiConfig
+  ): Promise<{ success: boolean; error?: string; needsSqlMigration?: boolean }> {
+    const cleanConfig: StoreApiConfig = {
+      ...config,
+      diagnosticLogs: (config.diagnosticLogs || []).slice(0, 30),
+      updatedAt: new Date().toISOString()
+    };
+    this.saveLocalApiConfig(cleanConfig);
+
+    // Sync server runtime cache so storefront CAPI / TikTok / auto-WhatsApp work server-side
+    try {
+      await fetch('/api/integrations/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanConfig)
+      });
+    } catch {
+      // non-fatal if running without server
+    }
+
+    if (this.useSupabase() && supabase && isUuid(cleanConfig.storeId)) {
+      const { diagnosticLogs, ...configWithoutLogs } = cleanConfig;
+      const { error } = await supabase.from('store_api_configs').upsert(
+        {
+          store_id: cleanConfig.storeId,
+          config: configWithoutLogs,
+          diagnostic_logs: diagnosticLogs,
+          updated_at: cleanConfig.updatedAt
+        },
+        { onConflict: 'store_id' }
+      );
+
+      // Sync public tracking IDs & webhook to stores table cleanly
+      await supabase
+        .from('stores')
+        .update({
+          default_pixel_id: cleanConfig.metaPixelId || '',
+          google_sheet_webhook: cleanConfig.googleSheetWebhook || ''
+        })
+        .eq('id', cleanConfig.storeId);
+
+      // Best-effort sync of optional tiktok_pixel_id column if migrated
+      await supabase
+        .from('stores')
+        .update({ tiktok_pixel_id: cleanConfig.tiktokPixelId || '' })
+        .eq('id', cleanConfig.storeId);
+
+      if (error) {
+        const msg = (error.message || '').toLowerCase();
+        const missingTable =
+          error.code === '42P01' ||
+          error.code === 'PGRST205' ||
+          msg.includes('does not exist') ||
+          msg.includes('could not find the table');
+        if (missingTable) {
+          return { success: true, needsSqlMigration: true };
+        }
+        return { success: false, error: error.message };
+      }
+    }
+
+    return { success: true };
+  }
+
+  async appendApiDiagnosticLog(store: Store, log: ApiDiagnosticLog): Promise<StoreApiConfig> {
+    const { config } = await this.getStoreApiConfig(store);
+    const nextConfig: StoreApiConfig = {
+      ...config,
+      diagnosticLogs: [log, ...(config.diagnosticLogs || [])].slice(0, 30)
+    };
+    await this.saveStoreApiConfig(nextConfig);
+    return nextConfig;
   }
 
   resetDemoData(): void {

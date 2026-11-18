@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DeliveryType, LandingPage, Order, OrderStatus, Store } from '../../types';
+import { DeliveryType, LandingPage, Order, OrderStatus, Store, StoreApiConfig } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import { ConfirmDialog } from '../common/ConfirmDialog';
-import { normalizeWhatsAppNumber } from '../../services/integrations';
+import { COURIER_PROVIDER_INFO, normalizeWhatsAppNumber } from '../../services/integrations';
 import {
   Search,
   Eye,
@@ -16,13 +16,18 @@ import {
   MessageCircle,
   Tag,
   Pencil,
-  RefreshCw
+  RefreshCw,
+  Send,
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 
 interface Props {
   store: Store;
   orders: Order[];
   landingPages?: LandingPage[];
+  apiConfig?: StoreApiConfig | null;
+  courierBusyOrderId?: string | null;
   onUpdateStatus: (
     orderId: string,
     newStatus: OrderStatus,
@@ -37,6 +42,9 @@ interface Props {
     commune?: string;
     deliveryType?: DeliveryType;
   }) => Promise<boolean>;
+  onSendOrderToCourier?: (order: Order) => Promise<void>;
+  onPullCourierStatus?: (order: Order) => Promise<void>;
+  onSendOrderWhatsAppApi?: (order: Order) => Promise<void>;
   onSyncFromGoogleSheet?: () => void;
   isSyncingSheet?: boolean;
   selectedOrder?: Order | null;
@@ -47,8 +55,13 @@ export const OrdersTab: React.FC<Props> = ({
   store,
   orders,
   landingPages = [],
+  apiConfig,
+  courierBusyOrderId,
   onUpdateStatus,
   onUpdateOrderDetails,
+  onSendOrderToCourier,
+  onPullCourierStatus,
+  onSendOrderWhatsAppApi,
   onSyncFromGoogleSheet,
   isSyncingSheet,
   selectedOrder,
@@ -424,7 +437,18 @@ export const OrdersTab: React.FC<Props> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {apiConfig?.whatsappProvider && apiConfig.whatsappProvider !== 'none' && onSendOrderWhatsAppApi && (
+                  <button
+                    type="button"
+                    disabled={courierBusyOrderId === selectedOrder.id}
+                    onClick={() => onSendOrderWhatsAppApi(selectedOrder)}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>واتساب آلي (API)</span>
+                  </button>
+                )}
                 <a
                   href={buildCustomerWhatsAppHref(selectedOrder)}
                   target="_blank"
@@ -663,6 +687,79 @@ export const OrdersTab: React.FC<Props> = ({
                 </div>
               </div>
             </div>
+
+            {/* Courier API Dispatch + Live Tracking */}
+            {((apiConfig?.courierProvider && apiConfig.courierProvider !== 'none') || selectedOrder.courierLabelUrl) && (
+              <div className="p-4 rounded-xl bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-blue-900 dark:text-blue-200">
+                    <Truck className="w-4 h-4 text-blue-600" />
+                    <span>
+                      شركة التوصيل المربوطة:{' '}
+                      {apiConfig?.courierProvider && apiConfig.courierProvider !== 'none'
+                        ? COURIER_PROVIDER_INFO[apiConfig.courierProvider].name
+                        : selectedOrder.courierProvider || 'API'}
+                    </span>
+                  </div>
+                  {selectedOrder.courierLabelUrl && (
+                    <a
+                      href={selectedOrder.courierLabelUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-[11px] font-bold inline-flex items-center gap-1.5"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>طباعة البوليصة الرسمية PDF</span>
+                    </a>
+                  )}
+                </div>
+
+                {apiConfig?.courierProvider && apiConfig.courierProvider !== 'none' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!selectedOrder.trackingCode &&
+                      (selectedOrder.status === 'new' || selectedOrder.status === 'confirmed') &&
+                      onSendOrderToCourier && (
+                        <button
+                          type="button"
+                          disabled={courierBusyOrderId === selectedOrder.id}
+                          onClick={() => onSendOrderToCourier(selectedOrder)}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
+                        >
+                          {courierBusyOrderId === selectedOrder.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            إرسال إلى {COURIER_PROVIDER_INFO[apiConfig.courierProvider].name} وتوليد رمز التتبع
+                          </span>
+                        </button>
+                      )}
+
+                    {selectedOrder.trackingCode &&
+                      selectedOrder.status !== 'delivered' &&
+                      selectedOrder.status !== 'cancelled' &&
+                      onPullCourierStatus && (
+                        <button
+                          type="button"
+                          disabled={courierBusyOrderId === selectedOrder.id}
+                          onClick={() => onPullCourierStatus(selectedOrder)}
+                          className="px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                        >
+                          {courierBusyOrderId === selectedOrder.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            سحب وتحديث الحالة من {COURIER_PROVIDER_INFO[apiConfig.courierProvider].name}
+                          </span>
+                        </button>
+                      )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Courier Tracking Code + Status Actions */}
             {selectedOrder.status !== 'delivered' && selectedOrder.status !== 'cancelled' && (

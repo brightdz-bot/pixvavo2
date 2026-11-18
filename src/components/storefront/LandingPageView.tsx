@@ -10,7 +10,8 @@ import {
   updateOrderInGoogleSheet,
   fetchOrderFromGoogleSheet,
   buildOrderConfirmationWhatsAppUrl,
-  buildOrderTrackingWhatsAppUrl
+  buildOrderTrackingWhatsAppUrl,
+  triggerAutoOrderWhatsApp
 } from '../../services/integrations';
 import {
   Search,
@@ -131,6 +132,7 @@ export const LandingPageView: React.FC<Props> = ({
   } | null>(null);
 
   const effectivePixelId = page.integrations?.pixelId?.trim() || store.defaultPixelId?.trim();
+  const effectiveTiktokPixelId = page.integrations?.tiktokPixelId?.trim() || store.tiktokPixelId?.trim();
   const effectiveWhatsapp =
     page.integrations?.whatsappNumber?.trim() || store.defaultWhatsapp?.trim() || store.phone?.trim();
   const effectiveWebhook =
@@ -148,7 +150,10 @@ export const LandingPageView: React.FC<Props> = ({
     setIsEditingTrackedOrder(false);
     setTrackedEditError(null);
     setTrackedEditSuccess(null);
-    trackMetaPixelPage(effectivePixelId, page.title, page.category, def?.price || 0);
+    trackMetaPixelPage(effectivePixelId, page.title, page.category, def?.price || 0, {
+      storeId: store.id,
+      tiktokPixelId: effectiveTiktokPixelId
+    });
   }, [page.id]);
 
   // Sync commune list when wilaya changes
@@ -262,7 +267,25 @@ export const LandingPageView: React.FC<Props> = ({
     const orderNum = res.order.orderNumber;
     const bundleDetails = `${selectedOffer.title} (الكمية: ${selectedOffer.quantity})`;
 
-    trackMetaPixelPurchase(effectivePixelId, bundleDetails, res.order.total, orderNum);
+    trackMetaPixelPurchase(effectivePixelId, bundleDetails, res.order.total, orderNum, {
+      storeId: store.id,
+      tiktokPixelId: effectiveTiktokPixelId,
+      customerPhone: cleanPhone,
+      customerName: fullName.trim(),
+      wilayaName: selectedWilaya.nameAr
+    });
+
+    triggerAutoOrderWhatsApp({
+      storeId: store.id,
+      storeName: store.name,
+      phone: cleanPhone,
+      orderNumber: orderNum,
+      customerName: fullName.trim(),
+      bundleDetails,
+      total: res.order.total,
+      wilayaName: selectedWilaya.nameAr,
+      commune: selectedCommune
+    });
 
     sendOrderToGoogleSheet(effectiveWebhook, {
       orderId: orderNum,
