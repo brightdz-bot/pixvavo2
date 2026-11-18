@@ -110,7 +110,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
   const syncOrdersWithGoogleSheets = useCallback(
     async (currentOrders: Order[], currentPages: LandingPage[], showFeedback = false) => {
-      if (!store?.id || isSyncingRef.current) return;
+      if (!store?.id || isSyncingRef.current || (isSupabaseMode && !currentUser?.id)) return;
       const webhookUrls = Array.from(
         new Set(
           [
@@ -265,8 +265,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   );
 
   const loadData = useCallback(async () => {
-    if (!store?.id) {
+    if (!store?.id || isAuthLoading || (isSupabaseMode && !currentUser?.id)) {
       setIsDataLoading(false);
+      setLoadError(null);
       return;
     }
     setIsDataLoading(true);
@@ -296,19 +297,19 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     } finally {
       setIsDataLoading(false);
     }
-  }, [store?.id, syncOrdersWithGoogleSheets]);
+  }, [store?.id, isAuthLoading, isSupabaseMode, currentUser?.id, syncOrdersWithGoogleSheets]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   useEffect(() => {
-    if (!store?.id || isDataLoading) return;
+    if (!store?.id || isDataLoading || isAuthLoading || (isSupabaseMode && !currentUser?.id)) return;
     const timer = setInterval(() => {
       void syncOrdersWithGoogleSheets(orders, landingPages, false);
     }, 8000);
     return () => clearInterval(timer);
-  }, [store?.id, isDataLoading, orders, landingPages, syncOrdersWithGoogleSheets]);
+  }, [store?.id, isDataLoading, isAuthLoading, isSupabaseMode, currentUser?.id, orders, landingPages, syncOrdersWithGoogleSheets]);
 
   const handleSaveLandingPage = async (page: LandingPage): Promise<boolean> => {
     const res = await storage.saveLandingPage(page);

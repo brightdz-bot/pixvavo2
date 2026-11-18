@@ -39,39 +39,47 @@ function isAdminRouteFromUrl(): boolean {
   }
 }
 
+function isPreviewDevHost(): boolean {
+  try {
+    const host = window.location.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
+  } catch {
+    return false;
+  }
+}
+
+function resolveInitialView(): 'merchant' | 'storefront' {
+  if (isAdminRouteFromUrl()) return 'merchant';
+  if (isStorefrontRouteFromUrl()) return 'storefront';
+  return isPreviewDevHost() ? 'merchant' : 'storefront';
+}
+
 function AppContent() {
   const { currentStore, isSupabaseMode, isLoading, currentSubdomain } = useAuth();
   const [initialSlug, setInitialSlug] = useState<string | null>(() => getInitialSlugFromUrl());
-  const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => {
-    if (isAdminRouteFromUrl()) return 'merchant';
-    if (isStorefrontRouteFromUrl()) return 'storefront';
-    return 'merchant';
-  });
+  const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => resolveInitialView());
   const hasInitializedRef = useRef(false);
 
   useEffect(() => {
     if (!isLoading && !hasInitializedRef.current) {
       hasInitializedRef.current = true;
-      if (isAdminRouteFromUrl()) {
-        setCurrentView('merchant');
-      } else if (isStorefrontRouteFromUrl()) {
+      const view = resolveInitialView();
+      if (view === 'storefront') {
         setInitialSlug(getInitialSlugFromUrl());
-        setCurrentView('storefront');
-      } else {
-        setCurrentView('merchant');
       }
+      setCurrentView(view);
     }
   }, [isLoading]);
 
   useEffect(() => {
     const onPopState = () => {
-      if (isStorefrontRouteFromUrl() && !isAdminRouteFromUrl()) {
+      const view = resolveInitialView();
+      if (view === 'storefront') {
         setInitialSlug(getInitialSlugFromUrl());
-        setCurrentView('storefront');
       } else {
         setInitialSlug(null);
-        setCurrentView('merchant');
       }
+      setCurrentView(view);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);

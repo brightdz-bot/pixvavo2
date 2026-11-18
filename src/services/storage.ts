@@ -826,6 +826,8 @@ class StorageService {
   async getOrders(storeId?: string): Promise<Order[]> {
     if (this.useSupabase() && supabase) {
       if (storeId && !isUuid(storeId)) return [];
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) return [];
       let query = supabase.from('orders').select('*');
       if (storeId) query = query.eq('store_id', storeId);
       const { data, error } = await query.order('created_at', { ascending: false });
@@ -1599,6 +1601,10 @@ class StorageService {
       : fallback;
 
     if (this.useSupabase() && supabase && isUuid(store.id)) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) {
+        return { config: baseMerged };
+      }
       const { data, error } = await supabase
         .from('store_api_configs')
         .select('*')
