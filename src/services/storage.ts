@@ -10,6 +10,7 @@ import {
   ApiDiagnosticLog
 } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { normalizePhoneCanonical } from './integrations';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
 
@@ -74,6 +75,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'مناسب لحمام واحد أو مطبخ',
         quantity: 1,
         price: 1900,
+        costPrice: 950,
         isDefault: false
       },
       {
@@ -82,6 +84,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'قطعتين لتغطية المنزل بالكامل',
         quantity: 2,
         price: 3300,
+        costPrice: 1750,
         comparePrice: 3800,
         badge: 'توفير رائع',
         isDefault: true
@@ -92,6 +95,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'أقصى توفير للعائلات الكبيرة',
         quantity: 4,
         price: 6200,
+        costPrice: 3300,
         comparePrice: 7600,
         isDefault: false
       }
@@ -130,6 +134,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'تثبيت فوري بدون ثقب أو أدوات',
         quantity: 1,
         price: 2800,
+        costPrice: 1400,
         comparePrice: 3400,
         isDefault: false
       },
@@ -139,6 +144,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'رف رئيسي + رف إضافي للحمام أو المطبخ',
         quantity: 2,
         price: 4900,
+        costPrice: 2500,
         comparePrice: 5600,
         badge: 'الأكثر مبيعاً',
         isDefault: true
@@ -149,6 +155,7 @@ const INITIAL_LANDING_PAGES: LandingPage[] = [
         subtitle: 'تغطية شاملة للحمام والمطبخ والمدخل',
         quantity: 3,
         price: 6800,
+        costPrice: 3500,
         comparePrice: 8400,
         isDefault: false
       }
@@ -317,6 +324,7 @@ function mapDbStore(row: any): Store {
 
 function mapDbLandingPage(row: any): LandingPage {
   const theme = row.theme && row.theme.primaryColor ? row.theme : LANDING_THEME_PRESETS[0];
+  const integrations = row.integrations || {};
   return {
     id: row.id,
     storeId: row.store_id,
@@ -330,8 +338,18 @@ function mapDbLandingPage(row: any): LandingPage {
     mainImage: row.main_image || DEFAULT_ASSETS.towelHolderMain,
     galleryImages: Array.isArray(row.gallery_images) ? row.gallery_images : [],
     offers: Array.isArray(row.offers) ? row.offers : [],
+    variants: Array.isArray(row.variants)
+      ? row.variants
+      : Array.isArray(integrations.variants)
+      ? integrations.variants
+      : [],
+    reviews: Array.isArray(row.reviews)
+      ? row.reviews
+      : Array.isArray(integrations.reviews)
+      ? integrations.reviews
+      : [],
     theme,
-    integrations: row.integrations || {},
+    integrations,
     isPublished: Boolean(row.is_published),
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -661,6 +679,12 @@ class StorageService {
       return { success: false, error: 'يجب أن يحتوي رابط الصفحة (Slug) على 3 أحرف إنجليزية أو أرقام على الأقل' };
     }
 
+    const normalizedIntegrations = {
+      ...(page.integrations || {}),
+      variants: page.variants || [],
+      reviews: page.reviews || []
+    };
+
     if (this.useSupabase() && supabase) {
       const isExisting = page.id && isUuid(page.id);
       const commonFields = {
@@ -675,7 +699,7 @@ class StorageService {
         gallery_images: page.galleryImages || [],
         offers: page.offers || [],
         theme: page.theme || LANDING_THEME_PRESETS[0],
-        integrations: page.integrations || {},
+        integrations: normalizedIntegrations,
         is_published: page.isPublished
       };
 
@@ -838,8 +862,80 @@ class StorageService {
     address: string;
     items?: { productId: string; quantity: number; variantText?: string }[];
     notes?: string;
+    variantLabel?: string;
+    promoCode?: string;
+    discount?: number;
+    discountReason?: string;
   }): Promise<{ success: boolean; error?: string; order?: Order }> {
     const deliveryType: DeliveryType = params.deliveryType === 'stop' ? 'stop' : 'home';
+    const noteParts = [
+      params.notes?.trim() || '',
+      params.variantLabel?.trim() ? `المواصفات: ${params.variantLabel.trim()}` : '',
+      params.promoCode?.trim()
+        ? `كوبون خصم: ${params.promoCode.trim().toUpperCase()}${params.discount ? ` (-${params.discount} دج)` : ''}`
+        : ''
+    ].filter(Boolean);
+    const mergedNotes = noteParts.length > 0 ? noteParts.join(' | ').slice(0, 480) : undefined;
+
+    // Anti-Fraud COD Check (Local config + Server Endpoint)
+    const canonicalPhone = normalizePhoneCanonical(params.customerPhone);
+    const localCfg = this.getLocalApiConfigsMap()[params.storeId];
+    if (localCfg && localCfg.antiFraudEnabled !== false && canonicalPhone.length >= 9) {
+      const blocked = (localCfg.blacklistedPhones || []).some(
+        entry => normalizePhoneCanonical(entry?.phone) === canonicalPhone
+      );
+      if (blocked) {
+        return {
+          success: false,
+          error: 'عذراً، تعذر تأكيد تسجيل الطلب لهذا الرقم حالياً. يرجى التواصل معنا عبر واتساب للمساعدة.'
+        };
+      }
+      const dailyLimit = Number(localCfg.dailyMaxOrdersPerPhone ?? 2);
+      if (dailyLimit > 0 && !this.useSupabase()) {
+        const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+        const recentSamePhone = this.getLocalOrders(params.storeId).filter(
+          o =>
+            o.status !== 'cancelled' &&
+            new Date(o.createdAt).getTime() >= dayAgo &&
+            normalizePhoneCanonical(o.customerPhone) === canonicalPhone
+        ).length;
+        if (recentSamePhone >= dailyLimit) {
+          return {
+            success: false,
+            error: `تم بلوغ الحد الأقصى للطلبات المسموح بها لهذا الرقم اليوم (${dailyLimit} طلب خلال 24 ساعة). يمكنك متابعة أو تعديل طلبك السابق عبر صفحة التتبع.`
+          };
+        }
+      }
+    }
+
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2500);
+      const fraudRes = await fetch('/api/orders/fraud-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId: params.storeId,
+          phone: params.customerPhone,
+          record: true
+        }),
+        signal: ctrl.signal
+      });
+      clearTimeout(t);
+      if (fraudRes.ok) {
+        const fraudJson = await fraudRes.json();
+        if (fraudJson && fraudJson.allowed === false) {
+          return {
+            success: false,
+            error:
+              fraudJson.message ||
+              'عذراً، تعذر تسجيل الطلب لهذا الرقم حالياً. يرجى التواصل مع خدمة الزبائن.'
+          };
+        }
+      }
+    } catch {
+      // Non-fatal if server endpoint unreachable
+    }
 
     if (this.useSupabase() && supabase && isUuid(params.storeId)) {
       const { data, error } = await supabase.rpc('place_order', {
@@ -850,7 +946,7 @@ class StorageService {
         p_wilaya_name: params.wilayaName,
         p_address: params.address,
         p_items: params.items || [],
-        p_notes: params.notes || null,
+        p_notes: mergedNotes || null,
         p_landing_page_id: params.landingPageId && isUuid(params.landingPageId) ? params.landingPageId : null,
         p_offer_id: params.offerId || null,
         p_commune: params.commune || null,
@@ -929,13 +1025,15 @@ class StorageService {
       page.updatedAt = new Date().toISOString();
       localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
 
-      subtotal = offer.price;
-      bundleLabel = `${offer.title} (الكمية: ${bundleQty})`;
+      const discountVal = Math.max(0, Math.min(offer.price, Number(params.discount) || 0));
+      subtotal = Math.max(0, offer.price - discountVal);
+      const variantSuffix = params.variantLabel?.trim() ? ` [${params.variantLabel.trim()}]` : '';
+      bundleLabel = `${offer.title}${variantSuffix} (الكمية: ${bundleQty})`;
       orderItems = [
         {
           productId: page.id,
           title: page.title,
-          price: offer.price,
+          price: subtotal,
           quantity: 1,
           variantText: bundleLabel,
           imageUrl: page.mainImage
@@ -953,7 +1051,9 @@ class StorageService {
           imageUrl: p?.imageUrl
         };
       });
-      subtotal = orderItems.reduce((s, it) => s + it.price * it.quantity, 0);
+      const rawSubtotal = orderItems.reduce((s, it) => s + it.price * it.quantity, 0);
+      const discountVal = Math.max(0, Math.min(rawSubtotal, Number(params.discount) || 0));
+      subtotal = Math.max(0, rawSubtotal - discountVal);
     }
 
     // Calculate delivery fee (custom rates -> custom home fee -> wilaya home/stop default)
@@ -990,7 +1090,7 @@ class StorageService {
         { status: 'new', timestamp: new Date().toISOString(), note: 'تم تسجيل الطلب والدفع عند الاستلام' }
       ],
       paymentMethod: 'cod',
-      notes: params.notes,
+      notes: mergedNotes,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1447,8 +1547,22 @@ class StorageService {
       whatsappAutoSendOnOrder: false,
       whatsappAutoSendOnShipping: false,
       googleSheetWebhook: store.googleSheetWebhook || '',
+      adSpendTotal: 0,
+      adSpendByPage: {},
+      antiFraudEnabled: true,
+      duplicateWindowHours: 24,
+      dailyMaxOrdersPerPhone: 2,
+      autoFlagReturnsThreshold: 2,
+      blacklistedPhones: [],
+      promoCoupons: [],
+      whatsappConfirmTemplate: '',
+      whatsappShippingTemplate: '',
       diagnosticLogs: []
     };
+  }
+
+  getLocalStoreApiConfig(storeId: string): StoreApiConfig | undefined {
+    return this.getLocalApiConfigsMap()[storeId];
   }
 
   private getLocalApiConfigsMap(): Record<string, StoreApiConfig> {

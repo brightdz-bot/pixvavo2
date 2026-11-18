@@ -42,6 +42,21 @@ export interface ServerStoreApiConfig {
   whatsappAutoSendOnOrder?: boolean;
   whatsappAutoSendOnShipping?: boolean;
   googleSheetWebhook?: string;
+  antiFraudEnabled?: boolean;
+  duplicateWindowHours?: number;
+  dailyMaxOrdersPerPhone?: number;
+  autoFlagReturnsThreshold?: number;
+  blacklistedPhones?: Array<{ phone: string; reason?: string; addedAt?: string }>;
+  promoCoupons?: Array<{
+    id: string;
+    code: string;
+    type: 'fixed' | 'percent';
+    value: number;
+    minOrder?: number;
+    isActive: boolean;
+  }>;
+  whatsappConfirmTemplate?: string;
+  whatsappShippingTemplate?: string;
 }
 
 const RUNTIME_CONFIG_PATH = process.env.VERCEL
@@ -49,6 +64,7 @@ const RUNTIME_CONFIG_PATH = process.env.VERCEL
   : path.resolve(process.cwd(), '.brightdz-api-cache.json');
 
 const storeConfigMap = new Map<string, ServerStoreApiConfig>();
+const recentPhoneOrdersMap = new Map<string, number[]>();
 
 function loadPersistedServerConfigs() {
   try {
@@ -1041,6 +1057,38 @@ export function createApiApp(): Express {
     }
   });
 
+  app.post('/api/integrations/google-sheet-read', async (req: Request, res: Response) => {
+    const webhookUrl = String(req.body?.webhookUrl || '').trim();
+    const action = String(req.body?.action || '').trim();
+    const orderId = String(req.body?.orderId || '').trim();
+    if (!webhookUrl) {
+      res.json({ ok: false, data: null });
+      return;
+    }
+
+    try {
+      const target = new URL(webhookUrl);
+      if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+        res.json({ ok: false, data: null });
+        return;
+      }
+      if (action) target.searchParams.set('action', action);
+      if (orderId) target.searchParams.set('orderId', orderId);
+      const result = await fetchJsonWithTimeout(
+        target.toString(),
+        { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json' } },
+        8000
+      );
+      if (result.ok && result.json && typeof result.json === 'object') {
+        res.json({ ok: true, data: result.json });
+        return;
+      }
+      res.json({ ok: false, data: null });
+    } catch {
+      res.json({ ok: false, data: null });
+    }
+  });
+
   // 5. Server-side Tracking Events (Meta CAPI + TikTok Events API)
   app.post('/api/integrations/track-event', async (req: Request, res: Response) => {
     const cfg = await resolveConfigAsync(req.body);
@@ -1221,13 +1269,34 @@ export function createApiApp(): Express {
       storeName = ''
     } = req.body || {};
 
-    const message =
+    let message =
       `السلام عليكم ${customerName}،\n` +
       `تم استلام طلبك رقم ${orderNumber} من متجر ${storeName || 'المتجر'}.\n` +
       `المنتج: ${bundleDetails}\n` +
       `العنوان: ${wilayaName}${commune ? ' - ' + commune : ''}\n` +
       `المبلغ عند الاستلام: ${Math.round(Number(total) || 0)} دج\n` +
       `سنتواصل معك قريباً لتأكيد الإرسال.`;
+
+    if (cfg.whatsappConfirmTemplate && cfg.whatsappConfirmTemplate.trim()) {
+      const vars: Record<string, string> = {
+        customerName: String(customerName),
+        orderNumber: String(orderNumber),
+        storeName: String(storeName || 'المتجر'),
+        bundle: String(bundleDetails),
+        total: `${Math.round(Number(total) || 0)} دج`,
+        wilaya: String(wilayaName),
+        commune: String(commune),
+        deliveryType: 'توصيل',
+        shippingCost: '',
+        trackingCode: '',
+        storePhone: ''
+      };
+      let rendered = cfg.whatsappConfirmTemplate;
+      Object.entries(vars).forEach(([k, v]) => {
+        rendered = rendered.split(`{${k}}`).join(v);
+      });
+      message = rendered.trim();
+    }
 
     const result = await dispatchWhatsAppMessage(cfg, {
       phone,
@@ -1238,6 +1307,172 @@ export function createApiApp(): Express {
       total
     });
     res.json(result);
+  });
+
+  // 7. Anti-Fraud COD Pre-Check (Blacklist + Daily Order Limit per Phone)
+  app.post('/api/orders/fraud-check', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const rawPhone = String(req.body?.phone || '').trim();
+    const record = req.body?.record !== false;
+
+    if (!storeId || !rawPhone) {
+      res.json({ ok: true, allowed: true });
+      return;
+    }
+
+    const cfg = await getOrFetchServerConfig(storeId);
+    if (!cfg || cfg.antiFraudEnabled === false) {
+      res.json({ ok: true, allowed: true });
+      return;
+    }
+
+    const canonicalPhone = normalizeLocalPhone(rawPhone);
+    const phoneKey = `${storeId}:${canonicalPhone}`;
+
+    // 1. Check Blacklist
+    const blacklisted = Array.isArray(cfg.blacklistedPhones) ? cfg.blacklistedPhones : [];
+    const isBlocked = blacklisted.some(
+      entry => normalizeLocalPhone(entry?.phone) === canonicalPhone && canonicalPhone.length >= 9
+    );
+    if (isBlocked) {
+      res.json({
+        ok: true,
+        allowed: false,
+        code: 'blacklisted',
+        message: 'عذراً، تعذر تأكيد تسجيل الطلب لهذا الرقم حالياً. يرجى التواصل معنا عبر واتساب للمساعدة.'
+      });
+      return;
+    }
+
+    // 2. Check Daily Order Limit (last 24h)
+    const dailyLimit = Number(cfg.dailyMaxOrdersPerPhone ?? 2);
+    if (dailyLimit > 0 && canonicalPhone.length >= 9) {
+      const now = Date.now();
+      const dayAgo = now - 24 * 60 * 60 * 1000;
+      const prevTs = (recentPhoneOrdersMap.get(phoneKey) || []).filter(ts => ts >= dayAgo);
+      recentPhoneOrdersMap.set(phoneKey, prevTs);
+
+      let dbRecentCount = 0;
+      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+      if (supabaseUrl && serviceRoleKey) {
+        try {
+          const suffix = canonicalPhone.slice(-8);
+          const sinceIso = new Date(dayAgo).toISOString();
+          const qUrl =
+            `${supabaseUrl}/rest/v1/orders?store_id=eq.${encodeURIComponent(storeId)}` +
+            `&created_at=gte.${encodeURIComponent(sinceIso)}` +
+            `&customer_phone=ilike.*${encodeURIComponent(suffix)}*` +
+            `&status=neq.cancelled&select=id,customer_phone`;
+          const dbRes = await fetchJsonWithTimeout(
+            qUrl,
+            {
+              method: 'GET',
+              headers: {
+                apikey: serviceRoleKey,
+                Authorization: `Bearer ${serviceRoleKey}`,
+                Accept: 'application/json'
+              }
+            },
+            3500
+          );
+          if (dbRes.ok && Array.isArray(dbRes.json)) {
+            dbRecentCount = dbRes.json.filter(
+              (r: any) => normalizeLocalPhone(r?.customer_phone) === canonicalPhone
+            ).length;
+          }
+        } catch {
+          // non-fatal fallback to in-memory map
+        }
+      }
+
+      const effectiveCount = Math.max(prevTs.length, dbRecentCount);
+      if (effectiveCount >= dailyLimit) {
+        res.json({
+          ok: true,
+          allowed: false,
+          code: 'daily_limit',
+          message: `تم بلوغ الحد الأقصى للطلبات المسموح بها لهذا الرقم اليوم (${dailyLimit} طلب خلال 24 ساعة). يمكنك متابعة أو تعديل طلبك السابق عبر صفحة التتبع.`
+        });
+        return;
+      }
+
+      if (record) {
+        prevTs.push(now);
+        recentPhoneOrdersMap.set(phoneKey, prevTs);
+      }
+    }
+
+    res.json({ ok: true, allowed: true });
+  });
+
+  // 8. Public Storefront Settings (WhatsApp custom message templates - non-secret)
+  app.get('/api/store/public-settings', async (req: Request, res: Response) => {
+    const storeId = String(req.query?.storeId || '').trim();
+    if (!storeId) {
+      res.json({ ok: true, whatsappConfirmTemplate: '', whatsappShippingTemplate: '' });
+      return;
+    }
+    const cfg = await getOrFetchServerConfig(storeId);
+    res.json({
+      ok: true,
+      whatsappConfirmTemplate: cfg?.whatsappConfirmTemplate || '',
+      whatsappShippingTemplate: cfg?.whatsappShippingTemplate || ''
+    });
+  });
+
+  // 9. Public Storefront Promo Coupon Validator
+  app.post('/api/store/validate-promo', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const rawCode = String(req.body?.code || '').trim().toUpperCase();
+    const subtotal = Math.max(0, Number(req.body?.subtotal) || 0);
+
+    if (!rawCode) {
+      res.json({ ok: true, valid: false, message: 'يرجى إدخال رمز الكوبون' });
+      return;
+    }
+
+    const cfg = storeId ? await getOrFetchServerConfig(storeId) : undefined;
+    const coupons = Array.isArray(cfg?.promoCoupons) ? cfg.promoCoupons : [];
+    const found = coupons.find(c => String(c.code || '').trim().toUpperCase() === rawCode);
+
+    if (!found) {
+      res.json({ ok: true, valid: false, notFoundOnServer: coupons.length === 0, message: 'كود الخصم غير صحيح أو منتهي الصلاحية' });
+      return;
+    }
+    if (!found.isActive) {
+      res.json({ ok: true, valid: false, message: 'هذا الكوبون متوقف حالياً' });
+      return;
+    }
+    const minOrder = Number(found.minOrder) || 0;
+    if (minOrder > 0 && subtotal < minOrder) {
+      res.json({
+        ok: true,
+        valid: false,
+        message: `هذا الكوبون يتطلب حداً أدنى للطلب قدره ${Math.round(minOrder)} دج`
+      });
+      return;
+    }
+
+    const rawDiscount =
+      found.type === 'percent'
+        ? Math.round((subtotal * Math.min(100, Math.max(0, Number(found.value) || 0))) / 100)
+        : Math.max(0, Number(found.value) || 0);
+    const discount = Math.min(subtotal, rawDiscount);
+    const reason =
+      found.type === 'percent'
+        ? `كوبون ${found.code} (${found.value}%)`
+        : `كوبون ${found.code} (-${found.value} دج)`;
+
+    res.json({
+      ok: true,
+      valid: true,
+      code: found.code,
+      type: found.type,
+      value: found.value,
+      discount,
+      reason
+    });
   });
 
   return app;

@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
-import { LandingPage, LandingPageOffer, LandingPageTheme } from '../../types';
-import { LANDING_THEME_PRESETS, formatDZD } from '../../data/wilayas';
+import {
+  LandingPage,
+  LandingPageOffer,
+  LandingPageTheme,
+  ProductVariant,
+  LandingPageReview
+} from '../../types';
+import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS, formatDZD } from '../../data/wilayas';
 import { DEFAULT_ASSETS } from '../../data/defaultAssets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import {
@@ -20,7 +26,10 @@ import {
   Star,
   Flame,
   Save,
-  Globe
+  Globe,
+  Tag,
+  MessageSquare,
+  X
 } from 'lucide-react';
 
 interface Props {
@@ -57,6 +66,7 @@ function createEmptyPage(storeId: string): LandingPage {
         subtitle: 'مناسب للتجربة والاستخدام الشخصي',
         quantity: 1,
         price: 1900,
+        costPrice: 950,
         isDefault: false
       },
       {
@@ -65,6 +75,7 @@ function createEmptyPage(storeId: string): LandingPage {
         subtitle: 'قطعتين بسعر اقتصادي موفر',
         quantity: 2,
         price: 3300,
+        costPrice: 1750,
         comparePrice: 3800,
         badge: 'توفير رائع',
         isDefault: true
@@ -75,6 +86,7 @@ function createEmptyPage(storeId: string): LandingPage {
         subtitle: 'أقصى توفير للعائلات',
         quantity: 4,
         price: 6200,
+        costPrice: 3300,
         comparePrice: 7600,
         isDefault: false
       }
@@ -103,6 +115,7 @@ export const LandingPagesTab: React.FC<Props> = ({
   const [pageToDelete, setPageToDelete] = useState<LandingPage | null>(null);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [variantOptionDrafts, setVariantOptionDrafts] = useState<Record<string, string>>({});
 
   const handleCopyLink = (slug: string) => {
     try {
@@ -155,6 +168,7 @@ export const LandingPagesTab: React.FC<Props> = ({
       subtitle: 'وصف مختصر للباقة',
       quantity: editingPage.offers.length + 1,
       price: 2500,
+      costPrice: 1200,
       isDefault: editingPage.offers.length === 0
     };
     setEditingPage({ ...editingPage, offers: [...editingPage.offers, newOffer] });
@@ -172,6 +186,88 @@ export const LandingPagesTab: React.FC<Props> = ({
   const handleThemePreset = (preset: LandingPageTheme) => {
     if (!editingPage) return;
     setEditingPage({ ...editingPage, theme: { ...preset } });
+  };
+
+  const handleAddVariantPreset = (preset: 'color' | 'size' | 'custom') => {
+    if (!editingPage) return;
+    const current = editingPage.variants || [];
+    const newVar: ProductVariant =
+      preset === 'color'
+        ? { id: 'var_' + Math.random().toString(36).substring(2, 7), name: 'اللون', options: ['أسود', 'أبيض', 'بني'] }
+        : preset === 'size'
+        ? { id: 'var_' + Math.random().toString(36).substring(2, 7), name: 'المقاس', options: ['M', 'L', 'XL'] }
+        : { id: 'var_' + Math.random().toString(36).substring(2, 7), name: 'الخيار', options: ['قياسي'] };
+    setEditingPage({ ...editingPage, variants: [...current, newVar] });
+  };
+
+  const handleUpdateVariantName = (idx: number, name: string) => {
+    if (!editingPage) return;
+    const next = (editingPage.variants || []).map((v, i) => (i === idx ? { ...v, name } : v));
+    setEditingPage({ ...editingPage, variants: next });
+  };
+
+  const handleRemoveVariant = (idx: number) => {
+    if (!editingPage) return;
+    setEditingPage({
+      ...editingPage,
+      variants: (editingPage.variants || []).filter((_, i) => i !== idx)
+    });
+  };
+
+  const handleAddVariantOption = (idx: number, varId: string) => {
+    if (!editingPage) return;
+    const draft = (variantOptionDrafts[varId] || '').trim();
+    if (!draft) return;
+    const tokens = draft
+      .split(/[،,]/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return;
+
+    const next = (editingPage.variants || []).map((v, i) => {
+      if (i !== idx) return v;
+      const merged = Array.from(new Set([...(v.options || []), ...tokens]));
+      return { ...v, options: merged };
+    });
+    setEditingPage({ ...editingPage, variants: next });
+    setVariantOptionDrafts(prev => ({ ...prev, [varId]: '' }));
+  };
+
+  const handleRemoveVariantOption = (varIdx: number, optIdx: number) => {
+    if (!editingPage) return;
+    const next = (editingPage.variants || []).map((v, i) =>
+      i === varIdx ? { ...v, options: v.options.filter((_, oi) => oi !== optIdx) } : v
+    );
+    setEditingPage({ ...editingPage, variants: next });
+  };
+
+  const handleAddReview = () => {
+    if (!editingPage) return;
+    const current = editingPage.reviews || [];
+    const sampleNames = ['أمين ب.', 'سارة م.', 'يوسف ق.', 'نهاد ل.', 'كريم د.'];
+    const newRev: LandingPageReview = {
+      id: 'rev_' + Math.random().toString(36).substring(2, 7),
+      author: sampleNames[current.length % sampleNames.length],
+      wilaya: 'الجزائر العاصمة',
+      rating: 5,
+      comment: 'منتج ممتاز وجودة عالية، التوصيل كان سريعاً والدفع عند الاستلام مريح جداً.',
+      createdAt: new Date().toISOString()
+    };
+    setEditingPage({ ...editingPage, reviews: [...current, newRev] });
+  };
+
+  const handleUpdateReview = (idx: number, field: keyof LandingPageReview, value: any) => {
+    if (!editingPage) return;
+    const next = (editingPage.reviews || []).map((r, i) => (i === idx ? { ...r, [field]: value } : r));
+    setEditingPage({ ...editingPage, reviews: next });
+  };
+
+  const handleRemoveReview = (idx: number) => {
+    if (!editingPage) return;
+    setEditingPage({
+      ...editingPage,
+      reviews: (editingPage.reviews || []).filter((_, i) => i !== idx)
+    });
   };
 
   const handleSubmitEditor = async (e: React.FormEvent) => {
@@ -193,8 +289,26 @@ export const LandingPagesTab: React.FC<Props> = ({
     }
 
     setIsSaving(true);
+    const cleanVariants = (editingPage.variants || [])
+      .map(v => ({
+        ...v,
+        name: v.name.trim(),
+        options: (v.options || []).map(o => o.trim()).filter(Boolean)
+      }))
+      .filter(v => v.name && v.options.length > 0);
+    const cleanReviews = (editingPage.reviews || [])
+      .map(r => ({
+        ...r,
+        author: r.author.trim() || 'زبون الكريم',
+        rating: Math.min(5, Math.max(1, Number(r.rating) || 5)),
+        comment: r.comment.trim()
+      }))
+      .filter(r => r.comment.length > 0);
+
     const ok = await onSaveLandingPage({
       ...editingPage,
+      variants: cleanVariants,
+      reviews: cleanReviews,
       galleryImages: editingPage.galleryImages.filter(Boolean)
     });
     setIsSaving(false);
@@ -484,7 +598,7 @@ export const LandingPagesTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">الكمية (مخزون)</label>
                         <input
@@ -497,7 +611,7 @@ export const LandingPagesTab: React.FC<Props> = ({
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">السعر (دج)</label>
+                        <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">سعر البيع (دج)</label>
                         <input
                           type="number"
                           min="0"
@@ -505,6 +619,25 @@ export const LandingPagesTab: React.FC<Props> = ({
                           value={offer.price}
                           onChange={e => handleOfferChange(idx, 'price', Math.max(0, Number(e.target.value) || 0))}
                           className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mb-0.5">
+                          سعر التكلفة للباقة (دج)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={offer.costPrice ?? ''}
+                          onChange={e =>
+                            handleOfferChange(
+                              idx,
+                              'costPrice',
+                              e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0)
+                            )
+                          }
+                          placeholder="لحساب الربح الصافي"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-950/30 text-xs font-mono font-bold"
                         />
                       </div>
                       <div>
@@ -531,9 +664,235 @@ export const LandingPagesTab: React.FC<Props> = ({
                         />
                       </div>
                     </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/60 text-[11px]">
+                      {offer.costPrice !== undefined && offer.costPrice > 0 ? (
+                        (() => {
+                          const grossMargin = offer.price - offer.costPrice;
+                          const marginPct = offer.price > 0 ? Math.round((grossMargin / offer.price) * 100) : 0;
+                          return (
+                            <span
+                              className={`font-bold tabular-nums ${
+                                grossMargin >= 0
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              هامش الربح الإجمالي للباقة: {formatDZD(grossMargin)} ({marginPct}%) — لا يظهر للزبون
+                            </span>
+                          );
+                        })()
+                      ) : (
+                        <span className="text-slate-400">
+                          أدخل سعر التكلفة الإجمالي لهذه الباقة لحساب الربح الصافي الحقيقي في نظرة عامة
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* 3b. Product Variants (Colors / Sizes) */}
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-emerald-600" />
+                    <span>متغيرات المنتج داخل الصفحة (الألوان / المقاسات)</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    تظهر كأزرار اختيار أنيقة في استمارة الطلب وتُرفق تلقائياً مع الطلب و Google Sheet.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAddVariantPreset('color')}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة ألوان</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddVariantPreset('size')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة مقاسات</span>
+                  </button>
+                </div>
+              </div>
+
+              {(editingPage.variants || []).length === 0 ? (
+                <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+                  لا توجد متغيرات مفعلة لهذه الصفحة (سيتم طلب الباقة مباشرة بدون لون أو مقاس).
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {(editingPage.variants || []).map((v, vIdx) => (
+                    <div
+                      key={v.id}
+                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-2.5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={v.name}
+                          onChange={e => handleUpdateVariantName(vIdx, e.target.value)}
+                          placeholder="اسم المتغير (مثال: اللون أو المقاس)"
+                          className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs font-bold"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveVariant(vIdx)}
+                          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                          title="حذف المتغير"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
+                        {v.options.map((opt, optIdx) => (
+                          <span
+                            key={`${opt}-${optIdx}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold"
+                          >
+                            <span>{opt}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveVariantOption(vIdx, optIdx)}
+                              className="text-slate-400 hover:text-rose-500 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={variantOptionDrafts[v.id] || ''}
+                          onChange={e =>
+                            setVariantOptionDrafts(prev => ({ ...prev, [v.id]: e.target.value }))
+                          }
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddVariantOption(vIdx, v.id);
+                            }
+                          }}
+                          placeholder="أضف خياراً (مثال: أحمر، أزرق أو XL) ثم اضغط إضافة"
+                          className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddVariantOption(vIdx, v.id)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold cursor-pointer"
+                        >
+                          إضافة
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 3c. Customer Reviews Manager */}
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-emerald-600" />
+                    <span>تقييمات وآراء الزبائن (Social Proof)</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    أضف تقييمات حقيقية لزيادة ثقة الزبائن ومعدل التحويل في هذه الصفحة.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddReview}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>إضافة تقييم</span>
+                </button>
+              </div>
+
+              {(editingPage.reviews || []).length === 0 ? (
+                <div className="p-3.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+                  لا توجد تقييمات مضافة لهذه الصفحة بعد.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {(editingPage.reviews || []).map((rev, rIdx) => (
+                    <div
+                      key={rev.id}
+                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-2.5"
+                    >
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                        <div className="sm:col-span-4">
+                          <input
+                            type="text"
+                            value={rev.author}
+                            onChange={e => handleUpdateReview(rIdx, 'author', e.target.value)}
+                            placeholder="اسم الزبون"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs font-bold"
+                          />
+                        </div>
+                        <div className="sm:col-span-4">
+                          <select
+                            value={rev.wilaya || 'الجزائر العاصمة'}
+                            onChange={e => handleUpdateReview(rIdx, 'wilaya', e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs"
+                          >
+                            {ALGERIA_WILAYAS.map(w => (
+                              <option key={w.id} value={w.nameAr}>
+                                {w.nameAr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <select
+                            value={rev.rating}
+                            onChange={e => handleUpdateReview(rIdx, 'rating', Number(e.target.value))}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs font-bold"
+                          >
+                            <option value={5}>★★★★★ (5/5)</option>
+                            <option value={4}>★★★★ (4/5)</option>
+                            <option value={3}>★★★ (3/5)</option>
+                            <option value={2}>★★ (2/5)</option>
+                            <option value={1}>★ (1/5)</option>
+                          </select>
+                        </div>
+                        <div className="sm:col-span-1 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveReview(rIdx)}
+                            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                            title="حذف التقييم"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        rows={2}
+                        value={rev.comment}
+                        onChange={e => handleUpdateReview(rIdx, 'comment', e.target.value)}
+                        placeholder="نص تعليق الزبون..."
+                        className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 4. Theme Palette Customizer */}
@@ -773,6 +1132,28 @@ export const LandingPagesTab: React.FC<Props> = ({
                     </div>
                   ))}
                 </div>
+
+                {(editingPage.variants || []).length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    {(editingPage.variants || []).slice(0, 2).map(v => (
+                      <div key={v.id} className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                        <span className="font-bold opacity-80">{v.name}:</span>
+                        {v.options.slice(0, 4).map((opt, idx) => (
+                          <span
+                            key={opt}
+                            className="px-2 py-0.5 rounded-md border font-bold"
+                            style={{
+                              borderColor: idx === 0 ? t.primaryColor : t.borderColor,
+                              backgroundColor: idx === 0 ? t.softTintColor : 'transparent'
+                            }}
+                          >
+                            {opt}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div
                   className="py-3 rounded-xl text-white font-bold text-xs text-center shadow"

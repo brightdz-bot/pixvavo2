@@ -60,6 +60,7 @@ export function trackTikTokPixelPage(
           n.type = 'text/javascript';
           n.async = true;
           n.src = `${r}?sdkid=${encodeURIComponent(e)}&lib=${t}`;
+          n.onerror = () => {};
           const s = d.getElementsByTagName('script')[0];
           if (s && s.parentNode) s.parentNode.insertBefore(n, s);
           else d.head.appendChild(n);
@@ -125,6 +126,7 @@ export function trackMetaPixelPage(
           const t = b.createElement(e) as HTMLScriptElement;
           t.async = true;
           t.src = v;
+          t.onerror = () => {};
           const s = b.getElementsByTagName(e)[0];
           if (s && s.parentNode) {
             s.parentNode.insertBefore(t, s);
@@ -397,193 +399,120 @@ export async function fetchOrderFromGoogleSheet(
 ): Promise<SheetTrackedOrder | null> {
   const cleanUrl = webhookUrl?.trim();
   const cleanId = orderNumber.trim();
-  if (!cleanUrl || !cleanId || typeof window === 'undefined' || typeof document === 'undefined') {
+  if (!cleanUrl || !cleanId || typeof fetch === 'undefined') {
     return null;
   }
 
-  return new Promise(resolve => {
-    let settled = false;
-    const cbName = '__dzSheetCb_' + Math.random().toString(36).slice(2, 10);
-    const script = document.createElement('script');
-
-    const cleanup = () => {
-      try {
-        delete (window as any)[cbName];
-      } catch {
-        (window as any)[cbName] = undefined;
-      }
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-    };
-
-    const timer = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        cleanup();
-        resolve(null);
-      }
-    }, 5500);
-
-    (window as any)[cbName] = (data: any) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      cleanup();
-
-      if (!data || data.status !== 'success') {
-        resolve(null);
-        return;
-      }
-
-      const rawTotal = String(data.total || '').replace(/[^\d.]/g, '');
-      const parsedTotal = parseFloat(rawTotal) || 0;
-      const fullName = String(data.fullName || '').trim();
-      const rawShippingType = String(data.shippingType || data.deliveryType || '').trim().toLowerCase();
-      const parsedDeliveryType: DeliveryType | undefined = rawShippingType
-        ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
-          ? 'stop'
-          : 'home'
-        : undefined;
-
-      resolve({
-        orderNumber: String(data.orderId || cleanId).trim(),
-        customerFirstName: fullName ? fullName.split(' ')[0] : 'الزبون الكريم',
-        bundleLabel: String(data.orderName || '').trim(),
-        wilayaName: String(data.wilaya || data.wilayaName || '').trim() || undefined,
-        commune: String(data.commune || '').trim() || undefined,
-        deliveryType: parsedDeliveryType,
-        status: mapSheetStatusToOrderStatus(data.orderStatus),
-        trackingCode: String(data.trackingCode || '').trim() || undefined,
-        total: parsedTotal,
-        sheetUpdatedAt: data.sheetUpdatedAt ? String(data.sheetUpdatedAt).trim() : undefined
-      });
-    };
-
-    try {
-      const targetUrl = new URL(cleanUrl);
-      targetUrl.searchParams.set('orderId', cleanId);
-      targetUrl.searchParams.set('callback', cbName);
-      script.src = targetUrl.toString();
-      script.async = true;
-      script.onerror = () => {
-        if (!settled) {
-          settled = true;
-          window.clearTimeout(timer);
-          cleanup();
-          resolve(null);
-        }
-      };
-      document.head.appendChild(script);
-    } catch {
-      window.clearTimeout(timer);
-      cleanup();
-      resolve(null);
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7000);
+    const res = await fetch('/api/integrations/google-sheet-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: cleanUrl, orderId: cleanId }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const data = payload?.data;
+    if (!data || data.status !== 'success') {
+      return null;
     }
-  });
+
+    const rawTotal = String(data.total || '').replace(/[^\d.]/g, '');
+    const parsedTotal = parseFloat(rawTotal) || 0;
+    const fullName = String(data.fullName || '').trim();
+    const rawShippingType = String(data.shippingType || data.deliveryType || '')
+      .trim()
+      .toLowerCase();
+    const parsedDeliveryType: DeliveryType | undefined = rawShippingType
+      ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
+        ? 'stop'
+        : 'home'
+      : undefined;
+
+    return {
+      orderNumber: String(data.orderId || cleanId).trim(),
+      customerFirstName: fullName ? fullName.split(' ')[0] : 'الزبون الكريم',
+      bundleLabel: String(data.orderName || '').trim(),
+      wilayaName: String(data.wilaya || data.wilayaName || '').trim() || undefined,
+      commune: String(data.commune || '').trim() || undefined,
+      deliveryType: parsedDeliveryType,
+      status: mapSheetStatusToOrderStatus(data.orderStatus),
+      trackingCode: String(data.trackingCode || '').trim() || undefined,
+      total: parsedTotal,
+      sheetUpdatedAt: data.sheetUpdatedAt ? String(data.sheetUpdatedAt).trim() : undefined
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchAllOrdersFromGoogleSheet(
   webhookUrl: string | undefined
 ): Promise<SheetOrderRow[] | null> {
   const cleanUrl = webhookUrl?.trim();
-  if (!cleanUrl || typeof window === 'undefined' || typeof document === 'undefined') {
+  if (!cleanUrl || typeof fetch === 'undefined') {
     return null;
   }
 
-  return new Promise(resolve => {
-    let settled = false;
-    const cbName = '__dzSheetListCb_' + Math.random().toString(36).slice(2, 10);
-    const script = document.createElement('script');
-
-    const cleanup = () => {
-      try {
-        delete (window as any)[cbName];
-      } catch {
-        (window as any)[cbName] = undefined;
-      }
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-    };
-
-    const timer = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        cleanup();
-        resolve(null);
-      }
-    }, 6500);
-
-    (window as any)[cbName] = (data: any) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      cleanup();
-
-      if (!data || data.status !== 'success' || !Array.isArray(data.orders)) {
-        resolve(null);
-        return;
-      }
-
-      const rows: SheetOrderRow[] = data.orders
-        .filter((r: any) => r && String(r.orderId || '').trim())
-        .map((r: any) => {
-          const rawShippingType = String(r.shippingType || r.deliveryType || '').trim().toLowerCase();
-          const parsedDeliveryType: DeliveryType | undefined = rawShippingType
-            ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
-              ? 'stop'
-              : 'home'
-            : undefined;
-          const shippingCost = Number(r.shippingCost) || 0;
-          const productPrice = Number(r.productPrice) || 0;
-          const discount = Number(r.discount) || 0;
-          const rawTotal = String(r.total ?? '').replace(/[^\d.]/g, '');
-          const parsedTotal = parseFloat(rawTotal) || Math.max(0, shippingCost + productPrice - discount);
-
-          return {
-            orderId: String(r.orderId).trim(),
-            fullName: String(r.fullName || '').trim(),
-            phone: normalizeSheetPhone(r.phone),
-            wilaya: String(r.wilaya || '').trim(),
-            commune: String(r.commune || '').trim(),
-            deliveryType: parsedDeliveryType,
-            orderName: String(r.orderName || '').trim(),
-            orderStatus: String(r.orderStatus || '').trim(),
-            status: mapSheetStatusToOrderStatus(r.orderStatus),
-            shippingCost,
-            productPrice,
-            discount,
-            total: parsedTotal,
-            trackingCode: String(r.trackingCode || '').trim(),
-            sheetUpdatedAt: r.sheetUpdatedAt ? String(r.sheetUpdatedAt).trim() : undefined
-          };
-        });
-
-      resolve(rows);
-    };
-
-    try {
-      const targetUrl = new URL(cleanUrl);
-      targetUrl.searchParams.set('action', 'list');
-      targetUrl.searchParams.set('callback', cbName);
-      script.src = targetUrl.toString();
-      script.async = true;
-      script.onerror = () => {
-        if (!settled) {
-          settled = true;
-          window.clearTimeout(timer);
-          cleanup();
-          resolve(null);
-        }
-      };
-      document.head.appendChild(script);
-    } catch {
-      window.clearTimeout(timer);
-      cleanup();
-      resolve(null);
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7500);
+    const res = await fetch('/api/integrations/google-sheet-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: cleanUrl, action: 'list' }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const data = payload?.data;
+    if (!data || data.status !== 'success' || !Array.isArray(data.orders)) {
+      return null;
     }
-  });
+
+    return data.orders
+      .filter((r: any) => r && String(r.orderId || '').trim())
+      .map((r: any) => {
+        const rawShippingType = String(r.shippingType || r.deliveryType || '')
+          .trim()
+          .toLowerCase();
+        const parsedDeliveryType: DeliveryType | undefined = rawShippingType
+          ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
+            ? 'stop'
+            : 'home'
+          : undefined;
+        const shippingCost = Number(r.shippingCost) || 0;
+        const productPrice = Number(r.productPrice) || 0;
+        const discount = Number(r.discount) || 0;
+        const rawTotal = String(r.total ?? '').replace(/[^\d.]/g, '');
+        const parsedTotal =
+          parseFloat(rawTotal) || Math.max(0, shippingCost + productPrice - discount);
+
+        return {
+          orderId: String(r.orderId).trim(),
+          fullName: String(r.fullName || '').trim(),
+          phone: normalizeSheetPhone(r.phone),
+          wilaya: String(r.wilaya || '').trim(),
+          commune: String(r.commune || '').trim(),
+          deliveryType: parsedDeliveryType,
+          orderName: String(r.orderName || '').trim(),
+          orderStatus: String(r.orderStatus || '').trim(),
+          status: mapSheetStatusToOrderStatus(r.orderStatus),
+          shippingCost,
+          productPrice,
+          discount,
+          total: parsedTotal,
+          trackingCode: String(r.trackingCode || '').trim(),
+          sheetUpdatedAt: r.sheetUpdatedAt ? String(r.sheetUpdatedAt).trim() : undefined
+        };
+      });
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeWhatsAppNumber(raw?: string): string {
@@ -593,6 +522,61 @@ export function normalizeWhatsAppNumber(raw?: string): string {
   if (digits.startsWith('213')) return digits;
   if (digits.startsWith('0')) return '213' + digits.slice(1);
   return digits;
+}
+
+export const DEFAULT_WHATSAPP_CONFIRM_TEMPLATE =
+  `السلام عليكم {customerName}،\n` +
+  `وصلتنا طلبيتك رقم {orderNumber} من متجر {storeName}.\n` +
+  `المنتج: {bundle}\n` +
+  `طريقة التوصيل: {deliveryType}\n` +
+  `تكلفة التوصيل: {shippingCost}\n` +
+  `المبلغ الإجمالي: {total} (الدفع عند الاستلام)\n` +
+  `العنوان: {wilaya} - {commune}\n` +
+  `أؤكد طلبيتي لإرسالها.`;
+
+export const DEFAULT_WHATSAPP_SHIPPING_TEMPLATE =
+  `مرحباً {customerName}،\n` +
+  `طلبيتك رقم {orderNumber} من متجر {storeName} خرجت مع شركة التوصيل وفي الطريق إليك.\n` +
+  `المنتج: {bundle}\n` +
+  `رمز التتبع لدى شركة التوصيل: {trackingCode}\n` +
+  `المبلغ المطلوب عند الاستلام: {total}\n` +
+  `شكراً على ثقتك بنا.`;
+
+export function renderWhatsAppTemplate(
+  template: string,
+  vars: Record<string, string | number | undefined>
+): string {
+  let text = String(template || '');
+  const map: Record<string, string> = {
+    customerName: String(vars.customerName ?? ''),
+    orderNumber: String(vars.orderNumber ?? ''),
+    storeName: String(vars.storeName ?? ''),
+    bundle: String(vars.bundle ?? ''),
+    deliveryType: String(vars.deliveryType ?? ''),
+    shippingCost: String(vars.shippingCost ?? ''),
+    total: String(vars.total ?? ''),
+    wilaya: String(vars.wilaya ?? ''),
+    commune: String(vars.commune ?? ''),
+    trackingCode: String(vars.trackingCode ?? ''),
+    storePhone: String(vars.storePhone ?? '')
+  };
+
+  Object.entries(map).forEach(([k, v]) => {
+    text = text.split(`{${k}}`).join(v);
+  });
+
+  // Clean up empty optional lines like "رمز التتبع: \n" when trackingCode is empty
+  return text
+    .split('\n')
+    .filter(line => {
+      const t = line.trim();
+      if (!map.trackingCode && (t.startsWith('رمز التتبع') && t.endsWith(':'))) return false;
+      if (!map.storePhone && (t.startsWith('لأي استفسار') && t.endsWith(':'))) return false;
+      return true;
+    })
+    .join('\n')
+    .replace(/\s+-\s*\n/g, '\n')
+    .trim();
 }
 
 export function buildOrderConfirmationWhatsAppUrl(
@@ -607,21 +591,37 @@ export function buildOrderConfirmationWhatsAppUrl(
     total: number;
     wilayaName: string;
     commune: string;
-  }
+  },
+  customTemplate?: string
 ): string {
   const phone = normalizeWhatsAppNumber(rawWhatsapp);
   const deliveryLabel = params.deliveryType === 'home' ? 'توصيل للمنزل' : 'مكتب الشحن Stop Desk';
   const displayPhone = phone.startsWith('213') ? '0' + phone.slice(3) : phone;
-  const msg =
-    `السلام ${params.customerName}،\n` +
-    `وصلتنا طلبيتك رقم ${params.orderNumber} من متجر ${storeName}.\n` +
-    `المنتج: ${params.bundleDetails}\n` +
-    `طريقة التوصيل: ${deliveryLabel}\n` +
-    `تكلفة التوصيل: ${formatDZD(params.shippingCost)}\n` +
-    `المبلغ الإجمالي: ${formatDZD(params.total)} (الدفع عند الاستلام)\n` +
-    `العنوان: ${params.wilayaName}${params.commune ? ' - ' + params.commune : ''}\n` +
-    `أؤكد طلبيتي لإرسالها.` +
-    (displayPhone ? `\nلأي استفسار: ${displayPhone}` : '');
+  const msg = customTemplate?.trim()
+    ? renderWhatsAppTemplate(customTemplate, {
+        customerName: params.customerName,
+        orderNumber: params.orderNumber,
+        storeName,
+        bundle: params.bundleDetails,
+        deliveryType: deliveryLabel,
+        shippingCost: formatDZD(params.shippingCost),
+        total: formatDZD(params.total),
+        wilaya: params.wilayaName,
+        commune: params.commune,
+        storePhone: displayPhone
+      })
+    : renderWhatsAppTemplate(DEFAULT_WHATSAPP_CONFIRM_TEMPLATE, {
+        customerName: params.customerName,
+        orderNumber: params.orderNumber,
+        storeName,
+        bundle: params.bundleDetails,
+        deliveryType: deliveryLabel,
+        shippingCost: formatDZD(params.shippingCost),
+        total: formatDZD(params.total),
+        wilaya: params.wilayaName,
+        commune: params.commune,
+        storePhone: displayPhone
+      }) + (displayPhone ? `\nلأي استفسار: ${displayPhone}` : '');
 
   const encoded = encodeURIComponent(msg);
   return phone ? `https://wa.me/${phone}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
@@ -637,18 +637,21 @@ export function buildOrderTrackingWhatsAppUrl(
     total: number;
     status: OrderStatus;
     trackingCode?: string;
-  }
+  },
+  customShippingTemplate?: string
 ): string {
   const phone = normalizeWhatsAppNumber(rawWhatsapp);
   let msg = '';
   if (params.status === 'shipping') {
-    msg =
-      `مرحباً ${params.customerName || 'الزبون الكريم'}،\n` +
-      `طلبيتك رقم ${params.orderNumber} من ${storeName} خرجت مع شركة التوصيل وفي الطريق إليك.\n` +
-      `المنتج: ${params.bundleDetails}\n` +
-      (params.trackingCode ? `رمز التتبع لدى شركة التوصيل: ${params.trackingCode}\n` : '') +
-      `المبلغ المطلوب عند الاستلام: ${formatDZD(params.total)}\n` +
-      `شكراً على ثقتك.`;
+    const tpl = customShippingTemplate?.trim() || DEFAULT_WHATSAPP_SHIPPING_TEMPLATE;
+    msg = renderWhatsAppTemplate(tpl, {
+      customerName: params.customerName || 'الزبون الكريم',
+      orderNumber: params.orderNumber,
+      storeName,
+      bundle: params.bundleDetails,
+      trackingCode: params.trackingCode || '',
+      total: formatDZD(params.total)
+    });
   } else {
     msg = `مرحباً ${storeName}، أود الاستفسار ومتابعة حالة طلبي رقم ${params.orderNumber}.`;
   }
@@ -824,11 +827,29 @@ export function buildAutoOrderTextMessage(
     total: number;
     wilayaName: string;
     commune?: string;
+    deliveryType?: DeliveryType;
+    shippingFee?: number;
     trackingCode?: string;
   },
-  kind: 'confirm' | 'shipping'
+  kind: 'confirm' | 'shipping',
+  customTemplate?: string
 ): string {
   const bundle = order.bundleLabel || 'المنتج';
+  const deliveryLabel = order.deliveryType === 'stop' ? 'مكتب الشحن Stop Desk' : 'توصيل للمنزل';
+  if (customTemplate?.trim()) {
+    return renderWhatsAppTemplate(customTemplate, {
+      customerName: order.customerName,
+      orderNumber: order.orderNumber,
+      storeName,
+      bundle,
+      deliveryType: deliveryLabel,
+      shippingCost: formatDZD(order.shippingFee || 0),
+      total: formatDZD(order.total),
+      wilaya: order.wilayaName,
+      commune: order.commune || '',
+      trackingCode: order.trackingCode || ''
+    });
+  }
   if (kind === 'shipping') {
     return (
       `مرحباً ${order.customerName}،\n` +
@@ -1000,3 +1021,148 @@ function onEdit(e) {
     sheet.getRange(row, 19).setValue(new Date().toISOString());
   }
 }`;
+
+export function normalizePhoneCanonical(raw?: string): string {
+  const digits = String(raw || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  let clean = digits;
+  if (clean.startsWith('00213')) clean = '0' + clean.slice(5);
+  else if (clean.startsWith('213') && clean.length >= 11) clean = '0' + clean.slice(3);
+  else if (clean.length === 9 && (clean.startsWith('5') || clean.startsWith('6') || clean.startsWith('7'))) {
+    clean = '0' + clean;
+  }
+  return clean;
+}
+
+function escapeCsvCell(val: unknown): string {
+  const str = String(val ?? '').replace(/\r?\n/g, ' ');
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+function escapeHtmlCell(val: unknown): string {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function triggerFileDownload(blob: Blob, filename: string): void {
+  if (typeof document === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function exportOrdersToCourierCsv(orders: Order[], filenamePrefix = 'orders-courier'): void {
+  const headers = [
+    'reference',
+    'nom_client',
+    'telephone',
+    'code_wilaya',
+    'wilaya',
+    'commune',
+    'adresse',
+    'produit',
+    'stop_desk',
+    'montant_cod',
+    'frais_livraison',
+    'remarque',
+    'statut',
+    'tracking',
+    'date'
+  ];
+
+  const rows = orders.map(o => [
+    o.orderNumber,
+    o.customerName,
+    normalizePhoneCanonical(o.customerPhone) || o.customerPhone,
+    o.wilayaId,
+    o.wilayaName,
+    o.commune || '',
+    o.address || `${o.wilayaName}${o.commune ? ' - ' + o.commune : ''}`,
+    o.bundleLabel || o.items.map(it => it.title).join(' + '),
+    o.deliveryType === 'stop' ? '1' : '0',
+    Math.round(o.total || 0),
+    Math.round(o.shippingFee || 0),
+    o.notes || '',
+    ORDER_STAGE_LABELS[o.status] || o.status,
+    o.trackingCode || '',
+    new Date(o.createdAt).toLocaleString('fr-DZ')
+  ]);
+
+  const csvContent =
+    '\uFEFF' +
+    [headers, ...rows].map(row => row.map(escapeCsvCell).join(',')).join('\r\n');
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const dateTag = new Date().toISOString().slice(0, 10);
+  triggerFileDownload(blob, `${filenamePrefix}-${dateTag}.csv`);
+}
+
+export function exportOrdersToExcel(orders: Order[], storeName = 'Store', filenamePrefix = 'orders-excel'): void {
+  const rowsHtml = orders
+    .map(
+      o => `<tr>
+        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.orderNumber)}</td>
+        <td>${escapeHtmlCell(o.customerName)}</td>
+        <td style="mso-number-format:'\\@'">${escapeHtmlCell(normalizePhoneCanonical(o.customerPhone) || o.customerPhone)}</td>
+        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.wilayaId)}</td>
+        <td>${escapeHtmlCell(o.wilayaName)}</td>
+        <td>${escapeHtmlCell(o.commune || '')}</td>
+        <td>${escapeHtmlCell(o.deliveryType === 'stop' ? 'Stop Desk' : 'للمنزل')}</td>
+        <td>${escapeHtmlCell(o.bundleLabel || o.items.map(it => it.title).join(' + '))}</td>
+        <td>${Math.round(o.subtotal || 0)}</td>
+        <td>${Math.round(o.shippingFee || 0)}</td>
+        <td>${Math.round(o.total || 0)}</td>
+        <td>${escapeHtmlCell(ORDER_STAGE_LABELS[o.status] || o.status)}</td>
+        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.trackingCode || '')}</td>
+        <td>${escapeHtmlCell(new Date(o.createdAt).toLocaleString('ar-DZ'))}</td>
+      </tr>`
+    )
+    .join('');
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8" />
+<style>
+  table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 12px; }
+  th { background-color: #059669; color: #ffffff; font-weight: bold; border: 1px solid #cbd5e1; padding: 8px; }
+  td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; }
+</style>
+</head>
+<body>
+  <table>
+    <thead>
+      <tr>
+        <th>رقم الطلب</th>
+        <th>اسم الزبون</th>
+        <th>الهاتف</th>
+        <th>كود الولاية</th>
+        <th>الولاية</th>
+        <th>البلدية</th>
+        <th>نوع التوصيل</th>
+        <th>المنتج والباقة</th>
+        <th>سعر المنتج</th>
+        <th>التوصيل</th>
+        <th>المجموع الكلي (COD)</th>
+        <th>الحالة</th>
+        <th>رمز التتبع</th>
+        <th>تاريخ الطلب — ${escapeHtmlCell(storeName)}</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</body>
+</html>`;
+
+  const blob = new Blob(['\uFEFF', html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const dateTag = new Date().toISOString().slice(0, 10);
+  triggerFileDownload(blob, `${filenamePrefix}-${dateTag}.xls`);
+}

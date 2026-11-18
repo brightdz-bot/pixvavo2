@@ -384,7 +384,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         apiConfig.whatsappProvider !== 'none' &&
         apiConfig.whatsappAutoSendOnShipping
       ) {
-        const waMsg = buildAutoOrderTextMessage(store.name, updatedOrder, 'shipping');
+        const waMsg = buildAutoOrderTextMessage(
+          store.name,
+          updatedOrder,
+          'shipping',
+          apiConfig.whatsappShippingTemplate
+        );
         const waRes = await sendWhatsAppViaApi(
           {
             storeId: store.id,
@@ -505,7 +510,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     const msg = buildAutoOrderTextMessage(
       store.name,
       order,
-      order.status === 'shipping' ? 'shipping' : 'confirm'
+      order.status === 'shipping' ? 'shipping' : 'confirm',
+      order.status === 'shipping'
+        ? apiConfig.whatsappShippingTemplate
+        : apiConfig.whatsappConfirmTemplate
     );
     const res = await sendWhatsAppViaApi(
       {
@@ -598,22 +606,198 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     await handleSaveApiConfig(cleared);
   };
 
-  const handleSaveSettings = async (updated: Store) => {
+  const handleSaveAdSpend = async (adSpendTotal: number, adSpendByPage: Record<string, number>) => {
+    if (!store) return;
+    const baseCfg = apiConfig || storage.createDefaultStoreApiConfig(store);
+    const nextCfg: StoreApiConfig = {
+      ...baseCfg,
+      adSpendTotal: Math.max(0, adSpendTotal),
+      adSpendByPage
+    };
+    const res = await storage.saveStoreApiConfig(nextCfg);
+    if (res.success) {
+      setApiConfig(nextCfg);
+      showToast('تم حفظ مصاريف الإعلانات وتحديث الأرباح الصافية');
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر حفظ مصاريف الإعلانات'));
+    }
+  };
+
+  const handleBulkUpdateStatus = async (orderIds: string[], newStatus: OrderStatus, note?: string) => {
+    if (!store?.id || orderIds.length === 0) return;
+    let successCount = 0;
+    for (const orderId of orderIds) {
+      const target = orders.find(o => o.id === orderId);
+      if (!target || target.status === newStatus) continue;
+      const res = await storage.updateOrderStatus(
+        orderId,
+        newStatus,
+        note || `تحديث جماعي للحالة (${ORDER_STAGE_LABELS[newStatus]})`
+      );
+      if (res.success) {
+        successCount += 1;
+        recentSitePushRef.current[target.orderNumber.toUpperCase()] = Date.now();
+        const lp = landingPages.find(p => p.id === target.landingPageId);
+        const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
+        updateOrderInGoogleSheet(webhook, {
+          orderId: target.orderNumber,
+          statusLabel: ORDER_STAGE_LABELS[newStatus],
+          trackingCode: target.trackingCode || ''
+        });
+      }
+    }
+    if (successCount > 0) {
+      const [updatedOrders, updatedPages] = await Promise.all([
+        storage.getOrders(store.id),
+        storage.getLandingPages(store.id)
+      ]);
+      setOrders(updatedOrders);
+      setLandingPages(updatedPages);
+      showToast(`تم تحديث حالة ${successCount} طلبات إلى "${ORDER_STAGE_LABELS[newStatus]}"`);
+    } else {
+      showToast('لم يتم تعديل أي طلب (الحالة مطابقة بالفعل)');
+    }
+  };
+
+  const handleBulkSendToCourier = async (ordersToSend: Order[]): Promise<void> => {
+    if (!store?.id || !apiConfig || apiConfig.courierProvider === 'none') {
+      showToast('يرجى تفعيل شركة التوصيل في "إعدادات الـ API" أولاً');
+      return;
+    }
+    const eligible = ordersToSend.filter(
+      o => !o.trackingCode && (o.status === 'new' || o.status === 'confirmed')
+    );
+    if (eligible.length === 0) {
+      showToast('الطلبات المحددة مرسلة بالفعل أو غير مؤهلة للشحن');
+      return;
+    }
+
+    let sent = 0;
+    let failed = 0;
+    for (const ord of eligible) {
+      setCourierBusyOrderId(ord.id);
+      const res = await createCourierParcel(ord, apiConfig);
+      const nextCfg = await storage.appendApiDiagnosticLog(store, {
+        id: `log_${Date.now()}_${ord.orderNumber}`,
+        timestamp: new Date().toISOString(),
+        service: 'courier',
+        action: 'bulk_create_parcel',
+        status: res.ok ? 'success' : 'error',
+        orderNumber: ord.orderNumber,
+        message: `إرسال جماعي #${ord.orderNumber}: ${res.message}`,
+        latencyMs: res.latencyMs
+      });
+      setApiConfig(nextCfg);
+
+      if (res.ok && res.trackingCode) {
+        const nextSt: OrderStatus = ord.status === 'new' ? 'confirmed' : ord.status;
+        const stRes = await storage.updateOrderStatus(
+          ord.id,
+          nextSt,
+          res.message,
+          res.trackingCode,
+          { provider: apiConfig.courierProvider, labelUrl: res.labelUrl }
+        );
+        if (stRes.success) {
+          sent += 1;
+          recentSitePushRef.current[ord.orderNumber.toUpperCase()] = Date.now();
+          const lp = landingPages.find(p => p.id === ord.landingPageId);
+          const webhook = lp?.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
+          updateOrderInGoogleSheet(webhook, {
+            orderId: ord.orderNumber,
+            statusLabel: ORDER_STAGE_LABELS[nextSt],
+            trackingCode: res.trackingCode
+          });
+        } else {
+          failed += 1;
+        }
+      } else {
+        failed += 1;
+      }
+    }
+
+    setCourierBusyOrderId(null);
+    const [updatedOrders, updatedPages] = await Promise.all([
+      storage.getOrders(store.id),
+      storage.getLandingPages(store.id)
+    ]);
+    setOrders(updatedOrders);
+    setLandingPages(updatedPages);
+    showToast(
+      failed === 0
+        ? `تم إرسال ${sent} طرود إلى ${COURIER_PROVIDER_INFO[apiConfig.courierProvider].name} بنجاح`
+        : `تم إرسال ${sent} طرود بنجاح، وتعذر إرسال ${failed} طلبات (راجع سجل التشخيص)`
+    );
+  };
+
+  const handleSaveAntiFraudConfig = async (
+    patch: Partial<
+      Pick<
+        StoreApiConfig,
+        | 'antiFraudEnabled'
+        | 'duplicateWindowHours'
+        | 'dailyMaxOrdersPerPhone'
+        | 'autoFlagReturnsThreshold'
+        | 'blacklistedPhones'
+      >
+    >,
+    successMsg = 'تم حفظ إعدادات الحماية من الطلبات الوهمية والمكررة'
+  ) => {
+    if (!store) return;
+    const baseCfg = apiConfig || storage.createDefaultStoreApiConfig(store);
+    const nextCfg: StoreApiConfig = { ...baseCfg, ...patch };
+    const res = await storage.saveStoreApiConfig(nextCfg);
+    if (res.success) {
+      setApiConfig(nextCfg);
+      showToast(successMsg);
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر حفظ إعدادات الحماية'));
+    }
+  };
+
+  const handleSaveSettings = async (
+    updated: Store,
+    apiExtras?: Pick<
+      StoreApiConfig,
+      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+    >
+  ) => {
     const res = await storage.saveStore(updated);
     if (res.success) {
-      if (apiConfig) {
-        const syncedCfg: StoreApiConfig = {
-          ...apiConfig,
-          metaPixelId: updated.defaultPixelId || apiConfig.metaPixelId,
-          googleSheetWebhook: updated.googleSheetWebhook || apiConfig.googleSheetWebhook
-        };
-        await storage.saveStoreApiConfig(syncedCfg);
-        setApiConfig(syncedCfg);
-      }
+      const baseCfg = apiConfig || storage.createDefaultStoreApiConfig(updated);
+      const syncedCfg: StoreApiConfig = {
+        ...baseCfg,
+        ...(apiExtras || {}),
+        metaPixelId: updated.defaultPixelId || baseCfg.metaPixelId,
+        googleSheetWebhook: updated.googleSheetWebhook || baseCfg.googleSheetWebhook
+      };
+      await storage.saveStoreApiConfig(syncedCfg);
+      setApiConfig(syncedCfg);
       await refreshCurrentStore();
       showToast('تم حفظ إعدادات المتجر بنجاح');
     } else {
       showToast('خطأ: ' + (res.error || 'تعذر حفظ الإعدادات'));
+    }
+  };
+
+  const handleSaveStoreExtras = async (
+    patch: Partial<
+      Pick<
+        StoreApiConfig,
+        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+      >
+    >,
+    successMsg = 'تم التحديث بنجاح'
+  ) => {
+    if (!store) return;
+    const baseCfg = apiConfig || storage.createDefaultStoreApiConfig(store);
+    const nextCfg: StoreApiConfig = { ...baseCfg, ...patch };
+    const res = await storage.saveStoreApiConfig(nextCfg);
+    if (res.success) {
+      setApiConfig(nextCfg);
+      showToast(successMsg);
+    } else {
+      showToast('خطأ: ' + (res.error || 'تعذر حفظ التعديلات'));
     }
   };
 
@@ -657,20 +841,6 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
               className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer"
             >
               تسجيل دخول المالك
-            </button>
-            <button
-              type="button"
-              onClick={() => enableDemoPreview(true)}
-              className="w-full py-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 font-bold text-xs cursor-pointer"
-            >
-              فتح لوحة المالك مباشرة (الوضع التجريبي)
-            </button>
-            <button
-              type="button"
-              onClick={() => onGoToStorefront()}
-              className="w-full py-2 text-center text-xs text-slate-500 hover:text-emerald-600 font-semibold cursor-pointer"
-            >
-              تصفح واجهة المتجر كزبون
             </button>
           </div>
         </div>
@@ -948,6 +1118,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   store={store}
                   orders={orders}
                   landingPages={landingPages}
+                  apiConfig={apiConfig}
+                  onSaveAdSpend={handleSaveAdSpend}
                   onSelectOrder={ord => {
                     setSelectedOrder(ord);
                     setActiveTab('orders');
@@ -975,6 +1147,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   apiConfig={apiConfig}
                   courierBusyOrderId={courierBusyOrderId}
                   onUpdateStatus={handleUpdateOrderStatus}
+                  onBulkUpdateStatus={handleBulkUpdateStatus}
+                  onBulkSendToCourier={handleBulkSendToCourier}
+                  onSaveAntiFraudConfig={handleSaveAntiFraudConfig}
                   onUpdateOrderDetails={handleUpdateOrderDetails}
                   onSendOrderToCourier={handleSendOrderToCourier}
                   onPullCourierStatus={handlePullCourierStatus}
@@ -997,7 +1172,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
               )}
 
               {activeTab === 'settings' && (
-                <SettingsTab store={store} onSaveSettings={handleSaveSettings} />
+                <SettingsTab
+                  store={store}
+                  apiConfig={apiConfig}
+                  onSaveSettings={handleSaveSettings}
+                  onSaveStoreExtras={handleSaveStoreExtras}
+                />
               )}
             </>
           )}

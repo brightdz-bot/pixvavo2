@@ -35,7 +35,10 @@ import {
   MessageCircle,
   X,
   ImageOff,
-  Pencil
+  Pencil,
+  Tag,
+  TicketPercent,
+  MapPin
 } from 'lucide-react';
 
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
@@ -84,6 +87,13 @@ export const LandingPageView: React.FC<Props> = ({
   const [activeImage, setActiveImage] = useState<string>(page.mainImage || allGallery[0] || '');
   const [imgError, setImgError] = useState(false);
   const [selectedOfferId, setSelectedOfferId] = useState<string>(defaultOffer?.id || '');
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    (page.variants || []).forEach(v => {
+      if (v.options && v.options.length > 0) init[v.name] = v.options[0];
+    });
+    return init;
+  });
 
   // Checkout state
   const [fullName, setFullName] = useState('');
@@ -93,6 +103,25 @@ export const LandingPageView: React.FC<Props> = ({
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('home');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Promo Coupon State
+  const [promoInput, setPromoInput] = useState('');
+  const [appliedPromo, setAppliedPromo] = useState<{
+    code: string;
+    type: 'fixed' | 'percent';
+    value: number;
+    minOrder?: number;
+    discount: number;
+    reason: string;
+  } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [isValidatingPromo, setIsValidatingPromo] = useState(false);
+
+  // Custom Store WhatsApp Templates
+  const [waTemplates, setWaTemplates] = useState<{ confirm: string; shipping: string }>({
+    confirm: '',
+    shipping: ''
+  });
 
   // Modals & Tracking Mode
   const [isTrackingMode, setIsTrackingMode] = useState(false);
@@ -144,6 +173,14 @@ export const LandingPageView: React.FC<Props> = ({
     setImgError(false);
     const def = page.offers.find(o => o.isDefault) || page.offers[0];
     setSelectedOfferId(def?.id || '');
+    const initVars: Record<string, string> = {};
+    (page.variants || []).forEach(v => {
+      if (v.options && v.options.length > 0) initVars[v.name] = v.options[0];
+    });
+    setSelectedVariants(initVars);
+    setAppliedPromo(null);
+    setPromoInput('');
+    setPromoError(null);
     setIsTrackingMode(false);
     setSuccessModalData(null);
     setFormError(null);
@@ -155,6 +192,31 @@ export const LandingPageView: React.FC<Props> = ({
       tiktokPixelId: effectiveTiktokPixelId
     });
   }, [page.id]);
+
+  // Fetch non-secret custom WhatsApp templates for store
+  useEffect(() => {
+    let active = true;
+    const localCfg = storage.getLocalStoreApiConfig(store.id);
+    if (localCfg) {
+      setWaTemplates({
+        confirm: localCfg.whatsappConfirmTemplate || '',
+        shipping: localCfg.whatsappShippingTemplate || ''
+      });
+    }
+    fetch(`/api/store/public-settings?storeId=${encodeURIComponent(store.id)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (!active || !data?.ok) return;
+        setWaTemplates(prev => ({
+          confirm: data.whatsappConfirmTemplate || prev.confirm,
+          shipping: data.whatsappShippingTemplate || prev.shipping
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [store.id]);
 
   // Sync commune list when wilaya changes
   const selectedWilaya = useMemo(
@@ -190,10 +252,132 @@ export const LandingPageView: React.FC<Props> = ({
   };
 
   const productPrice = selectedOffer?.price || 0;
-  const homeFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'home', productPrice);
-  const stopFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'stop', productPrice);
+  const activeDiscountAmount = useMemo(() => {
+    if (!appliedPromo) return 0;
+    if (appliedPromo.minOrder && productPrice < appliedPromo.minOrder) return 0;
+    const raw =
+      appliedPromo.type === 'percent'
+        ? Math.round((productPrice * Math.min(100, Math.max(0, appliedPromo.value))) / 100)
+        : Math.max(0, appliedPromo.value);
+    return Math.min(productPrice, raw);
+  }, [appliedPromo, productPrice]);
+
+  const discountedProductPrice = Math.max(0, productPrice - activeDiscountAmount);
+  const homeFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'home', discountedProductPrice);
+  const stopFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'stop', discountedProductPrice);
   const shippingCost = deliveryType === 'stop' ? stopFee : homeFee;
-  const grandTotal = productPrice + shippingCost;
+  const grandTotal = discountedProductPrice + shippingCost;
+
+  const variantSummary = useMemo(() => {
+    const vars = page.variants || [];
+    if (vars.length === 0) return '';
+    return vars
+      .map(v => {
+        const picked = selectedVariants[v.name] || v.options?.[0] || '';
+        return picked ? `${v.name}: ${picked}` : '';
+      })
+      .filter(Boolean)
+      .join(' • ');
+  }, [page.variants, selectedVariants]);
+
+  const handleApplyPromo = async () => {
+    setPromoError(null);
+    const clean = promoInput.trim().toUpperCase();
+    if (!clean) {
+      setPromoError('يرجى إدخال رمز الكوبون أولاً');
+      return;
+    }
+
+    const validateLocally = () => {
+      const localCfg = storage.getLocalStoreApiConfig(store.id);
+      const list = localCfg?.promoCoupons || [];
+      const found = list.find(c => String(c.code || '').trim().toUpperCase() === clean);
+      if (!found) {
+        return { valid: false, message: 'كود الخصم غير صحيح أو منتهي الصلاحية' };
+      }
+      if (!found.isActive) {
+        return { valid: false, message: 'هذا الكوبون متوقف حالياً' };
+      }
+      if (found.minOrder && found.minOrder > 0 && productPrice < found.minOrder) {
+        return {
+          valid: false,
+          message: `هذا الكوبون يتطلب حداً أدنى للطلب قدره ${formatDZD(found.minOrder)}`
+        };
+      }
+      const discount =
+        found.type === 'percent'
+          ? Math.min(productPrice, Math.round((productPrice * found.value) / 100))
+          : Math.min(productPrice, found.value);
+      return {
+        valid: true,
+        code: found.code,
+        type: found.type,
+        value: found.value,
+        minOrder: found.minOrder || 0,
+        discount,
+        reason:
+          found.type === 'percent'
+            ? `كوبون ${found.code} (${found.value}%)`
+            : `كوبون ${found.code} (-${found.value} دج)`
+      };
+    };
+
+    setIsValidatingPromo(true);
+    try {
+      const res = await fetch('/api/store/validate-promo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId: store.id, code: clean, subtotal: productPrice })
+      });
+      const data = await res.json();
+      if (data?.valid) {
+        setAppliedPromo({
+          code: data.code,
+          type: data.type,
+          value: Number(data.value) || 0,
+          discount: Number(data.discount) || 0,
+          reason: data.reason || `كوبون ${data.code}`
+        });
+        setIsValidatingPromo(false);
+        return;
+      }
+      if (data?.notFoundOnServer) {
+        const localRes = validateLocally();
+        if (localRes.valid && localRes.code) {
+          setAppliedPromo({
+            code: localRes.code,
+            type: localRes.type!,
+            value: localRes.value!,
+            minOrder: localRes.minOrder,
+            discount: localRes.discount!,
+            reason: localRes.reason!
+          });
+          setIsValidatingPromo(false);
+          return;
+        }
+        setPromoError(localRes.message || 'كود الخصم غير صحيح');
+        setIsValidatingPromo(false);
+        return;
+      }
+      setPromoError(data?.message || 'كود الخصم غير صالح');
+    } catch {
+      const localRes = validateLocally();
+      if (localRes.valid && localRes.code) {
+        setAppliedPromo({
+          code: localRes.code,
+          type: localRes.type!,
+          value: localRes.value!,
+          minOrder: localRes.minOrder,
+          discount: localRes.discount!,
+          reason: localRes.reason!
+        });
+      } else {
+        setPromoError(localRes.message || 'تعذر التحقق من الكوبون حالياً');
+      }
+    } finally {
+      setIsValidatingPromo(false);
+    }
+  };
 
   const scrollToElement = (id: string) => {
     const el = document.getElementById(id);
@@ -255,7 +439,11 @@ export const LandingPageView: React.FC<Props> = ({
       wilayaName: selectedWilaya.nameAr,
       commune: selectedCommune,
       deliveryType,
-      address: `${selectedWilaya.nameAr} - ${selectedCommune}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`
+      address: `${selectedWilaya.nameAr} - ${selectedCommune}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`,
+      variantLabel: variantSummary || undefined,
+      promoCode: appliedPromo?.code,
+      discount: activeDiscountAmount,
+      discountReason: appliedPromo?.reason
     });
     setIsSubmitting(false);
 
@@ -265,9 +453,10 @@ export const LandingPageView: React.FC<Props> = ({
     }
 
     const orderNum = res.order.orderNumber;
-    const bundleDetails = `${selectedOffer.title} (الكمية: ${selectedOffer.quantity})`;
+    const bundleDetails = `${selectedOffer.title}${variantSummary ? ` (${variantSummary})` : ''} (الكمية: ${selectedOffer.quantity})`;
+    const finalTotalDisplay = activeDiscountAmount > 0 ? grandTotal : res.order.total;
 
-    trackMetaPixelPurchase(effectivePixelId, bundleDetails, res.order.total, orderNum, {
+    trackMetaPixelPurchase(effectivePixelId, bundleDetails, finalTotalDisplay, orderNum, {
       storeId: store.id,
       tiktokPixelId: effectiveTiktokPixelId,
       customerPhone: cleanPhone,
@@ -282,7 +471,7 @@ export const LandingPageView: React.FC<Props> = ({
       orderNumber: orderNum,
       customerName: fullName.trim(),
       bundleDetails,
-      total: res.order.total,
+      total: finalTotalDisplay,
       wilayaName: selectedWilaya.nameAr,
       commune: selectedCommune
     });
@@ -297,23 +486,28 @@ export const LandingPageView: React.FC<Props> = ({
       orderDetails: bundleDetails,
       statusLabel: 'قيد التأكيد',
       shippingCost: res.order.shippingFee,
-      productPrice: res.order.subtotal,
-      totalPrice: res.order.total,
-      discount: 0,
-      discountReason: '',
+      productPrice,
+      totalPrice: finalTotalDisplay,
+      discount: activeDiscountAmount,
+      discountReason: appliedPromo?.reason || '',
       trackingCode: ''
     });
 
-    const whatsappUrl = buildOrderConfirmationWhatsAppUrl(effectiveWhatsapp, store.name, {
-      orderNumber: orderNum,
-      customerName: fullName.trim(),
-      bundleDetails,
-      deliveryType,
-      shippingCost: res.order.shippingFee,
-      total: res.order.total,
-      wilayaName: selectedWilaya.nameAr,
-      commune: selectedCommune
-    });
+    const whatsappUrl = buildOrderConfirmationWhatsAppUrl(
+      effectiveWhatsapp,
+      store.name,
+      {
+        orderNumber: orderNum,
+        customerName: fullName.trim(),
+        bundleDetails,
+        deliveryType,
+        shippingCost: res.order.shippingFee,
+        total: finalTotalDisplay,
+        wilayaName: selectedWilaya.nameAr,
+        commune: selectedCommune
+      },
+      waTemplates.confirm
+    );
 
     setSuccessModalData({
       orderNumber: orderNum,
@@ -328,7 +522,7 @@ export const LandingPageView: React.FC<Props> = ({
         commune: selectedCommune,
         deliveryType,
         bundleLabel: bundleDetails,
-        total: res.order.total,
+        total: finalTotalDisplay,
         status: 'new'
       }
     });
@@ -943,6 +1137,75 @@ export const LandingPageView: React.FC<Props> = ({
         </div>
       </section>
 
+      {/* Customer Reviews Section (if configured on landing page) */}
+      {(page.reviews || []).length > 0 && (
+        <section
+          className="py-10 border-t"
+          style={{
+            backgroundColor: theme.bgColor,
+            borderColor: theme.borderColor
+          }}
+        >
+          <div className="max-w-6xl mx-auto px-4 space-y-6">
+            <div className="text-center space-y-1.5">
+              <div className="inline-flex items-center gap-1 text-amber-400">
+                {[0, 1, 2, 3, 4].map(i => (
+                  <Star key={i} className="w-4 h-4 fill-amber-400" />
+                ))}
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black">تقييمات وآراء زبائننا الكرام</h2>
+              <p className={`text-xs ${mutedTextClass}`}>
+                تجارب حقيقية لزبائن طلبوا واستلموا هذا المنتج عبر ولايات الوطن
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {(page.reviews || []).map(rev => (
+                <div
+                  key={rev.id}
+                  className="p-5 rounded-2xl border shadow-sm space-y-3"
+                  style={{
+                    backgroundColor: theme.surfaceColor,
+                    borderColor: theme.borderColor
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center font-black text-xs text-white shrink-0"
+                        style={{ backgroundColor: theme.primaryColor }}
+                      >
+                        {rev.author.slice(0, 1)}
+                      </div>
+                      <div>
+                        <div className="font-bold text-xs">{rev.author}</div>
+                        {rev.wilaya && (
+                          <div className={`text-[10px] flex items-center gap-0.5 ${mutedTextClass}`}>
+                            <MapPin className="w-3 h-3" />
+                            <span>{rev.wilaya}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-0.5 text-amber-400 shrink-0">
+                      {Array.from({ length: 5 }).map((_, idx) => (
+                        <Star
+                          key={idx}
+                          className={`w-3.5 h-3.5 ${
+                            idx < rev.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs leading-relaxed opacity-90">{rev.comment}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Order Form & Tracking Section */}
       <section
         id="order-form"
@@ -1068,6 +1331,50 @@ export const LandingPageView: React.FC<Props> = ({
                       ))}
                     </select>
                   </div>
+
+                  {/* Product Variants Selector (Colors / Sizes) */}
+                  {(page.variants || []).length > 0 && (
+                    <div className="space-y-3">
+                      {(page.variants || []).map(v => {
+                        const activeOpt = selectedVariants[v.name] || v.options?.[0] || '';
+                        return (
+                          <div key={v.id} className="space-y-1.5">
+                            <label className="block text-xs font-bold flex items-center gap-1.5">
+                              <Tag className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
+                              <span>
+                                {v.name}:{' '}
+                                <span style={{ color: theme.primaryColor }}>{activeOpt}</span>
+                              </span>
+                            </label>
+                            <div className="flex flex-wrap gap-2">
+                              {v.options.map(opt => {
+                                const isPicked = activeOpt === opt;
+                                return (
+                                  <button
+                                    key={opt}
+                                    type="button"
+                                    onClick={() =>
+                                      setSelectedVariants(prev => ({ ...prev, [v.name]: opt }))
+                                    }
+                                    className="px-3.5 py-2 rounded-xl border-2 text-xs font-bold transition-all cursor-pointer"
+                                    style={{
+                                      borderColor: isPicked ? theme.primaryColor : theme.borderColor,
+                                      backgroundColor: isPicked
+                                        ? theme.softTintColor
+                                        : theme.surfaceColor,
+                                      color: isPicked ? theme.primaryColor : theme.textColor
+                                    }}
+                                  >
+                                    {opt}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-bold mb-1">
@@ -1202,6 +1509,58 @@ export const LandingPageView: React.FC<Props> = ({
                     </div>
                   </div>
 
+                  {/* Promo Code / Coupon Field */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold flex items-center gap-1.5">
+                      <TicketPercent className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
+                      <span>هل لديك كوبون خصم؟ (اختياري)</span>
+                    </label>
+                    {appliedPromo ? (
+                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            تم تطبيق {appliedPromo.reason} — خصم {formatDZD(activeDiscountAmount)}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAppliedPromo(null);
+                            setPromoInput('');
+                            setPromoError(null);
+                          }}
+                          className="text-rose-600 hover:underline text-[11px] font-bold cursor-pointer"
+                        >
+                          إزالة
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          dir="ltr"
+                          value={promoInput}
+                          onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                          placeholder="أدخل رمز الكوبون (مثال: SAVE10)"
+                          className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-mono font-bold uppercase focus:outline-none ${subtleInputBg}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleApplyPromo}
+                          disabled={isValidatingPromo}
+                          className="px-4 py-2.5 rounded-xl text-white text-xs font-bold shrink-0 cursor-pointer disabled:opacity-60"
+                          style={{ backgroundColor: theme.primaryColor }}
+                        >
+                          {isValidatingPromo ? 'تحقق...' : 'تطبيق'}
+                        </button>
+                      </div>
+                    )}
+                    {promoError && (
+                      <p className="text-[11px] font-bold text-rose-600">{promoError}</p>
+                    )}
+                  </div>
+
                   {/* Summary */}
                   <div
                     className="p-4 rounded-xl border space-y-2 text-xs sm:text-sm tabular-nums"
@@ -1225,6 +1584,12 @@ export const LandingPageView: React.FC<Props> = ({
                         </motion.span>
                       </AnimatePresence>
                     </div>
+                    {activeDiscountAmount > 0 && appliedPromo && (
+                      <div className="flex justify-between text-emerald-600 font-bold">
+                        <span>الخصم ({appliedPromo.code}):</span>
+                        <span>- {formatDZD(activeDiscountAmount)}</span>
+                      </div>
+                    )}
                     <div className={`flex justify-between ${mutedTextClass}`}>
                       <span>مصاريف التوصيل ({selectedWilaya.nameAr}):</span>
                       <AnimatePresence mode="popLayout" initial={false}>
@@ -1636,14 +2001,19 @@ export const LandingPageView: React.FC<Props> = ({
                     whileHover={{ y: -1.5 }}
                     whileTap={{ scale: 0.985 }}
                     transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
-                    href={buildOrderTrackingWhatsAppUrl(effectiveWhatsapp, store.name, {
-                      orderNumber: trackedOrder.orderNumber,
-                      customerName: trackedOrder.customerFirstName,
-                      bundleDetails: trackedOrder.bundleLabel,
-                      total: trackedOrder.total,
-                      status: trackedOrder.status,
-                      trackingCode: trackedOrder.trackingCode
-                    })}
+                    href={buildOrderTrackingWhatsAppUrl(
+                      effectiveWhatsapp,
+                      store.name,
+                      {
+                        orderNumber: trackedOrder.orderNumber,
+                        customerName: trackedOrder.customerFirstName,
+                        bundleDetails: trackedOrder.bundleLabel,
+                        total: trackedOrder.total,
+                        status: trackedOrder.status,
+                        trackingCode: trackedOrder.trackingCode
+                      },
+                      waTemplates.shipping
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="w-full py-3 bg-[#25D366] hover:bg-emerald-600 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-md"

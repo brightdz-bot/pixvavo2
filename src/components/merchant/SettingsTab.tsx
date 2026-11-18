@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
-import { Store, WilayaRate } from '../../types';
-import { ALGERIA_WILAYAS } from '../../data/wilayas';
+import React, { useState, useEffect } from 'react';
+import { Store, WilayaRate, StoreApiConfig, PromoCoupon } from '../../types';
+import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
+import {
+  GOOGLE_APPS_SCRIPT_TEMPLATE,
+  DEFAULT_WHATSAPP_CONFIRM_TEMPLATE,
+  DEFAULT_WHATSAPP_SHIPPING_TEMPLATE
+} from '../../services/integrations';
 import {
   Palette,
   Truck,
@@ -8,12 +13,38 @@ import {
   Save,
   CheckCircle2,
   Share2,
-  Megaphone
+  Megaphone,
+  Code2,
+  Copy,
+  Check,
+  X,
+  TicketPercent,
+  Plus,
+  Trash2,
+  MessageSquareText,
+  RotateCcw,
+  Power
 } from 'lucide-react';
 
 interface Props {
   store: Store;
-  onSaveSettings: (updatedStore: Store) => void;
+  apiConfig?: StoreApiConfig | null;
+  onSaveSettings: (
+    updatedStore: Store,
+    apiExtras?: Pick<
+      StoreApiConfig,
+      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+    >
+  ) => void;
+  onSaveStoreExtras?: (
+    patch: Partial<
+      Pick<
+        StoreApiConfig,
+        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate'
+      >
+    >,
+    successMsg?: string
+  ) => Promise<void> | void;
 }
 
 const BRAND_PALETTES = [
@@ -25,7 +56,26 @@ const BRAND_PALETTES = [
   { name: 'أسود كلاسيكي', hex: '#0f172a' }
 ];
 
-export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
+const TEMPLATE_VARIABLES = [
+  { key: '{customerName}', label: 'اسم الزبون' },
+  { key: '{orderNumber}', label: 'رقم الطلب' },
+  { key: '{storeName}', label: 'اسم المتجر' },
+  { key: '{bundle}', label: 'المنتج / الباقة' },
+  { key: '{total}', label: 'المجموع' },
+  { key: '{wilaya}', label: 'الولاية' },
+  { key: '{commune}', label: 'البلدية' },
+  { key: '{deliveryType}', label: 'طريقة التوصيل' },
+  { key: '{shippingCost}', label: 'تكلفة الشحن' },
+  { key: '{trackingCode}', label: 'رمز التتبع' },
+  { key: '{storePhone}', label: 'هاتف المتجر' }
+];
+
+export const SettingsTab: React.FC<Props> = ({
+  store,
+  apiConfig,
+  onSaveSettings,
+  onSaveStoreExtras
+}) => {
   const [name, setName] = useState(store.name);
   const [description, setDescription] = useState(store.description || '');
   const [announcementText, setAnnouncementText] = useState(
@@ -44,6 +94,37 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
   );
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Apps Script Code Modal
+  const [scriptModalOpen, setScriptModalOpen] = useState(false);
+  const [copiedScript, setCopiedScript] = useState(false);
+
+  // Promo Coupons
+  const [promoCoupons, setPromoCoupons] = useState<PromoCoupon[]>(
+    apiConfig?.promoCoupons || []
+  );
+  const [newCouponCode, setNewCouponCode] = useState('');
+  const [newCouponType, setNewCouponType] = useState<'fixed' | 'percent'>('fixed');
+  const [newCouponValue, setNewCouponValue] = useState<string>('300');
+  const [newCouponMinOrder, setNewCouponMinOrder] = useState<string>('0');
+  const [couponError, setCouponError] = useState<string | null>(null);
+
+  // Custom WhatsApp Message Templates
+  const [whatsappConfirmTemplate, setWhatsappConfirmTemplate] = useState<string>(
+    apiConfig?.whatsappConfirmTemplate || ''
+  );
+  const [whatsappShippingTemplate, setWhatsappShippingTemplate] = useState<string>(
+    apiConfig?.whatsappShippingTemplate || ''
+  );
+  const [activeTemplateField, setActiveTemplateField] = useState<'confirm' | 'shipping'>('confirm');
+
+  useEffect(() => {
+    if (apiConfig) {
+      setPromoCoupons(apiConfig.promoCoupons || []);
+      setWhatsappConfirmTemplate(apiConfig.whatsappConfirmTemplate || '');
+      setWhatsappShippingTemplate(apiConfig.whatsappShippingTemplate || '');
+    }
+  }, [apiConfig?.storeId, apiConfig?.updatedAt]);
+
   const handleWilayaRateChange = (wilayaId: string, field: 'home' | 'stop', fee: number) => {
     const base = ALGERIA_WILAYAS.find(w => w.id === wilayaId);
     setCustomRates(prev => {
@@ -59,6 +140,84 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
         }
       };
     });
+  };
+
+  const handleCopyAppsScript = async () => {
+    try {
+      await navigator.clipboard?.writeText(GOOGLE_APPS_SCRIPT_TEMPLATE);
+      setCopiedScript(true);
+      setTimeout(() => setCopiedScript(false), 2500);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const handleAddCoupon = async () => {
+    setCouponError(null);
+    const cleanCode = newCouponCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    const numericVal = Math.max(0, Number(newCouponValue) || 0);
+    const minOrd = Math.max(0, Number(newCouponMinOrder) || 0);
+
+    if (cleanCode.length < 3) {
+      setCouponError('يرجى إدخال رمز كوبون صحيح (3 أحرف إنجليزية أو أرقام على الأقل، مثال: SAVE10)');
+      return;
+    }
+    if (numericVal <= 0) {
+      setCouponError('يرجى إدخال قيمة خصم أكبر من 0');
+      return;
+    }
+    if (newCouponType === 'percent' && numericVal > 95) {
+      setCouponError('نسبة الخصم المئوية لا يمكن أن تتجاوز 95%');
+      return;
+    }
+    if (promoCoupons.some(c => c.code.toUpperCase() === cleanCode)) {
+      setCouponError('هذا الكود موجود بالفعل، اختر رمزاً آخر');
+      return;
+    }
+
+    const added: PromoCoupon = {
+      id: 'cpn_' + Math.random().toString(36).substring(2, 8),
+      code: cleanCode,
+      type: newCouponType,
+      value: numericVal,
+      minOrder: minOrd,
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
+    const nextList = [added, ...promoCoupons];
+    setPromoCoupons(nextList);
+    setNewCouponCode('');
+    if (onSaveStoreExtras) {
+      await onSaveStoreExtras({ promoCoupons: nextList }, `تم تفعيل كوبون الخصم "${cleanCode}"`);
+    }
+  };
+
+  const handleToggleCoupon = async (couponId: string) => {
+    const nextList = promoCoupons.map(c =>
+      c.id === couponId ? { ...c, isActive: !c.isActive } : c
+    );
+    setPromoCoupons(nextList);
+    if (onSaveStoreExtras) {
+      await onSaveStoreExtras({ promoCoupons: nextList }, 'تم تحديث حالة الكوبون');
+    }
+  };
+
+  const handleDeleteCoupon = async (couponId: string) => {
+    const nextList = promoCoupons.filter(c => c.id !== couponId);
+    setPromoCoupons(nextList);
+    if (onSaveStoreExtras) {
+      await onSaveStoreExtras({ promoCoupons: nextList }, 'تم حذف الكوبون');
+    }
+  };
+
+  const insertTemplateVar = (token: string) => {
+    if (activeTemplateField === 'confirm') {
+      const base = whatsappConfirmTemplate || DEFAULT_WHATSAPP_CONFIRM_TEMPLATE;
+      setWhatsappConfirmTemplate(`${base}${base.endsWith('\n') || !base ? '' : ' '}${token}`);
+    } else {
+      const base = whatsappShippingTemplate || DEFAULT_WHATSAPP_SHIPPING_TEMPLATE;
+      setWhatsappShippingTemplate(`${base}${base.endsWith('\n') || !base ? '' : ' '}${token}`);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -77,7 +236,11 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
       customWilayaRates: customRates,
       updatedAt: new Date().toISOString()
     };
-    onSaveSettings(updated);
+    onSaveSettings(updated, {
+      promoCoupons,
+      whatsappConfirmTemplate: whatsappConfirmTemplate.trim(),
+      whatsappShippingTemplate: whatsappShippingTemplate.trim()
+    });
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };
@@ -89,7 +252,7 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
           إعدادات المتجر والتكاملات وأسعار التوصيل
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          اضبط هوية متجرك، الإعدادات الافتراضية لواتساب وميتا بيكسل و Google Sheets، وأسعار التوصيل للمنزل ومكتب الشحن لكل ولاية
+          اضبط هوية متجرك، كود Google Apps Script، كوبونات الخصم، نصوص رسائل الواتساب التلقائية، وأسعار التوصيل لكل ولاية
         </p>
       </div>
 
@@ -157,15 +320,28 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
           </div>
         </div>
 
-        {/* Default Integrations */}
+        {/* Default Integrations + Embedded Google Apps Script Button */}
         <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-          <h3 className="text-sm font-bold flex items-center gap-2">
-            <Share2 className="w-4 h-4 text-emerald-600" />
-            <span>الإعدادات الافتراضية للتكاملات (WhatsApp · Meta Pixel · Google Sheets)</span>
-          </h3>
-          <p className="text-[11px] text-slate-500">
-            تُطبق تلقائياً على أي صفحة هبوط لا تحدد لنفسها قيماً خاصة.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Share2 className="w-4 h-4 text-emerald-600" />
+                <span>الإعدادات الافتراضية للتكاملات (WhatsApp · Meta Pixel · Google Sheets)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                تُطبق تلقائياً على أي صفحة هبوط لا تحدد لنفسها قيماً خاصة.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setScriptModalOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:opacity-95 text-white text-xs font-bold flex items-center gap-2 shadow-sm cursor-pointer"
+            >
+              <Code2 className="w-4 h-4 text-emerald-400 dark:text-white" />
+              <span>عرض ونسخ كود Google Apps Script المحدّث</span>
+            </button>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -203,6 +379,240 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
               placeholder="https://script.google.com/macros/s/.../exec"
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
             />
+          </div>
+        </div>
+
+        {/* Promo Codes / Coupons Manager */}
+        <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <TicketPercent className="w-4 h-4 text-emerald-600" />
+                <span>إدارة كوبونات وأكواد الخصم (Promo Codes)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                فعّل أكواد خصم لزبائنك في صفحات الهبوط بنسبة مئوية أو بمبلغ ثابت بالدينار الجزائري.
+              </p>
+            </div>
+            <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+              {promoCoupons.filter(c => c.isActive).length} كوبون نشط
+            </span>
+          </div>
+
+          {couponError && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold">
+              {couponError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/70">
+            <div className="sm:col-span-3">
+              <label className="block text-[11px] font-bold mb-1">رمز الكوبون</label>
+              <input
+                type="text"
+                dir="ltr"
+                value={newCouponCode}
+                onChange={e => setNewCouponCode(e.target.value.toUpperCase())}
+                placeholder="WELCOME10"
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold uppercase"
+              />
+            </div>
+
+            <div className="sm:col-span-3">
+              <label className="block text-[11px] font-bold mb-1">نوع الخصم</label>
+              <select
+                value={newCouponType}
+                onChange={e => setNewCouponType(e.target.value as 'fixed' | 'percent')}
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+              >
+                <option value="fixed">مبلغ ثابت (دج)</option>
+                <option value="percent">نسبة مئوية (%)</option>
+              </select>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-bold mb-1">
+                {newCouponType === 'percent' ? 'النسبة (%)' : 'القيمة (دج)'}
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={newCouponValue}
+                onChange={e => setNewCouponValue(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-bold mb-1">حد أدنى (دج)</label>
+              <input
+                type="number"
+                min="0"
+                step="500"
+                value={newCouponMinOrder}
+                onChange={e => setNewCouponMinOrder(e.target.value)}
+                placeholder="0"
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+              />
+            </div>
+
+            <div className="sm:col-span-2 flex items-end">
+              <button
+                type="button"
+                onClick={handleAddCoupon}
+                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>إضافة</span>
+              </button>
+            </div>
+          </div>
+
+          {promoCoupons.length === 0 ? (
+            <div className="text-center py-4 text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+              لا توجد كوبونات خصم مضافة بعد. أنشئ أول كوبون أعلاه لتقديم خصومات لزبائنك.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {promoCoupons.map(c => (
+                <div
+                  key={c.id}
+                  className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
+                    c.isActive
+                      ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/70'
+                      : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 opacity-70'
+                  }`}
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-xs px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        {c.code}
+                      </span>
+                      <span className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300">
+                        {c.type === 'percent' ? `خصم ${c.value}%` : `خصم ${formatDZD(c.value)}`}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {c.minOrder && c.minOrder > 0
+                        ? `الحد الأدنى للطلب: ${formatDZD(c.minOrder)}`
+                        : 'بدون حد أدنى للطلب'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleCoupon(c.id)}
+                      title={c.isActive ? 'تعطيل الكوبون' : 'تفعيل الكوبون'}
+                      className={`p-1.5 rounded-lg border text-xs font-bold cursor-pointer ${
+                        c.isActive
+                          ? 'border-emerald-300 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200'
+                          : 'border-slate-300 bg-white text-slate-500 dark:bg-slate-800'
+                      }`}
+                    >
+                      <Power className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCoupon(c.id)}
+                      title="حذف الكوبون"
+                      className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/70 dark:hover:bg-rose-950/40 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Custom Automatic WhatsApp Message Templates */}
+        <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <MessageSquareText className="w-4 h-4 text-emerald-600" />
+                <span>تخصيص نصوص رسائل الواتساب التلقائية</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                تُستخدم هذه القوالب في أزرار تأكيد الطلب وتتبعه عبر واتساب، وكذلك عند الإرسال الآلي عبر WhatsApp API.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-bold text-slate-500 block">
+              اضغط على أي متغير لإدراجه في الرسالة المحددة ({activeTemplateField === 'confirm' ? 'رسالة التأكيد' : 'رسالة التتبع والشحن'}):
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATE_VARIABLES.map(v => (
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => insertTemplateVar(v.key)}
+                  className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="font-mono text-emerald-700 dark:text-emerald-400" dir="ltr">
+                    {v.key}
+                  </span>
+                  <span className="text-slate-500">({v.label})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold">نص رسالة تأكيد الطلب الجديد</label>
+                <button
+                  type="button"
+                  onClick={() => setWhatsappConfirmTemplate(DEFAULT_WHATSAPP_CONFIRM_TEMPLATE)}
+                  className="text-[11px] font-bold text-emerald-600 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>تعبئة الافتراضي</span>
+                </button>
+              </div>
+              <textarea
+                rows={6}
+                onFocus={() => setActiveTemplateField('confirm')}
+                value={whatsappConfirmTemplate}
+                onChange={e => setWhatsappConfirmTemplate(e.target.value)}
+                placeholder={DEFAULT_WHATSAPP_CONFIRM_TEMPLATE}
+                className={`w-full px-3.5 py-2.5 rounded-xl border text-xs leading-relaxed ${
+                  activeTemplateField === 'confirm'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/15'
+                    : 'border-slate-300 dark:border-slate-700'
+                } bg-white dark:bg-slate-800`}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold">نص رسالة الشحن ورمز التتبع</label>
+                <button
+                  type="button"
+                  onClick={() => setWhatsappShippingTemplate(DEFAULT_WHATSAPP_SHIPPING_TEMPLATE)}
+                  className="text-[11px] font-bold text-emerald-600 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>تعبئة الافتراضي</span>
+                </button>
+              </div>
+              <textarea
+                rows={6}
+                onFocus={() => setActiveTemplateField('shipping')}
+                value={whatsappShippingTemplate}
+                onChange={e => setWhatsappShippingTemplate(e.target.value)}
+                placeholder={DEFAULT_WHATSAPP_SHIPPING_TEMPLATE}
+                className={`w-full px-3.5 py-2.5 rounded-xl border text-xs leading-relaxed ${
+                  activeTemplateField === 'shipping'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/15'
+                    : 'border-slate-300 dark:border-slate-700'
+                } bg-white dark:bg-slate-800`}
+              />
+            </div>
           </div>
         </div>
 
@@ -324,6 +734,85 @@ export const SettingsTab: React.FC<Props> = ({ store, onSaveSettings }) => {
           </button>
         </div>
       </form>
+
+      {/* Google Apps Script Code Viewer Modal */}
+      {scriptModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={e => {
+            if (e.target === e.currentTarget) setScriptModalOpen(false);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-3xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 flex items-center justify-center">
+                  <Code2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    كود Google Apps Script المحدّث (مزامنة ثنائية + تتبع)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    انسخ الكود كاملاً وضعه في Google Sheet لنقل أو إعداد الربط في أي وقت
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScriptModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-[11px]">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <strong className="block text-emerald-600 mb-0.5">1. فتح المحرر</strong>
+                  <span>من ملف Google Sheet اختر Extensions ثم Apps Script.</span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <strong className="block text-emerald-600 mb-0.5">2. اللصق والحفظ</strong>
+                  <span>امسح الكود القديم، الصق الكود أدناه واضغط Ctrl+S.</span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <strong className="block text-emerald-600 mb-0.5">3. النشر كـ Web App</strong>
+                  <span>Deploy &gt; New deployment &gt; Web app بصلاحية Anyone ثم انسخ الرابط.</span>
+                </div>
+              </div>
+
+              <div className="relative">
+                <pre
+                  dir="ltr"
+                  className="p-4 rounded-2xl bg-slate-950 text-emerald-300 font-mono text-[11px] leading-relaxed overflow-x-auto max-h-[360px] border border-slate-800"
+                >
+                  <code>{GOOGLE_APPS_SCRIPT_TEMPLATE}</code>
+                </pre>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/80">
+              <button
+                type="button"
+                onClick={handleCopyAppsScript}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-sm cursor-pointer"
+              >
+                {copiedScript ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedScript ? 'تم نسخ الكود بنجاح!' : 'نسخ كود Google Apps Script'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScriptModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

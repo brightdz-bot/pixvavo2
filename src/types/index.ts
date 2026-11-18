@@ -76,6 +76,7 @@ export interface LandingPageOffer {
   subtitle: string;
   quantity: number;
   price: number; // DZD
+  costPrice?: number; // DZD (سعر تكلفة الباقة الإجمالي)
   comparePrice?: number; // DZD
   badge?: string;
   isDefault?: boolean;
@@ -95,11 +96,32 @@ export interface LandingPageTheme {
   isDark?: boolean;
 }
 
+export interface LandingPageReview {
+  id: string;
+  author: string;
+  wilaya?: string;
+  rating: number; // 1..5
+  comment: string;
+  createdAt?: string;
+}
+
+export interface PromoCoupon {
+  id: string;
+  code: string;
+  type: 'fixed' | 'percent';
+  value: number;
+  minOrder?: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
 export interface LandingPageIntegrations {
   pixelId?: string;
   tiktokPixelId?: string;
   whatsappNumber?: string;
   googleSheetWebhook?: string;
+  variants?: ProductVariant[];
+  reviews?: LandingPageReview[];
 }
 
 export interface LandingPage {
@@ -115,6 +137,8 @@ export interface LandingPage {
   mainImage: string;
   galleryImages: string[];
   offers: LandingPageOffer[];
+  variants?: ProductVariant[];
+  reviews?: LandingPageReview[];
   theme: LandingPageTheme;
   integrations: LandingPageIntegrations;
   isPublished: boolean;
@@ -177,6 +201,12 @@ export interface ApiDiagnosticLog {
   timestamp: string;
 }
 
+export interface BlacklistEntry {
+  phone: string;
+  reason?: string;
+  addedAt: string;
+}
+
 export interface StoreApiConfig {
   storeId: string;
   courierProvider: CourierProvider;
@@ -204,6 +234,16 @@ export interface StoreApiConfig {
   whatsappAutoSendOnOrder: boolean;
   whatsappAutoSendOnShipping: boolean;
   googleSheetWebhook: string;
+  adSpendTotal?: number;
+  adSpendByPage?: Record<string, number>;
+  antiFraudEnabled?: boolean;
+  duplicateWindowHours?: number;
+  dailyMaxOrdersPerPhone?: number;
+  autoFlagReturnsThreshold?: number;
+  blacklistedPhones?: BlacklistEntry[];
+  promoCoupons?: PromoCoupon[];
+  whatsappConfirmTemplate?: string;
+  whatsappShippingTemplate?: string;
   diagnosticLogs: ApiDiagnosticLog[];
   updatedAt?: string;
 }

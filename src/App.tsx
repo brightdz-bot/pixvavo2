@@ -136,11 +136,57 @@ function AppContent() {
   );
 }
 
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'حدث خطأ غير متوقع' };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('App render boundary caught error:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 text-center"
+          dir="rtl"
+        >
+          <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              تعذر عرض هذه الصفحة مؤقتاً
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{this.state.message}</p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false, message: '' })}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer"
+            >
+              إعادة المحاولة
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }
 
