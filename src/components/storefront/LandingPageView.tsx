@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { motion, AnimatePresence, useScroll, useSpring } from 'motion/react';
 import { Store, LandingPage, DeliveryType, OrderStatus } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import { storage } from '../../services/storage';
@@ -36,6 +37,8 @@ import {
   Pencil
 } from 'lucide-react';
 
+const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
+
 interface Props {
   store: Store;
   page: LandingPage;
@@ -61,6 +64,13 @@ export const LandingPageView: React.FC<Props> = ({
   page,
   onBackToCatalog
 }) => {
+  const { scrollYProgress } = useScroll();
+  const smoothScrollProgress = useSpring(scrollYProgress, {
+    stiffness: 320,
+    damping: 32,
+    restDelta: 0.001
+  });
+
   const theme = page.theme;
   const offers = page.offers && page.offers.length > 0 ? page.offers : [];
   const defaultOffer = offers.find(o => o.isDefault) || offers[0];
@@ -595,7 +605,7 @@ export const LandingPageView: React.FC<Props> = ({
 
       {/* Header */}
       <header
-        className="sticky top-0 z-40 backdrop-blur-md border-b shadow-sm"
+        className="sticky top-0 z-40 backdrop-blur-md border-b shadow-sm relative"
         style={{
           backgroundColor: theme.isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.92)',
           borderColor: theme.borderColor
@@ -604,16 +614,19 @@ export const LandingPageView: React.FC<Props> = ({
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             {onBackToCatalog && (
-              <button
+              <motion.button
                 type="button"
+                whileHover={{ y: -1 }}
+                whileTap={{ scale: 0.95 }}
+                transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                 onClick={onBackToCatalog}
-                className="p-2 rounded-lg border text-xs font-bold flex items-center gap-1 shrink-0 transition-opacity hover:opacity-80"
+                className="p-2 rounded-lg border text-xs font-bold flex items-center gap-1 shrink-0 transition-opacity hover:opacity-80 cursor-pointer"
                 style={{ borderColor: theme.borderColor, color: theme.textColor }}
                 title="عرض كل منتجات المتجر"
               >
                 <ArrowRight className="w-4 h-4" />
                 <span className="hidden sm:inline">المتجر</span>
-              </button>
+              </motion.button>
             )}
             <div
               className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
@@ -632,10 +645,13 @@ export const LandingPageView: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button
+            <motion.button
               type="button"
+              whileHover={{ y: -1 }}
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
               onClick={() => scrollToElement('track-search-section')}
-              className="px-3 py-2 rounded-lg font-bold text-xs transition-all flex items-center gap-1.5 border whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-3 py-2 rounded-lg font-bold text-xs transition-shadow flex items-center gap-1.5 border whitespace-nowrap shrink-0 cursor-pointer hover:shadow-sm"
               style={{
                 backgroundColor: theme.softTintColor,
                 borderColor: theme.borderColor,
@@ -644,18 +660,29 @@ export const LandingPageView: React.FC<Props> = ({
             >
               <Search className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
               <span className="hidden sm:inline">تتبع طلبك</span>
-            </button>
-            <button
+            </motion.button>
+            <motion.button
               type="button"
+              whileHover={{ y: -1 }}
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
               onClick={handleHeaderOrderClick}
-              className="text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all shadow-md flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-shadow shadow-md hover:shadow-lg flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               style={{ backgroundColor: theme.primaryColor }}
             >
               <ShoppingCart className="w-3.5 h-3.5" />
               <span>أطلب الآن</span>
-            </button>
+            </motion.button>
           </div>
         </div>
+        <motion.div
+          aria-hidden="true"
+          className="h-[2px] w-full origin-right opacity-85"
+          style={{
+            scaleX: smoothScrollProgress,
+            backgroundColor: theme.primaryColor
+          }}
+        />
       </header>
 
       {/* Hero Section */}
@@ -677,20 +704,33 @@ export const LandingPageView: React.FC<Props> = ({
                     <span>{page.badgeText}</span>
                   </span>
                 )}
-                {activeImage && !imgError ? (
-                  <img
-                    src={activeImage}
-                    alt={page.title}
-                    referrerPolicy="no-referrer"
-                    onError={() => setImgError(true)}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-slate-400">
-                    <ImageOff className="w-10 h-10" />
-                    <span className="text-xs">صورة المنتج</span>
-                  </div>
-                )}
+                <AnimatePresence mode="wait" initial={false}>
+                  {activeImage && !imgError ? (
+                    <motion.img
+                      key={activeImage}
+                      src={activeImage}
+                      alt={page.title}
+                      referrerPolicy="no-referrer"
+                      onError={() => setImgError(true)}
+                      initial={{ opacity: 0, scale: 1.03 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.985 }}
+                      transition={{ duration: 0.22, ease: EASE_OUT_EXPO }}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <motion.div
+                      key="img-fallback"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="flex flex-col items-center gap-2 text-slate-400"
+                    >
+                      <ImageOff className="w-10 h-10" />
+                      <span className="text-xs">صورة المنتج</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {allGallery.length > 1 && (
@@ -698,26 +738,38 @@ export const LandingPageView: React.FC<Props> = ({
                   {allGallery.map((imgUrl, idx) => {
                     const isSelected = activeImage === imgUrl;
                     return (
-                      <button
+                      <motion.button
                         key={idx}
                         type="button"
+                        whileHover={{ y: -2 }}
+                        whileTap={{ scale: 0.95 }}
+                        transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                         onClick={() => {
                           setActiveImage(imgUrl);
                           setImgError(false);
                         }}
-                        className="rounded-xl overflow-hidden shadow-sm focus:outline-none transition border-2"
+                        className="relative rounded-xl overflow-hidden shadow-sm focus:outline-none cursor-pointer"
                         style={{
-                          backgroundColor: theme.surfaceColor,
-                          borderColor: isSelected ? theme.primaryColor : 'transparent'
+                          backgroundColor: theme.surfaceColor
                         }}
                       >
                         <img
                           src={imgUrl}
                           alt={`${page.title} ${idx + 1}`}
                           referrerPolicy="no-referrer"
-                          className="w-full h-16 object-cover"
+                          className={`w-full h-16 object-cover transition-opacity duration-200 ${
+                            isSelected ? 'opacity-100' : 'opacity-75 hover:opacity-100'
+                          }`}
                         />
-                      </button>
+                        {isSelected && (
+                          <motion.span
+                            layoutId="lp-gallery-active-ring"
+                            transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+                            className="absolute inset-0 rounded-xl border-2 pointer-events-none"
+                            style={{ borderColor: theme.primaryColor }}
+                          />
+                        )}
+                      </motion.button>
                     );
                   })}
                 </div>
@@ -765,14 +817,17 @@ export const LandingPageView: React.FC<Props> = ({
                 {offers.map(offer => {
                   const isActive = selectedOffer?.id === offer.id;
                   return (
-                    <div
+                    <motion.div
                       key={offer.id}
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.985 }}
+                      transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                       onClick={() => setSelectedOfferId(offer.id)}
-                      className="p-3.5 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-all relative overflow-hidden"
+                      className="p-3.5 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-colors duration-200 relative overflow-hidden"
                       style={{
                         backgroundColor: isActive ? theme.softTintColor : theme.surfaceColor,
                         borderColor: isActive ? theme.primaryColor : theme.borderColor,
-                        boxShadow: isActive ? '0 4px 12px rgba(0, 0, 0, 0.08)' : 'none'
+                        boxShadow: isActive ? '0 8px 20px -6px rgba(0, 0, 0, 0.12)' : 'none'
                       }}
                     >
                       {offer.badge && (
@@ -789,12 +844,18 @@ export const LandingPageView: React.FC<Props> = ({
                           className="w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0"
                           style={{ borderColor: theme.primaryColor }}
                         >
-                          {isActive && (
-                            <div
-                              className="w-2.5 h-2.5 rounded-full"
-                              style={{ backgroundColor: theme.primaryColor }}
-                            />
-                          )}
+                          <AnimatePresence initial={false}>
+                            {isActive && (
+                              <motion.div
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                exit={{ scale: 0 }}
+                                transition={{ type: 'spring', stiffness: 520, damping: 28 }}
+                                className="w-2.5 h-2.5 rounded-full"
+                                style={{ backgroundColor: theme.primaryColor }}
+                              />
+                            )}
+                          </AnimatePresence>
                         </div>
                         <div>
                           <h4 className="font-bold text-xs sm:text-sm">{offer.title}</h4>
@@ -812,7 +873,7 @@ export const LandingPageView: React.FC<Props> = ({
                           </span>
                         )}
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </div>
@@ -827,22 +888,32 @@ export const LandingPageView: React.FC<Props> = ({
               >
                 <div className="flex items-baseline justify-between">
                   <span className={`text-xs font-bold ${mutedTextClass}`}>السعر المختار الآن:</span>
-                  <span
-                    className="text-2xl font-black tabular-nums"
-                    style={{ color: theme.primaryColor }}
-                  >
-                    {formatDZD(productPrice)}
-                  </span>
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span
+                      key={productPrice}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+                      className="text-2xl font-black tabular-nums inline-block"
+                      style={{ color: theme.primaryColor }}
+                    >
+                      {formatDZD(productPrice)}
+                    </motion.span>
+                  </AnimatePresence>
                 </div>
-                <button
+                <motion.button
                   type="button"
+                  whileHover={{ y: -1.5 }}
+                  whileTap={{ scale: 0.98 }}
+                  transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                   onClick={() => scrollToElement('form-container')}
-                  className="w-full py-3.5 px-6 rounded-xl text-white font-extrabold text-sm sm:text-base text-center shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-3.5 px-6 rounded-xl text-white font-extrabold text-sm sm:text-base text-center shadow-lg hover:shadow-xl transition-shadow flex items-center justify-center gap-2 cursor-pointer"
                   style={{ backgroundColor: theme.primaryColor }}
                 >
                   <ShoppingBag className="w-4 h-4" />
                   <span>اضغط هنا لتأكيد الطلب والدفع عند الاستلام</span>
-                </button>
+                </motion.button>
               </div>
             </div>
           </div>
@@ -859,8 +930,15 @@ export const LandingPageView: React.FC<Props> = ({
         }}
       >
         <div className="max-w-3xl mx-auto px-4">
+          <AnimatePresence mode="wait" initial={false}>
           {!isTrackingMode ? (
-            <>
+            <motion.div
+              key="checkout-mode"
+              initial={{ opacity: 0, y: 12, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+              transition={{ duration: 0.24, ease: EASE_OUT_EXPO }}
+            >
               {/* Inline Order Search Box */}
               <div
                 id="track-search-section"
@@ -882,21 +960,32 @@ export const LandingPageView: React.FC<Props> = ({
                     onKeyDown={e => e.key === 'Enter' && handleSearchOrder()}
                     placeholder="مثال: DZ-9821A4B2"
                     dir="ltr"
-                    className={`w-full p-3 rounded-xl border text-sm text-center font-bold font-mono focus:outline-none ${subtleInputBg}`}
+                    className={`w-full p-3 rounded-xl border text-sm text-center font-bold font-mono focus:outline-none transition-shadow ${subtleInputBg}`}
                   />
-                  <button
+                  <motion.button
                     type="button"
+                    whileTap={{ scale: 0.96 }}
                     onClick={handleSearchOrder}
                     disabled={isSearchingOrder}
-                    className="text-white px-5 py-3 rounded-xl font-bold text-sm shrink-0 transition cursor-pointer disabled:opacity-60"
+                    className="text-white px-5 py-3 rounded-xl font-bold text-sm shrink-0 transition-opacity cursor-pointer disabled:opacity-60"
                     style={{ backgroundColor: theme.primaryColor }}
                   >
                     {isSearchingOrder ? 'بحث...' : 'بحث'}
-                  </button>
+                  </motion.button>
                 </div>
-                {searchError && (
-                  <p className="text-xs font-bold text-rose-600">{searchError}</p>
-                )}
+                <AnimatePresence>
+                  {searchError && (
+                    <motion.p
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+                      className="text-xs font-bold text-rose-600"
+                    >
+                      {searchError}
+                    </motion.p>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Checkout Form Container */}
@@ -924,12 +1013,20 @@ export const LandingPageView: React.FC<Props> = ({
                   </p>
                 </div>
 
-                {formError && (
-                  <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{formError}</span>
-                  </div>
-                )}
+                <AnimatePresence>
+                  {formError && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+                      className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2"
+                    >
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{formError}</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 <form onSubmit={handleCheckoutSubmit} className="space-y-5">
                   {/* Synced Offer Dropdown */}
@@ -1028,8 +1125,10 @@ export const LandingPageView: React.FC<Props> = ({
                       طريقة التوصيل <span className="text-rose-500">*</span>
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <label
-                        className="flex items-center justify-between gap-2 p-3.5 rounded-xl border-2 cursor-pointer transition"
+                      <motion.label
+                        whileTap={{ scale: 0.985 }}
+                        transition={{ duration: 0.14, ease: EASE_OUT_EXPO }}
+                        className="flex items-center justify-between gap-2 p-3.5 rounded-xl border-2 cursor-pointer transition-colors duration-200"
                         style={{
                           backgroundColor: deliveryType === 'home' ? theme.softTintColor : theme.surfaceColor,
                           borderColor: deliveryType === 'home' ? theme.primaryColor : theme.borderColor
@@ -1050,10 +1149,12 @@ export const LandingPageView: React.FC<Props> = ({
                         <span className="text-xs font-black tabular-nums" style={{ color: theme.primaryColor }}>
                           {homeFee === 0 ? 'مجاني' : formatDZD(homeFee)}
                         </span>
-                      </label>
+                      </motion.label>
 
-                      <label
-                        className="flex items-center justify-between gap-2 p-3.5 rounded-xl border-2 cursor-pointer transition"
+                      <motion.label
+                        whileTap={{ scale: 0.985 }}
+                        transition={{ duration: 0.14, ease: EASE_OUT_EXPO }}
+                        className="flex items-center justify-between gap-2 p-3.5 rounded-xl border-2 cursor-pointer transition-colors duration-200"
                         style={{
                           backgroundColor: deliveryType === 'stop' ? theme.softTintColor : theme.surfaceColor,
                           borderColor: deliveryType === 'stop' ? theme.primaryColor : theme.borderColor
@@ -1074,7 +1175,7 @@ export const LandingPageView: React.FC<Props> = ({
                         <span className="text-xs font-black tabular-nums" style={{ color: theme.primaryColor }}>
                           {stopFee === 0 ? 'مجاني' : formatDZD(stopFee)}
                         </span>
-                      </label>
+                      </motion.label>
                     </div>
                   </div>
 
@@ -1088,29 +1189,63 @@ export const LandingPageView: React.FC<Props> = ({
                   >
                     <div className={`flex justify-between ${mutedTextClass}`}>
                       <span>سعر المنتج/العرض:</span>
-                      <span className="font-bold">{formatDZD(productPrice)}</span>
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        <motion.span
+                          key={productPrice}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.14, ease: EASE_OUT_EXPO }}
+                          className="font-bold inline-block"
+                        >
+                          {formatDZD(productPrice)}
+                        </motion.span>
+                      </AnimatePresence>
                     </div>
                     <div className={`flex justify-between ${mutedTextClass}`}>
                       <span>مصاريف التوصيل ({selectedWilaya.nameAr}):</span>
-                      <span className="font-bold" style={{ color: theme.primaryColor }}>
-                        {shippingCost === 0 ? 'مجاني' : formatDZD(shippingCost)}
-                      </span>
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        <motion.span
+                          key={`${selectedWilaya.id}-${shippingCost}`}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.14, ease: EASE_OUT_EXPO }}
+                          className="font-bold inline-block"
+                          style={{ color: theme.primaryColor }}
+                        >
+                          {shippingCost === 0 ? 'مجاني' : formatDZD(shippingCost)}
+                        </motion.span>
+                      </AnimatePresence>
                     </div>
                     <div
                       className="pt-2 border-t flex justify-between text-base font-extrabold"
                       style={{ borderColor: theme.borderColor }}
                     >
                       <span>المجموع الكلي للدفع:</span>
-                      <span className="text-xl" style={{ color: theme.primaryColor }}>
-                        {formatDZD(grandTotal)}
-                      </span>
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        <motion.span
+                          key={grandTotal}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+                          className="text-xl inline-block"
+                          style={{ color: theme.primaryColor }}
+                        >
+                          {formatDZD(grandTotal)}
+                        </motion.span>
+                      </AnimatePresence>
                     </div>
                   </div>
 
-                  <button
+                  <motion.button
                     type="submit"
+                    whileHover={{ y: -1.5 }}
+                    whileTap={{ scale: 0.98 }}
+                    transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                     disabled={isSubmitting || page.stock <= 0}
-                    className="w-full py-4 px-6 rounded-xl text-white font-black text-base sm:text-lg shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    className="w-full py-4 px-6 rounded-xl text-white font-black text-base sm:text-lg shadow-xl hover:shadow-2xl transition-shadow flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                     style={{ backgroundColor: theme.primaryColor }}
                   >
                     <CheckCircle2 className="w-5 h-5" />
@@ -1121,15 +1256,20 @@ export const LandingPageView: React.FC<Props> = ({
                         ? 'الكمية غير متوفرة حالياً'
                         : 'تأكيد الطلب الآن (الدفع عند الاستلام)'}
                     </span>
-                  </button>
+                  </motion.button>
                 </form>
               </div>
-            </>
+            </motion.div>
           ) : (
             /* Order Tracking Container */
             trackedOrder && (
-              <div
+              <motion.div
+                key={`tracking-mode-${trackedOrder.orderNumber}`}
                 id="tracking-container"
+                initial={{ opacity: 0, y: 14, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
+                transition={{ duration: 0.26, ease: EASE_OUT_EXPO }}
                 className="rounded-3xl p-6 sm:p-8 border-2 shadow-xl space-y-6"
                 style={{
                   backgroundColor: theme.bgColor,
@@ -1137,9 +1277,14 @@ export const LandingPageView: React.FC<Props> = ({
                 }}
               >
                 <div className="text-center space-y-2 border-b pb-6" style={{ borderColor: theme.borderColor }}>
-                  <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                  <motion.div
+                    initial={{ scale: 0.6, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                    className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto"
+                  >
                     <CheckCircle2 className="w-7 h-7" />
-                  </div>
+                  </motion.div>
                   <h2 className="text-2xl font-black">تفاصيل وتتبع طلبك</h2>
                   <p className={`text-xs ${mutedTextClass}`}>
                     شكراً لثقتك بـ {store.name}. يمكنك متابعة حالة طلبك أدناه
@@ -1186,18 +1331,36 @@ export const LandingPageView: React.FC<Props> = ({
                     </span>
                   </div>
 
-                  {trackedEditSuccess && (
-                    <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold text-center">
-                      {trackedEditSuccess}
-                    </div>
-                  )}
+                  <AnimatePresence>
+                    {trackedEditSuccess && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+                        className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold text-center"
+                      >
+                        {trackedEditSuccess}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
+                  <AnimatePresence mode="wait" initial={false}>
                   {trackedOrder.status === 'new' && !isEditingTrackedOrder && (
-                    <div className="pt-2 border-t" style={{ borderColor: theme.borderColor }}>
-                      <button
+                    <motion.div
+                      key="edit-order-trigger"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+                      className="pt-2 border-t"
+                      style={{ borderColor: theme.borderColor }}
+                    >
+                      <motion.button
                         type="button"
+                        whileTap={{ scale: 0.985 }}
                         onClick={openTrackedOrderEditor}
-                        className="w-full py-2.5 px-3 rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        className="w-full py-2.5 px-3 rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 transition-shadow hover:shadow-xs cursor-pointer"
                         style={{
                           backgroundColor: theme.surfaceColor,
                           borderColor: theme.primaryColor,
@@ -1206,12 +1369,17 @@ export const LandingPageView: React.FC<Props> = ({
                       >
                         <Pencil className="w-3.5 h-3.5" />
                         <span>تعديل المنتج / العرض أو الوجهة والتوصيل</span>
-                      </button>
-                    </div>
+                      </motion.button>
+                    </motion.div>
                   )}
 
                   {trackedOrder.status === 'new' && isEditingTrackedOrder && (
-                    <form
+                    <motion.form
+                      key="edit-order-form"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.2, ease: EASE_OUT_EXPO }}
                       onSubmit={handleSaveTrackedOrderEdit}
                       className="pt-3 border-t space-y-3"
                       style={{ borderColor: theme.borderColor }}
@@ -1368,8 +1536,9 @@ export const LandingPageView: React.FC<Props> = ({
                           إلغاء
                         </button>
                       </div>
-                    </form>
+                    </motion.form>
                   )}
+                  </AnimatePresence>
                 </div>
 
                 {trackedOrder.status === 'cancelled' ? (
@@ -1405,9 +1574,18 @@ export const LandingPageView: React.FC<Props> = ({
                       const isDone = idx <= activeIdx;
                       const Icon = stage.icon;
                       return (
-                        <div key={stage.title} className="flex items-start gap-4">
-                          <div
-                            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-sm"
+                        <motion.div
+                          key={stage.title}
+                          initial={{ opacity: 0, x: 10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ duration: 0.22, delay: idx * 0.06, ease: EASE_OUT_EXPO }}
+                          className="flex items-start gap-4"
+                        >
+                          <motion.div
+                            initial={false}
+                            animate={{ scale: isDone ? [0.88, 1.08, 1] : 1 }}
+                            transition={{ duration: 0.28, ease: EASE_OUT_EXPO }}
+                            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 shadow-sm transition-colors duration-200"
                             style={
                               isDone
                                 ? { backgroundColor: theme.primaryColor, color: '#ffffff' }
@@ -1415,7 +1593,7 @@ export const LandingPageView: React.FC<Props> = ({
                             }
                           >
                             <Icon className="w-4 h-4" />
-                          </div>
+                          </motion.div>
                           <div className="space-y-0.5">
                             <h4 className={`font-bold text-sm ${isDone ? '' : 'text-slate-400'}`}>
                               {stage.title}
@@ -1424,14 +1602,17 @@ export const LandingPageView: React.FC<Props> = ({
                               {stage.desc}
                             </p>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })}
                   </div>
                 )}
 
                 <div className="pt-2 space-y-2.5">
-                  <a
+                  <motion.a
+                    whileHover={{ y: -1.5 }}
+                    whileTap={{ scale: 0.985 }}
+                    transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                     href={buildOrderTrackingWhatsAppUrl(effectiveWhatsapp, store.name, {
                       orderNumber: trackedOrder.orderNumber,
                       customerName: trackedOrder.customerFirstName,
@@ -1442,27 +1623,29 @@ export const LandingPageView: React.FC<Props> = ({
                     })}
                     target="_blank"
                     rel="noreferrer"
-                    className="w-full py-3 bg-[#25D366] hover:bg-emerald-600 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 text-sm shadow-md"
+                    className="w-full py-3 bg-[#25D366] hover:bg-emerald-600 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-md"
                   >
                     <MessageCircle className="w-4 h-4" />
                     <span>تواصل معنا عبر واتساب لمتابعة الطلب</span>
-                  </a>
+                  </motion.a>
 
-                  <button
+                  <motion.button
                     type="button"
+                    whileTap={{ scale: 0.985 }}
                     onClick={() => setOrderPromptModalOpen(true)}
-                    className="w-full py-3 rounded-xl font-bold text-sm transition border cursor-pointer"
+                    className="w-full py-3 rounded-xl font-bold text-sm transition-shadow hover:shadow-xs border cursor-pointer"
                     style={{
                       backgroundColor: theme.surfaceColor,
                       borderColor: theme.borderColor
                     }}
                   >
                     إجراء طلب جديد أو بحث آخر
-                  </button>
+                  </motion.button>
                 </div>
-              </div>
+              </motion.div>
             )
           )}
+          </AnimatePresence>
         </div>
       </section>
 
@@ -1484,162 +1667,240 @@ export const LandingPageView: React.FC<Props> = ({
       </footer>
 
       {/* Success Modal */}
-      {successModalData && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white text-slate-900 rounded-3xl p-6 sm:p-8 max-w-md w-full text-center space-y-4 shadow-2xl">
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
-              <Check className="w-8 h-8" />
-            </div>
-            <h3 className="text-2xl font-black">تم تسجيل طلبك بنجاح!</h3>
-
-            <div className="bg-slate-50 p-4 rounded-2xl text-right space-y-2 border border-slate-100 text-sm">
-              <div className="flex justify-between items-center border-b pb-2">
-                <span className="text-slate-500 font-medium">رقم الطلب:</span>
-                <span className="font-bold font-mono" style={{ color: theme.primaryColor }}>
-                  {successModalData.orderNumber}
-                </span>
-              </div>
-              <div className="flex justify-between items-center border-b pb-2">
-                <span className="text-slate-500 font-medium">المنتج / العرض:</span>
-                <span className="font-bold text-xs">{successModalData.bundleDetails}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">حالة الطلب:</span>
-                <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full text-xs font-bold">
-                  قيد التأكيد
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-1">
-              <p className="text-xs text-slate-500 font-medium">
-                اضغط هنا لإرسال تأكيد الطلب عبر الواتساب:
-              </p>
-              <a
-                href={successModalData.whatsappUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="w-full py-3.5 bg-[#25D366] hover:bg-emerald-600 text-white font-extrabold rounded-xl transition flex items-center justify-center gap-2 text-sm shadow-md"
-              >
-                <MessageCircle className="w-5 h-5" />
-                <span>تأكيد الطلب الآن عبر واتساب</span>
-              </a>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleProceedToTrackingFromSuccess}
-              className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm cursor-pointer"
+      <AnimatePresence>
+        {successModalData && (
+          <motion.div
+            key="success-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              key="success-modal-card"
+              initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, scale: 0.96, y: 10, filter: 'blur(4px)' }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              className="bg-white text-slate-900 rounded-3xl p-6 sm:p-8 max-w-md w-full text-center space-y-4 shadow-2xl"
             >
-              الانتقال لمتابعة مراحل التتبع
-            </button>
-          </div>
-        </div>
-      )}
+              <motion.div
+                initial={{ scale: 0.4, rotate: -15, opacity: 0 }}
+                animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 460, damping: 24, delay: 0.06 }}
+                className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto"
+              >
+                <Check className="w-8 h-8" />
+              </motion.div>
+              <h3 className="text-2xl font-black">تم تسجيل طلبك بنجاح!</h3>
+
+              <div className="bg-slate-50 p-4 rounded-2xl text-right space-y-2 border border-slate-100 text-sm">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <span className="text-slate-500 font-medium">رقم الطلب:</span>
+                  <span className="font-bold font-mono" style={{ color: theme.primaryColor }}>
+                    {successModalData.orderNumber}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center border-b pb-2">
+                  <span className="text-slate-500 font-medium">المنتج / العرض:</span>
+                  <span className="font-bold text-xs">{successModalData.bundleDetails}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-medium">حالة الطلب:</span>
+                  <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full text-xs font-bold">
+                    قيد التأكيد
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <p className="text-xs text-slate-500 font-medium">
+                  اضغط هنا لإرسال تأكيد الطلب عبر الواتساب:
+                </p>
+                <motion.a
+                  whileHover={{ y: -1.5 }}
+                  whileTap={{ scale: 0.98 }}
+                  href={successModalData.whatsappUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full py-3.5 bg-[#25D366] hover:bg-emerald-600 text-white font-extrabold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-md"
+                >
+                  <MessageCircle className="w-5 h-5" />
+                  <span>تأكيد الطلب الآن عبر واتساب</span>
+                </motion.a>
+              </div>
+
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.98 }}
+                onClick={handleProceedToTrackingFromSuccess}
+                className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors text-sm cursor-pointer"
+              >
+                الانتقال لمتابعة مراحل التتبع
+              </motion.button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Smart Header New Order Modal */}
-      {newOrderModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white text-slate-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4">
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center mx-auto"
-              style={{ backgroundColor: theme.softTintColor, color: theme.primaryColor }}
+      <AnimatePresence>
+        {newOrderModalOpen && (
+          <motion.div
+            key="new-order-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            onClick={e => {
+              if (e.target === e.currentTarget) setNewOrderModalOpen(false);
+            }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          >
+            <motion.div
+              key="new-order-modal-card"
+              initial={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, scale: 0.96, y: 8, filter: 'blur(4px)' }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              className="bg-white text-slate-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4"
             >
-              <ShoppingCart className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-black">تأكيد طلب جديد</h3>
-            <p className="text-sm text-slate-600">
-              هل أنت متأكد من رغبتك في الانتقال لطلب منتج جديد وإضافته؟
-            </p>
-            <div className="flex flex-col gap-2.5">
-              <button
-                type="button"
-                onClick={() => resetToNewOrder('form-container')}
-                className="w-full text-white py-2.5 rounded-xl font-bold text-sm shadow-md cursor-pointer"
-                style={{ backgroundColor: theme.primaryColor }}
-              >
-                الانتقال إلى صفحة الطلب
-              </button>
-              <button
-                type="button"
-                onClick={() => resetToNewOrder('offers-section')}
-                className="w-full py-2.5 rounded-xl font-bold text-sm cursor-pointer"
+              <div
+                className="w-12 h-12 rounded-full flex items-center justify-center mx-auto"
                 style={{ backgroundColor: theme.softTintColor, color: theme.primaryColor }}
               >
-                اختر الباقة المناسبة
-              </button>
-              <button
-                type="button"
-                onClick={() => setNewOrderModalOpen(false)}
-                className="w-full text-slate-500 hover:text-slate-700 py-1.5 text-xs font-semibold cursor-pointer"
-              >
-                إلغاء
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                <ShoppingCart className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black">تأكيد طلب جديد</h3>
+              <p className="text-sm text-slate-600">
+                هل أنت متأكد من رغبتك في الانتقال لطلب منتج جديد وإضافته؟
+              </p>
+              <div className="flex flex-col gap-2.5">
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => resetToNewOrder('form-container')}
+                  className="w-full text-white py-2.5 rounded-xl font-bold text-sm shadow-md cursor-pointer"
+                  style={{ backgroundColor: theme.primaryColor }}
+                >
+                  الانتقال إلى صفحة الطلب
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => resetToNewOrder('offers-section')}
+                  className="w-full py-2.5 rounded-xl font-bold text-sm cursor-pointer"
+                  style={{ backgroundColor: theme.softTintColor, color: theme.primaryColor }}
+                >
+                  اختر الباقة المناسبة
+                </motion.button>
+                <button
+                  type="button"
+                  onClick={() => setNewOrderModalOpen(false)}
+                  className="w-full text-slate-500 hover:text-slate-700 py-1.5 text-xs font-semibold cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Order Prompt Modal (Copy Order Number / New Order / Stay Tracking) */}
-      {orderPromptModalOpen && trackedOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white text-slate-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4">
-            <button
-              type="button"
-              onClick={() => setOrderPromptModalOpen(false)}
-              className="float-left text-slate-400 hover:text-slate-600"
+      <AnimatePresence>
+        {orderPromptModalOpen && trackedOrder && (
+          <motion.div
+            key="order-prompt-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            onClick={e => {
+              if (e.target === e.currentTarget) setOrderPromptModalOpen(false);
+            }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          >
+            <motion.div
+              key="order-prompt-modal-card"
+              initial={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(4px)' }}
+              animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, scale: 0.96, y: 8, filter: 'blur(4px)' }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              className="bg-white text-slate-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4"
             >
-              <X className="w-4 h-4" />
-            </button>
-            <div
-              className="w-12 h-12 rounded-full flex items-center justify-center mx-auto"
-              style={{ backgroundColor: theme.softTintColor, color: theme.primaryColor }}
-            >
-              <Receipt className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-black">معلومات طلبك الحالي</h3>
-            <p className="text-xs text-slate-500">
-              رقم الطلب الخاص بك (احتفظ به لتتبع طلبك لاحقاً):
-            </p>
-
-            <div
-              className="p-3 rounded-xl border flex items-center justify-between"
-              style={{ backgroundColor: theme.softTintColor, borderColor: theme.borderColor }}
-            >
-              <span className="font-black text-base tracking-wider font-mono" style={{ color: theme.primaryColor }}>
-                {trackedOrder.orderNumber}
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyOrderNumber}
-                className="text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                style={{ backgroundColor: theme.primaryColor }}
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span>{copiedOrderId ? 'تم النسخ' : 'نسخ الرقم'}</span>
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => resetToNewOrder('form-container')}
-                className="w-full text-white py-2.5 rounded-xl font-bold text-sm shadow-md cursor-pointer"
-                style={{ backgroundColor: theme.primaryColor }}
-              >
-                إجراء طلب جديد
-              </button>
               <button
                 type="button"
                 onClick={() => setOrderPromptModalOpen(false)}
-                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl font-bold text-sm cursor-pointer"
+                className="float-left text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                تتبع طلبه (البقاء على صفحة التتبع)
+                <X className="w-4 h-4" />
               </button>
-            </div>
-          </div>
-        </div>
-      )}
+              <div
+                className="w-12 h-12 rounded-full flex items-center justify-center mx-auto"
+                style={{ backgroundColor: theme.softTintColor, color: theme.primaryColor }}
+              >
+                <Receipt className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black">معلومات طلبك الحالي</h3>
+              <p className="text-xs text-slate-500">
+                رقم الطلب الخاص بك (احتفظ به لتتبع طلبك لاحقاً):
+              </p>
+
+              <div
+                className="p-3 rounded-xl border flex items-center justify-between"
+                style={{ backgroundColor: theme.softTintColor, borderColor: theme.borderColor }}
+              >
+                <span className="font-black text-base tracking-wider font-mono" style={{ color: theme.primaryColor }}>
+                  {trackedOrder.orderNumber}
+                </span>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.94 }}
+                  onClick={handleCopyOrderNumber}
+                  className="text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer min-w-[82px] justify-center"
+                  style={{ backgroundColor: theme.primaryColor }}
+                >
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={copiedOrderId ? 'copied' : 'copy'}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -3 }}
+                      transition={{ duration: 0.14 }}
+                      className="flex items-center gap-1"
+                    >
+                      {copiedOrderId ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedOrderId ? 'تم النسخ' : 'نسخ الرقم'}</span>
+                    </motion.span>
+                  </AnimatePresence>
+                </motion.button>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => resetToNewOrder('form-container')}
+                  className="w-full text-white py-2.5 rounded-xl font-bold text-sm shadow-md cursor-pointer"
+                  style={{ backgroundColor: theme.primaryColor }}
+                >
+                  إجراء طلب جديد
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setOrderPromptModalOpen(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl font-bold text-sm cursor-pointer"
+                >
+                  تتبع طلبه (البقاء على صفحة التتبع)
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
