@@ -857,7 +857,7 @@ export const LandingPageView: React.FC<Props> = ({
               </motion.button>
             )}
             <div
-              className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
+              className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
               style={{ backgroundColor: theme.primaryColor }}
             >
               {store.logoUrl ? (

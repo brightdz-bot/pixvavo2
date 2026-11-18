@@ -277,7 +277,7 @@ export const PublicStorefront: React.FC<Props> = ({
               <div className="max-w-6xl mx-auto px-4 py-3.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
-                    className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center text-white font-black shadow-sm shrink-0"
+                    className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center text-white font-black shadow-sm shrink-0"
                     style={{ backgroundColor: store.brandColor || '#754b2d' }}
                   >
                     {store.logoUrl && !logoImgError ? (

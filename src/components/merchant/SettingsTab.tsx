@@ -392,7 +392,7 @@ export const SettingsTab: React.FC<Props> = ({
                     </p>
                   </div>
                   <div
-                    className="w-11 h-11 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
+                    className="w-11 h-11 rounded-full border border-slate-200 dark:border-slate-700 overflow-hidden flex items-center justify-center text-white font-black text-sm shrink-0 shadow-sm"
                     style={{ backgroundColor: brandColor || '#754b2d' }}
                   >
                     {logoUrl.trim() ? (

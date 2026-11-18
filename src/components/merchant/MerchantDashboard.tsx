@@ -968,7 +968,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         <div className="space-y-6">
           <div className="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
             <div
-              className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center text-white font-bold shadow-md shrink-0"
+              className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center text-white font-bold shadow-md shrink-0"
               style={{ backgroundColor: store.brandColor || '#754b2d' }}
             >
               {store.logoUrl ? (
