@@ -381,7 +381,7 @@ export const OrdersTab: React.FC<Props> = ({
   const eligibleCourierSelected = useMemo(
     () =>
       selectedOrdersList.filter(
-        o => !o.trackingCode && (o.status === 'new' || o.status === 'confirmed')
+        o => !o.trackingCode && (o.status === 'new' || o.status === 'confirmed' || o.status === 'shipping')
       ),
     [selectedOrdersList]
   );

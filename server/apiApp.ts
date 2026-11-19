@@ -1111,62 +1111,152 @@ export function createApiApp(): Express {
           `${baseUrl}/get/communes?wilaya_id=${toWilayaCode}`,
           ecoHeaders
         );
-        const rawCommunesList: any[] = Array.isArray(communesJson)
-          ? communesJson
-          : Array.isArray(communesJson?.data)
-          ? communesJson.data
-          : communesJson && typeof communesJson === 'object'
-          ? Object.values(communesJson).filter(v => v && typeof v === 'object')
-          : [];
-        const ecoCandidates = rawCommunesList
+        const flattenCommuneEntries = (raw: any): any[] => {
+          if (Array.isArray(raw)) return raw;
+          if (Array.isArray(raw?.data)) return raw.data;
+          if (raw && typeof raw === 'object') {
+            const vals = Object.values(raw);
+            const items: any[] = [];
+            vals.forEach(v => {
+              if (Array.isArray(v)) items.push(...v);
+              else if (v && typeof v === 'object' && ('nom' in v || 'commune' in v || 'name' in v)) {
+                items.push(v);
+              }
+            });
+            return items;
+          }
+          return [];
+        };
+
+        const allEntries = flattenCommuneEntries(communesJson);
+        const hasWilayaField = allEntries.some(
+          c => c?.wilaya_id !== undefined && c?.wilaya_id !== null
+        );
+        const wilayaEntries = hasWilayaField
+          ? allEntries.filter(c => Number(c?.wilaya_id) === toWilayaCode)
+          : allEntries;
+        const poolEntries = wilayaEntries.length > 0 ? wilayaEntries : allEntries;
+
+        const isTruthFlag = (val: any) =>
+          val === 1 || val === true || val === '1' || String(val).toLowerCase() === 'true';
+
+        const ecoCandidates = poolEntries
           .map(c => ({
             name: String(c?.nom || c?.commune || c?.name || '').trim(),
-            arName: String(c?.ar_name || c?.nom_ar || '').trim()
+            arName: String(c?.ar_name || c?.nom_ar || '').trim(),
+            hasStopDesk: isTruthFlag(c?.has_stop_desk) || isTruthFlag(c?.stop_desk) || isTruthFlag(c?.is_stopdesk)
           }))
           .filter(c => Boolean(c.name));
 
+        const stopDeskCandidates = ecoCandidates.filter(c => c.hasStopDesk);
         const desiredCommune = String(order.commune || toWilayaMeta.nameFr).trim();
+
+        const pickPool =
+          isStopDesk && stopDeskCandidates.length > 0 ? stopDeskCandidates : ecoCandidates;
+
         let resolvedCommune = desiredCommune;
-        if (ecoCandidates.length > 0) {
+        if (pickPool.length > 0) {
           resolvedCommune = pickBestCandidateName(
             desiredCommune,
-            ecoCandidates,
+            pickPool.map(c => ({ name: c.name, arName: c.arName, preferred: c.hasStopDesk })),
             toWilayaMeta.nameFr
           );
         } else if (hasArabicChars(desiredCommune)) {
           resolvedCommune = toWilayaMeta.nameFr;
         }
 
-        const payload = {
-          reference: order.orderNumber,
-          nom_client: order.customerName,
-          telephone: cleanPhone,
-          adresse: order.address || `${toWilayaMeta.nameFr} - ${resolvedCommune}`,
-          code_wilaya: toWilayaCode,
-          commune: resolvedCommune,
-          montant: Math.round(Number(order.total || 0)),
-          type: 1,
-          stop_desk: isStopDesk ? 1 : 0,
-          produit: productList,
-          remarque: order.notes || ''
+        const buildEcoPayload = (communeName: string, extraNote = '') => {
+          const baseNote = String(order.notes || '').trim();
+          const combinedNote = [baseNote, extraNote].filter(Boolean).join(' | ');
+          return {
+            reference: order.orderNumber,
+            nom_client: order.customerName,
+            telephone: cleanPhone,
+            adresse: order.address || `${toWilayaMeta.nameFr} - ${communeName}`,
+            code_wilaya: toWilayaCode,
+            commune: communeName,
+            montant: Math.round(Number(order.total || 0)),
+            type: 1,
+            stop_desk: isStopDesk ? 1 : 0,
+            produit: productList,
+            remarque: combinedNote
+          };
         };
 
-        const result = await fetchJsonWithTimeout(`${baseUrl}/create/order`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiToken}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
+        const sendEcoOrder = (communeName: string, extraNote = '') =>
+          fetchJsonWithTimeout(`${baseUrl}/create/order`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiToken}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json'
+            },
+            body: JSON.stringify(buildEcoPayload(communeName, extraNote))
+          });
 
-        const trackingCode = String(
+        let result = await sendEcoOrder(
+          resolvedCommune,
+          isStopDesk && desiredCommune && !desiredCommune.includes(resolvedCommune)
+            ? `Stop Desk - بلدية الزبون: ${desiredCommune}`
+            : ''
+        );
+
+        let trackingCode = String(
           result.json?.tracking ||
             result.json?.data?.tracking ||
             result.json?.order?.tracking ||
             ''
         ).trim();
+
+        // If Ecotrack rejects Stop Desk on this commune, retry with likely stop-desk hub communes in the same wilaya
+        if ((!result.ok || !trackingCode) && isStopDesk) {
+          const errFirst = extractCourierApiError(result.json, result.text).toLowerCase();
+          if (errFirst.includes('stop_desk') || errFirst.includes('stop desk')) {
+            const tried = new Set<string>([resolvedCommune.toLowerCase()]);
+            const fallbackNames: string[] = [];
+
+            for (const c of stopDeskCandidates) {
+              if (!tried.has(c.name.toLowerCase())) fallbackNames.push(c.name);
+            }
+            const wilayaNorm = stripLatinDiacritics(toWilayaMeta.nameFr);
+            const sortedHubMatches = ecoCandidates
+              .filter(c => {
+                const n = stripLatinDiacritics(c.name);
+                return (
+                  n === wilayaNorm ||
+                  n === `${wilayaNorm} centre` ||
+                  n.includes('centre') ||
+                  n.startsWith(wilayaNorm)
+                );
+              })
+              .map(c => c.name);
+            for (const hub of [...sortedHubMatches, toWilayaMeta.nameFr, ...ecoCandidates.slice(0, 4).map(c => c.name)]) {
+              if (hub && !tried.has(hub.toLowerCase()) && !fallbackNames.includes(hub)) {
+                fallbackNames.push(hub);
+              }
+            }
+
+            for (const altCommune of fallbackNames.slice(0, 4)) {
+              tried.add(altCommune.toLowerCase());
+              const retryRes = await sendEcoOrder(
+                altCommune,
+                `Stop Desk - بلدية الزبون: ${desiredCommune}`
+              );
+              const retryTrack = String(
+                retryRes.json?.tracking ||
+                  retryRes.json?.data?.tracking ||
+                  retryRes.json?.order?.tracking ||
+                  ''
+              ).trim();
+              if (retryRes.ok && retryTrack) {
+                result = retryRes;
+                trackingCode = retryTrack;
+                break;
+              }
+            }
+          }
+        }
+
         const labelUrl = String(
           result.json?.label ||
             result.json?.label_url ||
@@ -1187,10 +1277,15 @@ export function createApiApp(): Express {
           return;
         }
         const errDetail = extractCourierApiError(result.json, result.text);
+        const isStopDeskUnavailable =
+          errDetail.toLowerCase().includes('stop_desk') ||
+          errDetail.toLowerCase().includes('stop desk');
         res.json({
           ok: false,
           latencyMs: result.latencyMs,
-          message: `لم يتم قبول الطرد من ${label}: ${errDetail || `HTTP ${result.status}`}`
+          message: isStopDeskUnavailable
+            ? `مكتب الشحن (Stop Desk) غير متوفر لهذه البلدية أو الولاية لدى ${label} (${errDetail}). يرجى فتح الطلب وتعديل طريقة التوصيل إلى "للمنزل" أو اختيار بلدية بها مكتب شحن.`
+            : `لم يتم قبول الطرد من ${label}: ${errDetail || `HTTP ${result.status}`}`
         });
         return;
       }
