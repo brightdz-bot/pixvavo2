@@ -26,7 +26,14 @@ async function startServer() {
     });
   }
 
-  const port = Number(process.env.PORT) || 3000;
+  const portArgIdx = process.argv.indexOf('--port');
+  const cliPort = portArgIdx !== -1 ? Number(process.argv[portArgIdx + 1]) : NaN;
+  const port =
+    Number.isFinite(cliPort) && cliPort > 0
+      ? cliPort
+      : process.env.NODE_ENV === 'production'
+      ? Number(process.env.PORT) || 3000
+      : 3000;
   app.listen(port, '0.0.0.0', () => {
     console.log(`Bright DZ server listening on http://0.0.0.0:${port}`);
   });
