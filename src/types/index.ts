@@ -196,6 +196,7 @@ export interface Store {
   ownerId: string;
   name: string;
   subdomain: string;
+  customDomain?: string;
   description?: string;
   announcementText?: string;
   logoUrl?: string;

@@ -35,6 +35,8 @@ import {
 
 interface Props {
   storeId: string;
+  storeCustomDomain?: string;
+  storeSubdomain?: string;
   landingPages: LandingPage[];
   onSaveLandingPage: (page: LandingPage) => Promise<boolean>;
   onDeleteLandingPage: (pageId: string) => Promise<void>;
@@ -106,6 +108,8 @@ function createEmptyPage(storeId: string): LandingPage {
 
 export const LandingPagesTab: React.FC<Props> = ({
   storeId,
+  storeCustomDomain,
+  storeSubdomain,
   landingPages,
   onSaveLandingPage,
   onDeleteLandingPage,
@@ -120,7 +124,10 @@ export const LandingPagesTab: React.FC<Props> = ({
 
   const handleCopyLink = (slug: string) => {
     try {
-      const cleanUrl = buildLandingPageUrl(slug);
+      const cleanUrl = buildLandingPageUrl(slug, undefined, {
+        customDomain: storeCustomDomain,
+        storeSubdomain
+      });
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(cleanUrl).catch(() => {
           const ta = document.createElement('textarea');

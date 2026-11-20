@@ -28,6 +28,11 @@ import {
   validateAlgerianPhone,
   validateCustomerName
 } from '../utils/orderValidation';
+import {
+  normalizeDomainHost,
+  isPlatformDefaultHost,
+  extractStoreSubdomainFromLocation
+} from '../utils/urlRouting';
 
 export function isUuid(val?: string | null): boolean {
   if (!val || typeof val !== 'string') return false;
@@ -43,6 +48,16 @@ const API_CONFIGS_KEY = 'brightdz_api_configs';
 const ORDER_COURIER_META_KEY = 'brightdz_order_courier_meta';
 const DELETED_SHEET_ORDERS_KEY = 'brightdz_deleted_sheet_orders';
 const ABANDONED_ORDERS_KEY = 'brightdz_abandoned_orders';
+const DELETED_ABANDONED_SESSIONS_KEY = 'brightdz_deleted_abandoned_sessions';
+
+export const CUSTOM_DOMAIN_SQL_MIGRATION_SNIPPET = `BEGIN;
+ALTER TABLE public.stores
+  ADD COLUMN IF NOT EXISTS custom_domain TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stores_custom_domain_unique
+  ON public.stores (lower(custom_domain))
+  WHERE custom_domain IS NOT NULL AND trim(custom_domain) <> '';
+COMMIT;`;
 
 export const ABANDONED_SQL_MIGRATION_SNIPPET = `BEGIN;
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -563,6 +578,7 @@ function mapDbStore(row: any): Store {
     ownerId: row.owner_id,
     name: row.name,
     subdomain: row.subdomain,
+    customDomain: row.custom_domain ? normalizeDomainHost(row.custom_domain) : '',
     description: row.description || '',
     announcementText: row.announcement_text || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
     logoUrl: row.logo_url,
@@ -805,6 +821,7 @@ class StorageService {
 
   async getStoreBySubdomain(subdomain: string): Promise<Store | undefined> {
     const clean = subdomain.toLowerCase().trim();
+    if (!clean) return undefined;
     if (this.useSupabase() && supabase) {
       const { data, error } = await supabase
         .from('stores')
@@ -812,16 +829,101 @@ class StorageService {
         .ilike('subdomain', clean)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return this.getPrimaryStore();
+      if (!data) return undefined;
       return mapDbStore(data);
     }
-    return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean) || this.getLocalStores()[0];
+    return this.getLocalStores().find(s => s.subdomain.toLowerCase() === clean);
   }
 
-  async saveStore(store: Store): Promise<{ success: boolean; error?: string; store?: Store }> {
+  async getStoreByCustomDomain(hostname: string): Promise<Store | undefined> {
+    const bareHost = normalizeDomainHost(hostname);
+    if (!bareHost || isPlatformDefaultHost(bareHost)) return undefined;
+
+    if (this.useSupabase() && supabase) {
+      const { data, error } = await supabase
+        .from('stores')
+        .select('*')
+        .or(`custom_domain.ilike.${bareHost},custom_domain.ilike.www.${bareHost}`)
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        // Gracefully ignore if custom_domain column isn't migrated yet
+        const msg = (error.message || '').toLowerCase();
+        if (error.code === '42703' || msg.includes('custom_domain') || msg.includes('does not exist')) {
+          return undefined;
+        }
+        console.warn('getStoreByCustomDomain error:', error.message);
+        return undefined;
+      }
+      return data ? mapDbStore(data) : undefined;
+    }
+
+    return this.getLocalStores().find(
+      s => normalizeDomainHost(s.customDomain) === bareHost
+    );
+  }
+
+  async resolveStoreForRequest(options?: {
+    hostname?: string;
+    subdomainHint?: string;
+  }): Promise<{
+    store?: Store;
+    matchedBy?: 'custom_domain' | 'query_subdomain' | 'subdomain' | 'primary';
+    customDomainUnmapped?: boolean;
+    error?: string;
+  }> {
+    const host =
+      options?.hostname ||
+      (typeof window !== 'undefined' ? window.location.hostname : '');
+    const bareHost = normalizeDomainHost(host);
+
+    // 1. Highest priority: independent custom domain mapped to a specific store
+    if (bareHost && !isPlatformDefaultHost(bareHost)) {
+      const byDomain = await this.getStoreByCustomDomain(bareHost);
+      if (byDomain) {
+        return { store: byDomain, matchedBy: 'custom_domain' };
+      }
+      // Fall back to primary store so an unmapped custom domain still renders safely
+      const primaryRes = await this.getPrimaryStoreDetailed();
+      if (primaryRes.error) return { error: primaryRes.error };
+      return {
+        store: primaryRes.store,
+        matchedBy: 'primary',
+        customDomainUnmapped: true
+      };
+    }
+
+    // 2. Explicit ?store=<subdomain> query parameter (for previewing multiple stores on platform host)
+    const querySub = extractStoreSubdomainFromLocation();
+    if (querySub) {
+      const byQuery = await this.getStoreBySubdomain(querySub);
+      if (byQuery) {
+        return { store: byQuery, matchedBy: 'query_subdomain' };
+      }
+    }
+
+    // 3. Explicit subdomain hint (e.g. merchant previewing their own store)
+    if (options?.subdomainHint) {
+      const byHint = await this.getStoreBySubdomain(options.subdomainHint);
+      if (byHint) {
+        return { store: byHint, matchedBy: 'subdomain' };
+      }
+    }
+
+    // 4. Default primary store
+    const primaryRes = await this.getPrimaryStoreDetailed();
+    if (primaryRes.error) return { error: primaryRes.error };
+    return { store: primaryRes.store, matchedBy: 'primary' };
+  }
+
+  async saveStore(
+    store: Store
+  ): Promise<{ success: boolean; error?: string; store?: Store; needsDomainSql?: boolean }> {
+    const cleanDomain = normalizeDomainHost(store.customDomain) || '';
+
     if (this.useSupabase() && supabase) {
       if (store.id && isUuid(store.id)) {
-        const updatePayload: any = {
+        const basePayload: any = {
           name: store.name,
           description: store.description || '',
           announcement_text: store.announcementText || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
@@ -837,17 +939,46 @@ class StorageService {
           updated_at: new Date().toISOString()
         };
 
-        const { data, error } = await supabase
+        const updatePayload: any = {
+          ...basePayload,
+          custom_domain: cleanDomain || null
+        };
+
+        let { data, error } = await supabase
           .from('stores')
           .update(updatePayload)
           .eq('id', store.id)
           .select()
           .single();
 
-        if (error) return { success: false, error: error.message };
+        if (error) {
+          const msg = (error.message || '').toLowerCase();
+          if (error.code === '23505' || msg.includes('idx_stores_custom_domain_unique')) {
+            return {
+              success: false,
+              error: 'هذا النطاق مستخدم بالفعل في متجر آخر على المنصة، اختر نطاقاً مختلفاً.'
+            };
+          }
+          if (error.code === '42703' || msg.includes('custom_domain')) {
+            // Self-healing fallback: save all other settings without failing, and prompt merchant to run 4-line SQL
+            const retry = await supabase
+              .from('stores')
+              .update(basePayload)
+              .eq('id', store.id)
+              .select()
+              .single();
+            if (retry.error) return { success: false, error: retry.error.message };
+            return {
+              success: true,
+              store: { ...mapDbStore(retry.data), customDomain: cleanDomain },
+              needsDomainSql: Boolean(cleanDomain)
+            };
+          }
+          return { success: false, error: error.message };
+        }
         return { success: true, store: mapDbStore(data) };
       } else {
-        const insertPayload: any = {
+        const baseInsert: any = {
           owner_id: store.ownerId,
           name: store.name,
           subdomain: store.subdomain.toLowerCase().trim(),
@@ -864,11 +995,29 @@ class StorageService {
           custom_wilaya_rates: store.customWilayaRates || {}
         };
 
-        const { data, error } = await supabase
+        const insertPayload: any = cleanDomain
+          ? { ...baseInsert, custom_domain: cleanDomain }
+          : baseInsert;
+
+        let { data, error } = await supabase
           .from('stores')
           .insert(insertPayload)
           .select()
           .single();
+
+        if (error && (error.code === '42703' || (error.message || '').toLowerCase().includes('custom_domain'))) {
+          const retry = await supabase
+            .from('stores')
+            .insert(baseInsert)
+            .select()
+            .single();
+          if (retry.error) return { success: false, error: retry.error.message };
+          return {
+            success: true,
+            store: { ...mapDbStore(retry.data), customDomain: cleanDomain },
+            needsDomainSql: Boolean(cleanDomain)
+          };
+        }
 
         if (error) return { success: false, error: error.message };
         return { success: true, store: mapDbStore(data) };
@@ -876,14 +1025,19 @@ class StorageService {
     }
 
     const stores = this.getLocalStores();
+    const normalizedStore: Store = {
+      ...store,
+      customDomain: cleanDomain,
+      updatedAt: new Date().toISOString()
+    };
     const idx = stores.findIndex(s => s.id === store.id);
     if (idx >= 0) {
-      stores[idx] = { ...store, updatedAt: new Date().toISOString() };
+      stores[idx] = normalizedStore;
     } else {
-      stores.push(store);
+      stores.push(normalizedStore);
     }
     localStorage.setItem(STORES_KEY, JSON.stringify(stores));
-    return { success: true, store };
+    return { success: true, store: normalizedStore };
   }
 
   // --- LANDING PAGES ---
@@ -2670,12 +2824,14 @@ class StorageService {
       });
     };
 
-    // 1. Local cache
-    this.getLocalAbandonedOrders()
-      .filter(a => a.storeId === storeId)
-      .forEach(addOrMerge);
+    // Check tombstones so deleted abandoned orders NEVER reappear from stale serverless RAM caches
+    const deletedSet = this.getDeletedAbandonedSet(storeId);
+    const isDeletedItem = (item: { id?: string; sessionId?: string }) =>
+      Boolean(
+        (item.sessionId && deletedSet.has(item.sessionId)) ||
+          (item.id && deletedSet.has(item.id))
+      );
 
-    // 2. Backend API (returns Supabase rows if service key configured + server runtime cache)
     let accessToken = '';
     if (this.useSupabase() && supabase) {
       try {
@@ -2685,6 +2841,48 @@ class StorageService {
         // ignore
       }
     }
+
+    // 1. Direct Supabase query FIRST when signed in — Supabase is authoritative (prevents Vercel multi-instance cache ghosts!)
+    if (this.useSupabase() && supabase && isUuid(storeId) && accessToken) {
+      const { data, error } = await supabase
+        .from('abandoned_orders')
+        .select('*')
+        .eq('store_id', storeId)
+        .order('updated_at', { ascending: false })
+        .limit(300);
+
+      if (!error && Array.isArray(data)) {
+        const authoritative = data
+          .map(r => this.mapSupabaseAbandonedRow(r))
+          .filter(item => !isDeletedItem(item))
+          .sort(
+            (a, b) =>
+              (new Date(b.updatedAt || b.createdAt).getTime() || 0) -
+              (new Date(a.updatedAt || a.createdAt).getTime() || 0)
+          );
+        // Keep local cache in sync with authoritative Supabase rows for this store
+        const otherStoresLocal = this.getLocalAbandonedOrders().filter(a => a.storeId !== storeId);
+        this.saveLocalAbandonedOrders([...authoritative, ...otherStoresLocal]);
+        return { items: authoritative, needsSqlMigration: false };
+      }
+
+      if (error) {
+        const msg = (error.message || '').toLowerCase();
+        if (
+          error.code === '42P01' ||
+          error.code === 'PGRST205' ||
+          msg.includes('does not exist') ||
+          msg.includes('could not find the table')
+        ) {
+          needsSqlMigration = true;
+        }
+      }
+    }
+
+    // 2. Fallback (demo/local mode or before SQL table is created): local + server cache filtered by tombstones
+    this.getLocalAbandonedOrders()
+      .filter(a => a.storeId === storeId && !isDeletedItem(a))
+      .forEach(addOrMerge);
 
     try {
       const res = await fetch(
@@ -2697,44 +2895,51 @@ class StorageService {
         const data = await res.json();
         if (data?.needsSqlMigration) needsSqlMigration = true;
         if (Array.isArray(data?.items)) {
-          data.items.forEach((item: AbandonedOrder) => addOrMerge(item));
+          data.items
+            .filter((item: AbandonedOrder) => !isDeletedItem(item))
+            .forEach((item: AbandonedOrder) => addOrMerge(item));
         }
       }
     } catch {
       // non-fatal
     }
 
-    // 3. Direct Supabase query via owner RLS (works even without service_role key on backend)
-    if (this.useSupabase() && supabase && isUuid(storeId) && accessToken) {
-      const { data, error } = await supabase
-        .from('abandoned_orders')
-        .select('*')
-        .eq('store_id', storeId)
-        .order('updated_at', { ascending: false })
-        .limit(300);
-
-      if (error) {
-        const msg = (error.message || '').toLowerCase();
-        if (
-          error.code === '42P01' ||
-          error.code === 'PGRST205' ||
-          msg.includes('does not exist') ||
-          msg.includes('could not find the table')
-        ) {
-          needsSqlMigration = true;
-        }
-      } else if (Array.isArray(data)) {
-        needsSqlMigration = false;
-        data.forEach(r => addOrMerge(this.mapSupabaseAbandonedRow(r)));
-      }
-    }
-
-    const items = Array.from(mergedBySession.values()).sort(
-      (a, b) =>
-        (new Date(b.updatedAt || b.createdAt).getTime() || 0) -
-        (new Date(a.updatedAt || a.createdAt).getTime() || 0)
-    );
+    const items = Array.from(mergedBySession.values())
+      .filter(item => !isDeletedItem(item))
+      .sort(
+        (a, b) =>
+          (new Date(b.updatedAt || b.createdAt).getTime() || 0) -
+          (new Date(a.updatedAt || a.createdAt).getTime() || 0)
+      );
     return { items, needsSqlMigration };
+  }
+
+  private getDeletedAbandonedSet(storeId: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(DELETED_ABANDONED_SESSIONS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+      const list = Array.isArray(parsed?.[storeId]) ? parsed[storeId] : [];
+      return new Set(list.filter(Boolean));
+    } catch {
+      return new Set<string>();
+    }
+  }
+
+  private rememberDeletedAbandoned(storeId: string, keys: string[]): void {
+    if (!storeId || keys.length === 0) return;
+    try {
+      const raw = localStorage.getItem(DELETED_ABANDONED_SESSIONS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+      const existing = new Set<string>(Array.isArray(parsed?.[storeId]) ? parsed[storeId] : []);
+      keys.forEach(k => {
+        const clean = String(k || '').trim();
+        if (clean) existing.add(clean);
+      });
+      parsed[storeId] = Array.from(existing).slice(-800);
+      localStorage.setItem(DELETED_ABANDONED_SESSIONS_KEY, JSON.stringify(parsed));
+    } catch {
+      // ignore localStorage errors
+    }
   }
 
   async updateAbandonedOrder(
@@ -2853,6 +3058,12 @@ class StorageService {
 
     const idSet = new Set(targets.map(t => t.id).filter(Boolean));
     const sessionSet = new Set(targets.map(t => t.sessionId).filter(Boolean));
+
+    // Record local tombstones immediately so no background poll or stale serverless cache can resurrect them
+    this.rememberDeletedAbandoned(storeId, [
+      ...Array.from(idSet),
+      ...Array.from(sessionSet)
+    ]);
 
     const allLocal = this.getLocalAbandonedOrders();
     const remainingLocal = allLocal.filter(

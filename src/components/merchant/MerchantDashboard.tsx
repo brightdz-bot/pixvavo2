@@ -118,6 +118,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [abandonedOrders, setAbandonedOrders] = useState<AbandonedOrder[]>([]);
   const [abandonedNeedsSql, setAbandonedNeedsSql] = useState(false);
+  const [domainNeedsSql, setDomainNeedsSql] = useState(false);
   const [isSyncingAbandoned, setIsSyncingAbandoned] = useState(false);
   const [lastAbandonedSyncError, setLastAbandonedSyncError] = useState<string | null>(null);
   const [apiConfig, setApiConfig] = useState<StoreApiConfig | null>(null);
@@ -137,6 +138,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const recentSitePushRef = useRef<Record<string, number>>({});
   const sheetRowSigRef = useRef<Record<string, string>>({});
   const isSyncingRef = useRef(false);
+  const abandonedMutationEpochRef = useRef(0);
   const selectedOrderRef = useRef<Order | null>(null);
   selectedOrderRef.current = selectedOrder;
 
@@ -443,9 +445,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     if (!store?.id || isDataLoading || isAuthLoading || (isSupabaseMode && !currentUser?.id)) return;
     const timer = setInterval(() => {
       void syncOrdersWithGoogleSheets(orders, landingPages, false);
+      const startedEpoch = abandonedMutationEpochRef.current;
       void storage
         .getAbandonedOrders(store.id)
         .then(res => {
+          // Discard stale poll result if a delete/update/convert happened while request was in flight
+          if (abandonedMutationEpochRef.current !== startedEpoch) return;
           setAbandonedOrders(res.items);
           setAbandonedNeedsSql(Boolean(res.needsSqlMigration));
         })
@@ -1002,6 +1007,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   ) => {
     const res = await storage.saveStore(updated);
     if (res.success) {
+      setDomainNeedsSql(Boolean(res.needsDomainSql));
       const baseCfg = apiConfig || storage.createDefaultStoreApiConfig(updated);
       const syncedCfg: StoreApiConfig = {
         ...baseCfg,
@@ -1016,7 +1022,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         title: updated.name,
         iconUrl: syncedCfg.faviconUrl || updated.logoUrl
       });
-      showToast('تم حفظ إعدادات المتجر بنجاح');
+      showToast(
+        res.needsDomainSql
+          ? 'تم حفظ الإعدادات؛ يرجى تشغيل كود تفعيل النطاق مرة واحدة في قاعدة البيانات لحفظ النطاق الخاص.'
+          : 'تم حفظ إعدادات المتجر بنجاح'
+      );
     } else {
       showToast('خطأ: ' + (res.error || 'تعذر حفظ الإعدادات'));
     }
@@ -1062,15 +1072,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     nextStatus: AbandonedOrderStatus
   ) => {
     if (!store?.id) return;
+    abandonedMutationEpochRef.current += 1;
     const webhook = resolveAbandonedWebhook(item.landingPageId);
     const contactedAt =
       nextStatus === 'contacted' ? new Date().toISOString() : item.contactedAt;
-    await storage.updateAbandonedOrder(
-      store.id,
-      { id: item.id, sessionId: item.sessionId },
-      { status: nextStatus, contactedAt },
-      webhook
-    );
     setAbandonedOrders(prev =>
       prev.map(a =>
         a.id === item.id || a.sessionId === item.sessionId
@@ -1078,22 +1083,31 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           : a
       )
     );
+    await storage.updateAbandonedOrder(
+      store.id,
+      { id: item.id, sessionId: item.sessionId },
+      { status: nextStatus, contactedAt },
+      webhook
+    );
+    abandonedMutationEpochRef.current += 1;
     showToast(`تم تحديث الحالة إلى «${ABANDONED_STAGE_LABELS[nextStatus]}»`);
   };
 
   const handleDeleteAbandonedOrders = async (items: AbandonedOrder[]) => {
     if (!store?.id || items.length === 0) return;
+    abandonedMutationEpochRef.current += 1;
+    const removeIds = new Set(items.map(i => i.id));
+    const removeSessions = new Set(items.map(i => i.sessionId));
+    setAbandonedOrders(prev =>
+      prev.filter(a => !removeIds.has(a.id) && !removeSessions.has(a.sessionId))
+    );
     const defaultWebhook = resolveAbandonedWebhook(items[0]?.landingPageId);
     await storage.deleteAbandonedOrders(
       store.id,
       items.map(i => ({ id: i.id, sessionId: i.sessionId })),
       defaultWebhook
     );
-    const removeIds = new Set(items.map(i => i.id));
-    const removeSessions = new Set(items.map(i => i.sessionId));
-    setAbandonedOrders(prev =>
-      prev.filter(a => !removeIds.has(a.id) && !removeSessions.has(a.sessionId))
-    );
+    abandonedMutationEpochRef.current += 1;
     showToast(
       items.length === 1
         ? 'تم حذف الطلب المتروك نهائياً'
@@ -1216,6 +1230,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     });
 
     // Mark abandoned session recovered & remove from "الطلبات المتروكة" sheet
+    abandonedMutationEpochRef.current += 1;
     await storage.updateAbandonedOrder(
       store.id,
       { id: payload.abandoned.id, sessionId: payload.abandoned.sessionId },
@@ -1228,6 +1243,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       storage.getLandingPages(store.id),
       storage.getAbandonedOrders(store.id)
     ]);
+    abandonedMutationEpochRef.current += 1;
     setOrders(updatedOrders);
     setLandingPages(updatedPages);
     setAbandonedOrders(updatedAbandoned.items);
@@ -1582,6 +1598,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
               {activeTab === 'pages' && (
                 <LandingPagesTab
                   storeId={store.id}
+                  storeCustomDomain={store.customDomain}
+                  storeSubdomain={store.subdomain}
                   landingPages={landingPages}
                   onSaveLandingPage={handleSaveLandingPage}
                   onDeleteLandingPage={handleDeleteLandingPage}
@@ -1667,6 +1685,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 <SettingsTab
                   store={store}
                   apiConfig={apiConfig}
+                  needsDomainSql={domainNeedsSql}
+                  onDismissDomainSql={() => setDomainNeedsSql(false)}
                   onSaveSettings={handleSaveSettings}
                   onSaveStoreExtras={handleSaveStoreExtras}
                 />

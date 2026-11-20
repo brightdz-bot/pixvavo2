@@ -106,13 +106,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       if (effectiveSupabaseMode && supabase) {
         try {
-          const [{ data: { session } }, primaryStore] = await Promise.all([
+          const [{ data: { session } }, resolved] = await Promise.all([
             supabase.auth.getSession(),
-            storage.getPrimaryStore()
+            storage.resolveStoreForRequest()
           ]);
-          if (primaryStore && mounted) {
-            setCurrentStore(primaryStore);
-            setCurrentSubdomain(primaryStore.subdomain);
+          if (resolved.store && mounted) {
+            setCurrentStore(resolved.store);
+            setCurrentSubdomain(resolved.store.subdomain);
           }
           if (session?.user && mounted) {
             await loadSupabaseUserData(session.user.id, session.user.email || '');

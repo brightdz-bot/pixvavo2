@@ -7,6 +7,8 @@ import {
   DEFAULT_WHATSAPP_SHIPPING_TEMPLATE
 } from '../../services/integrations';
 import { resizeImageToDataUrl, applyBrowserBranding } from '../../services/branding';
+import { CUSTOM_DOMAIN_SQL_MIGRATION_SNIPPET } from '../../services/storage';
+import { isValidCustomDomain, normalizeDomainHost } from '../../utils/urlRouting';
 import {
   Palette,
   Truck,
@@ -27,12 +29,16 @@ import {
   Power,
   Image as ImageIcon,
   Upload,
-  Globe
+  Globe,
+  Database,
+  AlertCircle
 } from 'lucide-react';
 
 interface Props {
   store: Store;
   apiConfig?: StoreApiConfig | null;
+  needsDomainSql?: boolean;
+  onDismissDomainSql?: () => void;
   onSaveSettings: (
     updatedStore: Store,
     apiExtras?: Pick<
@@ -77,10 +83,16 @@ const TEMPLATE_VARIABLES = [
 export const SettingsTab: React.FC<Props> = ({
   store,
   apiConfig,
+  needsDomainSql = false,
+  onDismissDomainSql,
   onSaveSettings,
   onSaveStoreExtras
 }) => {
   const [name, setName] = useState(store.name);
+  const [customDomain, setCustomDomain] = useState(store.customDomain || '');
+  const [domainError, setDomainError] = useState<string | null>(null);
+  const [copiedDomainSql, setCopiedDomainSql] = useState(false);
+  const [copiedPreviewLink, setCopiedPreviewLink] = useState(false);
   const [description, setDescription] = useState(store.description || '');
   const [announcementText, setAnnouncementText] = useState(
     store.announcementText || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام'
@@ -126,7 +138,8 @@ export const SettingsTab: React.FC<Props> = ({
 
   useEffect(() => {
     setLogoUrl(store.logoUrl || '');
-  }, [store.id, store.logoUrl]);
+    setCustomDomain(store.customDomain || '');
+  }, [store.id, store.logoUrl, store.customDomain]);
 
   useEffect(() => {
     if (apiConfig) {
@@ -261,11 +274,18 @@ export const SettingsTab: React.FC<Props> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setDomainError(null);
+    const normalizedDomain = normalizeDomainHost(customDomain);
+    if (customDomain.trim() && !isValidCustomDomain(normalizedDomain)) {
+      setDomainError('صيغة النطاق غير صحيحة. اكتب النطاق بدون مسافات مثل: myshop.com');
+      return;
+    }
     const cleanLogo = logoUrl.trim();
     const cleanFavicon = faviconUrl.trim();
     const updated: Store = {
       ...store,
       name: name.trim(),
+      customDomain: normalizedDomain,
       description: description.trim(),
       announcementText: announcementText.trim(),
       logoUrl: cleanLogo,
@@ -279,6 +299,7 @@ export const SettingsTab: React.FC<Props> = ({
       customWilayaRates: customRates,
       updatedAt: new Date().toISOString()
     };
+    setCustomDomain(normalizedDomain);
     onSaveSettings(updated, {
       promoCoupons,
       whatsappConfirmTemplate: whatsappConfirmTemplate.trim(),
@@ -291,6 +312,31 @@ export const SettingsTab: React.FC<Props> = ({
     });
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
+  };
+
+  const normalizedDomainPreview = normalizeDomainHost(customDomain);
+  const currentOrigin =
+    typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '';
+  const storePreviewUrl = `${currentOrigin}/?store=${encodeURIComponent(store.subdomain)}`;
+
+  const handleCopyPreviewUrl = () => {
+    const targetUrl =
+      normalizedDomainPreview && isValidCustomDomain(normalizedDomainPreview)
+        ? `https://${normalizedDomainPreview}`
+        : storePreviewUrl;
+    if (navigator.clipboard) {
+      void navigator.clipboard.writeText(targetUrl).catch(() => {});
+    }
+    setCopiedPreviewLink(true);
+    window.setTimeout(() => setCopiedPreviewLink(false), 2000);
+  };
+
+  const handleCopyDomainSql = () => {
+    if (navigator.clipboard) {
+      void navigator.clipboard.writeText(CUSTOM_DOMAIN_SQL_MIGRATION_SNIPPET).catch(() => {});
+    }
+    setCopiedDomainSql(true);
+    window.setTimeout(() => setCopiedDomainSql(false), 2000);
   };
 
   return (
@@ -365,6 +411,115 @@ export const SettingsTab: React.FC<Props> = ({
               onChange={e => setDescription(e.target.value)}
               className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
             />
+          </div>
+
+          {/* Multi-Store Independent Custom Domain */}
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-extrabold flex items-center gap-1.5 text-slate-800 dark:text-slate-100">
+                  <Globe className="w-4 h-4 text-emerald-600" />
+                  <span>النطاق الخاص المستقل لهذا المتجر</span>
+                </h4>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  اربط كل متجر بنطاقه المستقل ليفتح تلقائياً بهويته وصفحاته عند زيارة الزبائن لذلك النطاق من نفس المنصة.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyPreviewUrl}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:border-emerald-500 text-[11px] font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+              >
+                {copiedPreviewLink ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedPreviewLink ? 'تم نسخ الرابط' : 'نسخ رابط المتجر'}</span>
+              </button>
+            </div>
+
+            {domainError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{domainError}</span>
+              </div>
+            )}
+
+            {needsDomainSql && (
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200">
+                    <Database className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>لتخزين النطاق الخاص في قاعدة البيانات، شغّل كود التفعيل السريع مرة واحدة فقط.</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyDomainSql}
+                      className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedDomainSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedDomainSql ? 'تم النسخ' : 'نسخ كود التفعيل'}</span>
+                    </button>
+                    {onDismissDomainSql && (
+                      <button
+                        type="button"
+                        onClick={onDismissDomainSql}
+                        className="p-1 text-amber-700 dark:text-amber-300 rounded-lg cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <pre
+                  dir="ltr"
+                  className="p-2.5 rounded-lg bg-slate-950 text-slate-100 text-[11px] font-mono overflow-x-auto"
+                >
+                  {CUSTOM_DOMAIN_SQL_MIGRATION_SNIPPET}
+                </pre>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold mb-1">اسم النطاق الخاص (اختياري)</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={customDomain}
+                  onChange={e => {
+                    setDomainError(null);
+                    setCustomDomain(e.target.value);
+                  }}
+                  placeholder="myshop.com"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  يُنسخ تلقائياً في روابط صفحات الهبوط الخاصة بهذا المتجر عند الحفظ.
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/70 space-y-1.5 text-[11px]">
+                <div className="font-bold text-slate-700 dark:text-slate-200">
+                  قيَم الربط لدى مزوّد النطاق وإعدادات الاستضافة:
+                </div>
+                <div className="flex items-center justify-between gap-2 font-mono text-slate-600 dark:text-slate-300" dir="ltr">
+                  <span>A (@)</span>
+                  <span className="font-bold">76.76.21.21</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 font-mono text-slate-600 dark:text-slate-300" dir="ltr">
+                  <span>CNAME (www)</span>
+                  <span className="font-bold">cname.vercel-dns.com</span>
+                </div>
+                <div className="pt-1 border-t border-slate-200/70 dark:border-slate-700/70 text-slate-500 dark:text-slate-400 truncate" dir="ltr">
+                  {normalizedDomainPreview && isValidCustomDomain(normalizedDomainPreview)
+                    ? `https://${normalizedDomainPreview}`
+                    : storePreviewUrl}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Store Header Logo + Google Chrome Tab Favicon */}

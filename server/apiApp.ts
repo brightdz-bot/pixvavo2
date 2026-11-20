@@ -108,17 +108,40 @@ interface CachedAbandonedOrder {
 }
 
 const abandonedByStoreMap = new Map<string, Map<string, CachedAbandonedOrder>>();
+const deletedAbandonedByStore = new Map<string, Set<string>>();
+
+function getServerDeletedAbandonedSet(storeId: string): Set<string> {
+  let set = deletedAbandonedByStore.get(storeId);
+  if (!set) {
+    set = new Set<string>();
+    deletedAbandonedByStore.set(storeId, set);
+  }
+  return set;
+}
 
 function loadPersistedAbandonedOrders() {
   try {
     if (fs.existsSync(RUNTIME_ABANDONED_PATH)) {
       const raw = fs.readFileSync(RUNTIME_ABANDONED_PATH, 'utf8');
-      const parsed = JSON.parse(raw) as Record<string, CachedAbandonedOrder[]>;
-      Object.entries(parsed).forEach(([storeId, list]) => {
+      const parsed = JSON.parse(raw) as any;
+      const itemsObj: Record<string, CachedAbandonedOrder[]> =
+        parsed && typeof parsed === 'object' && parsed.__v === 2 ? parsed.items || {} : parsed || {};
+      const deletedObj: Record<string, string[]> =
+        parsed && typeof parsed === 'object' && parsed.__v === 2 ? parsed.deleted || {} : {};
+
+      Object.entries(deletedObj).forEach(([storeId, keys]) => {
+        if (!Array.isArray(keys)) return;
+        deletedAbandonedByStore.set(storeId, new Set(keys.map(k => String(k || '').trim()).filter(Boolean)));
+      });
+
+      Object.entries(itemsObj).forEach(([storeId, list]) => {
         if (!Array.isArray(list)) return;
+        const delSet = deletedAbandonedByStore.get(storeId);
         const m = new Map<string, CachedAbandonedOrder>();
         list.forEach(item => {
-          if (item?.sessionId) m.set(item.sessionId, item);
+          if (!item?.sessionId) return;
+          if (delSet && (delSet.has(item.sessionId) || delSet.has(item.id))) return;
+          m.set(item.sessionId, item);
         });
         abandonedByStoreMap.set(storeId, m);
       });
@@ -130,13 +153,21 @@ function loadPersistedAbandonedOrders() {
 
 function persistAbandonedOrders() {
   try {
-    const out: Record<string, CachedAbandonedOrder[]> = {};
+    const items: Record<string, CachedAbandonedOrder[]> = {};
     abandonedByStoreMap.forEach((m, storeId) => {
-      out[storeId] = Array.from(m.values())
+      items[storeId] = Array.from(m.values())
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
         .slice(0, 300);
     });
-    fs.writeFileSync(RUNTIME_ABANDONED_PATH, JSON.stringify(out, null, 2), 'utf8');
+    const deleted: Record<string, string[]> = {};
+    deletedAbandonedByStore.forEach((set, storeId) => {
+      deleted[storeId] = Array.from(set).slice(-600);
+    });
+    fs.writeFileSync(
+      RUNTIME_ABANDONED_PATH,
+      JSON.stringify({ __v: 2, items, deleted }, null, 2),
+      'utf8'
+    );
   } catch {
     // non-fatal
   }
@@ -2819,6 +2850,13 @@ export function createApiApp(): Express {
       const shippingFee = Math.max(0, Number(body?.shippingFee) || 0);
       const total = Math.max(0, Number(body?.total) || subtotal + shippingFee);
 
+      // Ignore late debounces/beacons for sessions already deleted by merchant
+      const delSet = deletedAbandonedByStore.get(storeId);
+      if (delSet && delSet.has(sessionId)) {
+        res.json({ ok: true, ignored: true, deleted: true });
+        return;
+      }
+
       let storeMap = abandonedByStoreMap.get(storeId);
       if (!storeMap) {
         storeMap = new Map<string, CachedAbandonedOrder>();
@@ -2910,11 +2948,14 @@ export function createApiApp(): Express {
   app.get('/api/abandoned-orders/list', async (req: Request, res: Response) => {
     const storeId = String(req.query?.storeId || '').trim();
     if (!storeId) {
-      res.json({ ok: true, items: [], needsSqlMigration: false });
+      res.json({ ok: true, items: [], needsSqlMigration: false, source: 'empty' });
       return;
     }
 
-    const cachedItems = Array.from(abandonedByStoreMap.get(storeId)?.values() || []);
+    const delSet = deletedAbandonedByStore.get(storeId);
+    const cachedItems = Array.from(abandonedByStoreMap.get(storeId)?.values() || []).filter(
+      item => !delSet || (!delSet.has(item.sessionId) && !delSet.has(item.id))
+    );
     const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
     const hasAuthHeader = Boolean(req.headers.authorization);
 
@@ -2937,14 +2978,18 @@ export function createApiApp(): Express {
             8000
           );
           if (dbRes.ok && Array.isArray(dbRes.json)) {
-            const dbItems = dbRes.json.map(mapDbAbandonedRow);
-            const merged = new Map<string, CachedAbandonedOrder>();
-            cachedItems.forEach(item => merged.set(item.sessionId, item));
-            dbItems.forEach(item => merged.set(item.sessionId, item));
-            const sorted = Array.from(merged.values()).sort(
+            // Supabase is authoritative: NEVER resurrect stale RAM items from warm serverless instances
+            const dbItems = dbRes.json
+              .map(mapDbAbandonedRow)
+              .filter(item => !delSet || (!delSet.has(item.sessionId) && !delSet.has(item.id)));
+            const refreshedMap = new Map<string, CachedAbandonedOrder>();
+            dbItems.forEach(item => refreshedMap.set(item.sessionId, item));
+            abandonedByStoreMap.set(storeId, refreshedMap);
+            persistAbandonedOrders();
+            const sorted = dbItems.sort(
               (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             );
-            res.json({ ok: true, items: sorted, needsSqlMigration: false });
+            res.json({ ok: true, items: sorted, needsSqlMigration: false, source: 'supabase' });
             return;
           }
           const errText = `${dbRes.text || ''} ${JSON.stringify(dbRes.json || {})}`;
@@ -2954,7 +2999,8 @@ export function createApiApp(): Express {
             items: cachedItems.sort(
               (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             ),
-            needsSqlMigration: missingTable
+            needsSqlMigration: missingTable,
+            source: 'cache'
           });
           return;
         } catch {
@@ -2971,7 +3017,8 @@ export function createApiApp(): Express {
       items: cachedItems.sort(
         (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       ),
-      needsSqlMigration: false
+      needsSqlMigration: false,
+      source: 'cache'
     });
   });
 
@@ -3073,6 +3120,7 @@ export function createApiApp(): Express {
     }
 
     const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
+    let deletedFromDb = false;
     if (isStoreUuid && req.headers.authorization) {
       const auth = await verifySupabaseStoreOwner(req, storeId);
       if (!auth.ok && auth.code !== 'missing_service_key') {
@@ -3082,44 +3130,40 @@ export function createApiApp(): Express {
       if (auth.ok) {
         const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         const uuidIds = ids.filter(x => uuidRe.test(x));
+        const restHeaders = {
+          apikey: auth.serviceRoleKey,
+          ...(auth.serviceRoleKey.startsWith('eyJ')
+            ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+            : {}),
+          Accept: 'application/json'
+        };
         try {
           if (uuidIds.length > 0) {
-            await fetchJsonWithTimeout(
+            const delIdRes = await fetchJsonWithTimeout(
               `${auth.supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&id=in.(${uuidIds.join(',')})`,
-              {
-                method: 'DELETE',
-                headers: {
-                  apikey: auth.serviceRoleKey,
-                  ...(auth.serviceRoleKey.startsWith('eyJ')
-                    ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
-                    : {}),
-                  Accept: 'application/json'
-                }
-              },
+              { method: 'DELETE', headers: restHeaders },
               8000
             );
-          } else if (sessionIds.length > 0) {
+            if (delIdRes.ok) deletedFromDb = true;
+          }
+          if (sessionIds.length > 0) {
             const encodedSessions = sessionIds.map(s => `"${s.replace(/"/g, '')}"`).join(',');
-            await fetchJsonWithTimeout(
+            const delSessRes = await fetchJsonWithTimeout(
               `${auth.supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&session_id=in.(${encodeURIComponent(encodedSessions)})`,
-              {
-                method: 'DELETE',
-                headers: {
-                  apikey: auth.serviceRoleKey,
-                  ...(auth.serviceRoleKey.startsWith('eyJ')
-                    ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
-                    : {}),
-                  Accept: 'application/json'
-                }
-              },
+              { method: 'DELETE', headers: restHeaders },
               8000
             );
+            if (delSessRes.ok) deletedFromDb = true;
           }
         } catch {
           // non-fatal
         }
       }
     }
+
+    const delSet = getServerDeletedAbandonedSet(storeId);
+    ids.forEach(x => delSet.add(x));
+    sessionIds.forEach(s => delSet.add(s));
 
     const storeMap = abandonedByStoreMap.get(storeId);
     if (storeMap) {
@@ -3130,10 +3174,69 @@ export function createApiApp(): Express {
           storeMap.delete(k);
         }
       }
-      persistAbandonedOrders();
+    }
+    persistAbandonedOrders();
+
+    res.json({ ok: true, deletedFromDb });
+  });
+
+  // Resolve a custom domain hostname to its store (public read-only helper)
+  app.get('/api/store/resolve-domain', async (req: Request, res: Response) => {
+    const rawHost = String(req.query?.host || req.headers.host || '').trim().toLowerCase();
+    const cleanHost = rawHost
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .split(':')[0]
+      .replace(/\.+$/, '')
+      .replace(/^www\./i, '');
+
+    if (!cleanHost || !cleanHost.includes('.')) {
+      res.json({ ok: true, matched: false, host: cleanHost });
+      return;
     }
 
-    res.json({ ok: true });
+    const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+    const apiKey = (
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      ''
+    ).trim();
+
+    if (supabaseUrl && apiKey) {
+      try {
+        const filter = `or=(custom_domain.ilike.${encodeURIComponent(cleanHost)},custom_domain.ilike.${encodeURIComponent('www.' + cleanHost)})`;
+        const dbRes = await fetchJsonWithTimeout(
+          `${supabaseUrl}/rest/v1/stores?select=id,name,subdomain,custom_domain&${filter}&limit=1`,
+          {
+            method: 'GET',
+            headers: {
+              apikey: apiKey,
+              ...(apiKey.startsWith('eyJ') ? { Authorization: `Bearer ${apiKey}` } : {}),
+              Accept: 'application/json'
+            }
+          },
+          6000
+        );
+        if (dbRes.ok && Array.isArray(dbRes.json) && dbRes.json[0]) {
+          res.json({
+            ok: true,
+            matched: true,
+            host: cleanHost,
+            store: {
+              id: dbRes.json[0].id,
+              name: dbRes.json[0].name,
+              subdomain: dbRes.json[0].subdomain,
+              customDomain: dbRes.json[0].custom_domain
+            }
+          });
+          return;
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+
+    res.json({ ok: true, matched: false, host: cleanHost });
   });
 
   return app;

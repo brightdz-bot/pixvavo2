@@ -65,19 +65,19 @@ export const PublicStorefront: React.FC<Props> = ({
       setIsLoading(true);
       setLoadError(null);
       try {
-        let s = await storage.getStoreBySubdomain(subdomain);
-        if (!s) {
-          const primaryRes = await storage.getPrimaryStoreDetailed();
-          if (primaryRes.error) {
-            if (mounted) {
-              setLoadError(
-                'تعذر الاتصال بقاعدة البيانات أو الجداول غير محدثة. تأكد من تنفيذ ملف السكيمة/الترحيل في Supabase SQL Editor.'
-              );
-            }
-            return;
+        const resolved = await storage.resolveStoreForRequest({
+          hostname: typeof window !== 'undefined' ? window.location.hostname : '',
+          subdomainHint: subdomain
+        });
+        if (resolved.error) {
+          if (mounted) {
+            setLoadError(
+              'تعذر الاتصال بقاعدة البيانات أو الجداول غير محدثة. تأكد من تنفيذ ملف السكيمة/الترحيل في Supabase SQL Editor.'
+            );
           }
-          s = primaryRes.store;
+          return;
         }
+        const s = resolved.store;
         if (!mounted) return;
         if (!s) {
           setStore(null);
