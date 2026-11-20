@@ -1554,30 +1554,66 @@ export function createApiApp(): Express {
     const action = String(req.body?.action || '').trim();
     const orderId = String(req.body?.orderId || '').trim();
     if (!webhookUrl) {
-      res.json({ ok: false, data: null });
+      res.json({ ok: false, data: null, error: 'رابط Google Sheet غير محدد' });
       return;
     }
 
     try {
       const target = new URL(webhookUrl);
       if (target.protocol !== 'https:' && target.protocol !== 'http:') {
-        res.json({ ok: false, data: null });
+        res.json({ ok: false, data: null, error: 'رابط Google Sheet غير صالح' });
         return;
       }
       if (action) target.searchParams.set('action', action);
       if (orderId) target.searchParams.set('orderId', orderId);
       const result = await fetchJsonWithTimeout(
         target.toString(),
-        { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json' } },
-        8000
+        { method: 'GET', redirect: 'follow', headers: { Accept: 'application/json, text/plain, */*' } },
+        16000
       );
-      if (result.ok && result.json && typeof result.json === 'object') {
-        res.json({ ok: true, data: result.json });
+
+      let parsed: any = result.json;
+      if (!parsed && result.text) {
+        const trimmed = result.text.trim();
+        // Support JSONP-wrapped response if Apps Script returns callback(...)
+        const jsonpMatch = trimmed.match(/^[a-zA-Z0-9_$.]+\(([\s\S]*)\);?$/);
+        if (jsonpMatch && jsonpMatch[1]) {
+          try {
+            parsed = JSON.parse(jsonpMatch[1]);
+          } catch {
+            parsed = null;
+          }
+        }
+      }
+
+      if (result.ok && parsed && typeof parsed === 'object') {
+        res.json({ ok: true, data: parsed });
         return;
       }
-      res.json({ ok: false, data: null });
-    } catch {
-      res.json({ ok: false, data: null });
+
+      if (result.text && (result.text.includes('<!DOCTYPE html') || result.text.includes('<html'))) {
+        res.json({
+          ok: false,
+          data: null,
+          error: 'رابط Google Sheet يعيد صفحة HTML بدلاً من JSON: تأكد من تحديث كود Apps Script (دالة doGet) ونشره بصلاحية "Anyone / أي شخص"'
+        });
+        return;
+      }
+
+      res.json({
+        ok: false,
+        data: null,
+        error: `تعذر قراءة Google Sheet (HTTP ${result.status}) — تأكد من نشر كود doGet الصحيح`
+      });
+    } catch (err: any) {
+      const isAbort = err?.name === 'AbortError';
+      res.json({
+        ok: false,
+        data: null,
+        error: isAbort
+          ? 'انتهت مهلة الاتصال بـ Google Sheet — يرجى المحاولة مرة أخرى'
+          : `تعذر الاتصال بـ Google Sheet: ${err?.message || 'خطأ شبكة'}`
+      });
     }
   });
 
@@ -1994,6 +2030,301 @@ export function createApiApp(): Express {
       discount,
       reason
     });
+  });
+
+  // 10. Authenticated Merchant Order Actions (Import missing Google Sheet orders + Delete orders)
+  const verifySupabaseStoreOwner = async (
+    req: Request,
+    storeId: string
+  ): Promise<
+    | { ok: true; supabaseUrl: string; serviceRoleKey: string; userId: string }
+    | { ok: false; status: number; code: string; message: string }
+  > => {
+    const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
+      .trim()
+      .replace(/\/+$/, '');
+    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      return {
+        ok: false,
+        status: 501,
+        code: 'missing_service_key',
+        message: 'مفتاح السيرفر SUPABASE_SERVICE_ROLE_KEY غير مضبوط'
+      };
+    }
+
+    const authHeader = String(req.headers.authorization || '').trim();
+    const accessToken = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+    if (!accessToken) {
+      return { ok: false, status: 401, code: 'unauthorized', message: 'يرجى تسجيل الدخول كمالك المتجر أولاً' };
+    }
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId)) {
+      return { ok: false, status: 400, code: 'invalid_store', message: 'معرّف المتجر غير صالح' };
+    }
+
+    try {
+      const userRes = await fetchJsonWithTimeout(
+        `${supabaseUrl}/auth/v1/user`,
+        {
+          method: 'GET',
+          headers: {
+            apikey: anonKey || serviceRoleKey,
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/json'
+          }
+        },
+        6000
+      );
+      const userId = String(userRes.json?.id || '').trim();
+      if (!userRes.ok || !userId) {
+        return { ok: false, status: 401, code: 'invalid_session', message: 'انتهت جلسة تسجيل الدخول، يرجى تحديث الصفحة' };
+      }
+
+      const srHeaders: Record<string, string> = {
+        apikey: serviceRoleKey,
+        ...(serviceRoleKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceRoleKey}` } : {}),
+        Accept: 'application/json'
+      };
+
+      const storeRes = await fetchJsonWithTimeout(
+        `${supabaseUrl}/rest/v1/stores?id=eq.${encodeURIComponent(storeId)}&owner_id=eq.${encodeURIComponent(userId)}&select=id&limit=1`,
+        { method: 'GET', headers: srHeaders },
+        6000
+      );
+      const ownsStore = storeRes.ok && Array.isArray(storeRes.json) && storeRes.json.length > 0;
+      if (!ownsStore) {
+        const adminRes = await fetchJsonWithTimeout(
+          `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&role=eq.admin&select=id&limit=1`,
+          { method: 'GET', headers: srHeaders },
+          6000
+        );
+        const isAdmin = adminRes.ok && Array.isArray(adminRes.json) && adminRes.json.length > 0;
+        if (!isAdmin) {
+          return { ok: false, status: 403, code: 'forbidden', message: 'غير مصرح لك بتنفيذ هذا الإجراء على هذا المتجر' };
+        }
+      }
+
+      return { ok: true, supabaseUrl, serviceRoleKey, userId };
+    } catch (err: any) {
+      return {
+        ok: false,
+        status: 500,
+        code: 'verify_failed',
+        message: `تعذر التحقق من الصلاحيات: ${err?.message || 'خطأ شبكة'}`
+      };
+    }
+  };
+
+  app.post('/api/orders/import-from-sheet', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const rawOrders = Array.isArray(req.body?.orders) ? req.body.orders : [];
+    if (!storeId || rawOrders.length === 0) {
+      res.json({ ok: true, importedCount: 0, skippedCount: 0 });
+      return;
+    }
+
+    const auth = await verifySupabaseStoreOwner(req, storeId);
+    if (!auth.ok) {
+      res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+      return;
+    }
+
+    const allowedStatuses = new Set(['new', 'confirmed', 'shipping', 'delivered', 'cancelled']);
+    const validWilayaCodes = new Set(WILAYA_ENTRIES.map(w => w.code));
+
+    const payloadRows = rawOrders
+      .slice(0, 200)
+      .map((item: any) => {
+        const orderNumber = String(item?.orderNumber || '').replace(/^#/, '').trim().toUpperCase();
+        if (!orderNumber) return null;
+
+        const rawWilayaId = String(item?.wilayaId || '').trim().padStart(2, '0');
+        const wilayaEntry =
+          WILAYA_ENTRIES.find(w => w.code === rawWilayaId) ||
+          WILAYA_ENTRIES.find(
+            w =>
+              item?.wilayaName &&
+              (w.nameAr === String(item.wilayaName).trim() ||
+                String(item.wilayaName).trim().includes(w.nameAr) ||
+                w.nameFr.toLowerCase() === String(item.wilayaName).trim().toLowerCase())
+          ) ||
+          WILAYA_ENTRIES[15]; // Default to 16 - الجزائر العاصمة
+
+        const wilayaId = validWilayaCodes.has(wilayaEntry.code) ? wilayaEntry.code : '16';
+        const wilayaName = String(item?.wilayaName || '').trim() || wilayaEntry.nameAr;
+        const commune = String(item?.commune || '').trim().slice(0, 120);
+        const deliveryType = item?.deliveryType === 'stop' ? 'stop' : 'home';
+        const status = allowedStatuses.has(String(item?.status || ''))
+          ? String(item.status)
+          : 'new';
+        const customerName = String(item?.customerName || '').trim().slice(0, 100) || 'زبون Google Sheet';
+        const customerPhone = String(item?.customerPhone || '').trim().slice(0, 30) || '0000000000';
+        const bundleLabel = String(item?.bundleLabel || '').trim().slice(0, 200) || 'طلب من Google Sheet';
+        const subtotal = Math.max(0, Number(item?.subtotal) || 0);
+        const shippingFee = Math.max(0, Number(item?.shippingFee) || 0);
+        const total = Math.max(0, Number(item?.total) || subtotal + shippingFee);
+        const trackingCode = String(item?.trackingCode || '').trim().slice(0, 120) || null;
+        const address =
+          String(item?.address || '').trim().slice(0, 250) ||
+          `${wilayaName}${commune ? ' - ' + commune : ''}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`;
+        const parsedDate = item?.createdAt ? new Date(item.createdAt) : null;
+        const createdIso =
+          parsedDate && !Number.isNaN(parsedDate.getTime())
+            ? parsedDate.toISOString()
+            : new Date().toISOString();
+
+        return {
+          order_number: orderNumber,
+          store_id: storeId,
+          landing_page_id:
+            item?.landingPageId &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(item.landingPageId))
+              ? String(item.landingPageId)
+              : null,
+          bundle_label: bundleLabel,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          wilaya_id: wilayaId,
+          wilaya_name: wilayaName,
+          commune: commune || null,
+          delivery_type: deliveryType,
+          address,
+          items: [
+            {
+              productId: String(item?.landingPageId || 'sheet_import'),
+              title: bundleLabel,
+              price: subtotal || total,
+              quantity: 1,
+              variantText: bundleLabel
+            }
+          ],
+          subtotal: subtotal || Math.max(0, total - shippingFee),
+          shipping_fee: shippingFee,
+          total,
+          status,
+          tracking_code: trackingCode,
+          status_history: [
+            {
+              status,
+              timestamp: createdIso,
+              note: 'تم استيراد الطلب تلقائياً من Google Sheet'
+            }
+          ],
+          payment_method: 'cod',
+          notes: 'مستورد من Google Sheet',
+          created_at: createdIso
+        };
+      })
+      .filter(Boolean);
+
+    if (payloadRows.length === 0) {
+      res.json({ ok: true, importedCount: 0, skippedCount: 0 });
+      return;
+    }
+
+    try {
+      const insertRes = await fetchJsonWithTimeout(
+        `${auth.supabaseUrl}/rest/v1/orders?on_conflict=order_number`,
+        {
+          method: 'POST',
+          headers: {
+            apikey: auth.serviceRoleKey,
+            ...(auth.serviceRoleKey.startsWith('eyJ')
+              ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+              : {}),
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Prefer: 'resolution=ignore-duplicates,return=representation'
+          },
+          body: JSON.stringify(payloadRows)
+        },
+        12000
+      );
+
+      if (!insertRes.ok) {
+        res.status(insertRes.status || 500).json({
+          ok: false,
+          message: `تعذر استيراد الطلبات إلى قاعدة البيانات: ${extractCourierApiError(insertRes.json, insertRes.text)}`
+        });
+        return;
+      }
+
+      const inserted = Array.isArray(insertRes.json) ? insertRes.json : [];
+      res.json({
+        ok: true,
+        importedCount: inserted.length,
+        skippedCount: Math.max(0, payloadRows.length - inserted.length)
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        ok: false,
+        message: `تعذر استيراد الطلبات من Google Sheet: ${err?.message || 'خطأ شبكة'}`
+      });
+    }
+  });
+
+  app.post('/api/orders/delete', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const rawIds: unknown[] = Array.isArray(req.body?.orderIds) ? req.body.orderIds : [];
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const orderIds = Array.from(
+      new Set(
+        rawIds
+          .map(id => String(id || '').trim())
+          .filter(id => uuidRegex.test(id))
+      )
+    );
+
+    if (!storeId || orderIds.length === 0) {
+      res.status(400).json({ ok: false, message: 'يرجى تحديد طلب واحد على الأقل للحذف' });
+      return;
+    }
+
+    const auth = await verifySupabaseStoreOwner(req, storeId);
+    if (!auth.ok) {
+      res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+      return;
+    }
+
+    try {
+      const inList = orderIds.join(',');
+      const delRes = await fetchJsonWithTimeout(
+        `${auth.supabaseUrl}/rest/v1/orders?store_id=eq.${encodeURIComponent(storeId)}&id=in.(${inList})`,
+        {
+          method: 'DELETE',
+          headers: {
+            apikey: auth.serviceRoleKey,
+            ...(auth.serviceRoleKey.startsWith('eyJ')
+              ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+              : {}),
+            Accept: 'application/json',
+            Prefer: 'return=representation'
+          }
+        },
+        10000
+      );
+
+      if (!delRes.ok) {
+        res.status(delRes.status || 500).json({
+          ok: false,
+          message: `تعذر حذف الطلبات: ${extractCourierApiError(delRes.json, delRes.text)}`
+        });
+        return;
+      }
+
+      const deletedRows = Array.isArray(delRes.json) ? delRes.json : [];
+      res.json({ ok: true, deletedCount: deletedRows.length });
+    } catch (err: any) {
+      res.status(500).json({
+        ok: false,
+        message: `تعذر حذف الطلبات: ${err?.message || 'خطأ شبكة'}`
+      });
+    }
   });
 
   return app;

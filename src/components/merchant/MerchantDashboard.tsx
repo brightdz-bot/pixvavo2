@@ -14,7 +14,9 @@ import { applyBrowserBranding } from '../../services/branding';
 import {
   ORDER_STAGE_LABELS,
   updateOrderInGoogleSheet,
-  fetchAllOrdersFromGoogleSheet,
+  deleteOrderInGoogleSheet,
+  fetchAllOrdersFromGoogleSheetDetailed,
+  SheetOrderRow,
   createCourierParcel,
   trackCourierParcel,
   sendWhatsAppViaApi,
@@ -100,6 +102,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSyncingSheet, setIsSyncingSheet] = useState(false);
+  const [lastSheetSyncError, setLastSheetSyncError] = useState<string | null>(null);
 
   const recentSitePushRef = useRef<Record<string, number>>({});
   const sheetRowSigRef = useRef<Record<string, string>>({});
@@ -111,16 +114,23 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    setTimeout(() => setToastMessage(null), 4500);
   };
 
   const syncOrdersWithGoogleSheets = useCallback(
-    async (currentOrders: Order[], currentPages: LandingPage[], showFeedback = false) => {
+    async (
+      currentOrders: Order[],
+      currentPages: LandingPage[],
+      showFeedback = false,
+      overrideWebhook?: string
+    ) => {
       if (!store?.id || isSyncingRef.current || (isSupabaseMode && !currentUser?.id)) return;
       const webhookUrls = Array.from(
         new Set(
           [
             store.googleSheetWebhook?.trim(),
+            apiConfig?.googleSheetWebhook?.trim(),
+            overrideWebhook?.trim(),
             ...currentPages.map(p => p.integrations?.googleSheetWebhook?.trim())
           ].filter((u): u is string => Boolean(u))
         )
@@ -128,19 +138,52 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
       if (webhookUrls.length === 0) {
         if (showFeedback) {
-          showToast('لا يوجد رابط Google Sheet مفعّل في إعدادات المتجر أو الصفحات');
+          const msg = 'لا يوجد رابط Google Sheet مفعّل في إعدادات المتجر أو إعدادات الـ API أو الصفحات';
+          setLastSheetSyncError(msg);
+          showToast(msg);
         }
         return;
       }
 
       isSyncingRef.current = true;
-      if (showFeedback) setIsSyncingSheet(true);
+      if (showFeedback) {
+        setIsSyncingSheet(true);
+        setLastSheetSyncError(null);
+      }
 
       try {
-        const sheetBatches = await Promise.all(webhookUrls.map(url => fetchAllOrdersFromGoogleSheet(url)));
-        const allSheetRows = sheetBatches.flatMap(b => (Array.isArray(b) ? b : []));
+        const sheetBatches = await Promise.all(
+          webhookUrls.map(url => fetchAllOrdersFromGoogleSheetDetailed(url))
+        );
+        const failedBatch = sheetBatches.find(b => !b.ok);
+        const okBatches = sheetBatches.filter(b => b.ok);
+
+        if (okBatches.length === 0) {
+          const errMsg =
+            failedBatch?.error ||
+            'تعذر قراءة الطلبات من Google Sheet — تأكد من نشر كود Apps Script (doGet) بصلاحية "Anyone"';
+          if (showFeedback) {
+            setLastSheetSyncError(errMsg);
+            showToast(errMsg);
+          }
+          return;
+        }
+
+        // Deduplicate rows across multiple webhooks by normalized orderId
+        const rowMap = new Map<string, SheetOrderRow>();
+        okBatches.forEach(batch => {
+          batch.rows.forEach(r => {
+            const key = r.orderId.replace(/^#/, '').trim().toUpperCase();
+            if (key && !rowMap.has(key)) rowMap.set(key, r);
+          });
+        });
+        const allSheetRows = Array.from(rowMap.values());
+
         if (allSheetRows.length === 0) {
-          if (showFeedback) showToast('لا توجد تغييرات جديدة في Google Sheet');
+          if (showFeedback) {
+            setLastSheetSyncError(null);
+            showToast('جدول Google Sheet متصل ولكن لا توجد طلبات مسجلة فيه حالياً');
+          }
           return;
         }
 
@@ -149,12 +192,21 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           return d.startsWith('0') ? d.slice(1) : d;
         };
 
-        let syncedCount = 0;
+        const deletedNums = storage.getDeletedSheetOrderNumbers(store.id);
+        const missingRows: SheetOrderRow[] = [];
+        let updatedCount = 0;
 
         for (const row of allSheetRows) {
-          const key = row.orderId.toUpperCase();
-          const dbOrder = currentOrders.find(o => o.orderNumber.toUpperCase() === key);
-          if (!dbOrder) continue;
+          const key = row.orderId.replace(/^#/, '').trim().toUpperCase();
+          const dbOrder = currentOrders.find(
+            o => o.orderNumber.replace(/^#/, '').trim().toUpperCase() === key
+          );
+          if (!dbOrder) {
+            if (!deletedNums.has(key)) {
+              missingRows.push(row);
+            }
+            continue;
+          }
 
           const rowSig = JSON.stringify({
             status: row.status,
@@ -185,9 +237,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           const nextDelivery: DeliveryType = row.deliveryType || dbOrder.deliveryType || 'home';
           const nextTotal = row.total > 0 ? row.total : dbOrder.total;
           const nextSubtotal = row.productPrice > 0 ? row.productPrice : dbOrder.subtotal;
-          const nextShipping = row.shippingCost >= 0 && (row.productPrice > 0 || row.total > 0)
-            ? row.shippingCost
-            : dbOrder.shippingFee;
+          const nextShipping =
+            row.shippingCost >= 0 && (row.productPrice > 0 || row.total > 0)
+              ? row.shippingCost
+              : dbOrder.shippingFee;
 
           const phoneChanged =
             Boolean(row.phone) &&
@@ -239,11 +292,22 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
             customerPhone: phoneChanged ? row.phone : undefined
           });
           if (res.success) {
-            syncedCount += 1;
+            updatedCount += 1;
           }
         }
 
-        if (syncedCount > 0) {
+        let importedCount = 0;
+        let importError: string | undefined;
+        if (missingRows.length > 0) {
+          const importRes = await storage.importOrdersFromSheet(store.id, missingRows, currentPages);
+          if (importRes.success) {
+            importedCount = importRes.importedCount;
+          } else {
+            importError = importRes.error;
+          }
+        }
+
+        if (importedCount > 0 || updatedCount > 0) {
           const [refreshedOrders, refreshedPages] = await Promise.all([
             storage.getOrders(store.id),
             storage.getLandingPages(store.id)
@@ -255,19 +319,39 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
             const updatedSel = refreshedOrders.find(o => o.id === curSel.id);
             if (updatedSel) setSelectedOrder(updatedSel);
           }
-          showToast(`تمت مزامنة ${syncedCount} طلب من Google Sheet`);
+          setLastSheetSyncError(null);
+          if (importedCount > 0 && updatedCount > 0) {
+            showToast(`تم استيراد ${importedCount} طلب جديد وتحديث ${updatedCount} طلب من Google Sheet`);
+          } else if (importedCount > 0) {
+            showToast(`تم استيراد ${importedCount} طلب من Google Sheet بنجاح`);
+          } else {
+            showToast(`تمت مزامنة وتحديث ${updatedCount} طلب من Google Sheet`);
+          }
         } else if (showFeedback) {
-          showToast('البيانات متطابقة مع Google Sheet بالفعل');
+          if (importError) {
+            setLastSheetSyncError(importError);
+            showToast(importError);
+          } else if (failedBatch?.error) {
+            setLastSheetSyncError(failedBatch.error);
+            showToast(failedBatch.error);
+          } else {
+            setLastSheetSyncError(null);
+            showToast(`البيانات متطابقة مع Google Sheet بالفعل (${allSheetRows.length} طلب في الجدول)`);
+          }
         }
       } catch (err) {
         console.warn('Google Sheet sync error:', err);
-        if (showFeedback) showToast('تعذر الاتصال بـ Google Sheet حالياً');
+        if (showFeedback) {
+          const msg = 'تعذر الاتصال بـ Google Sheet حالياً';
+          setLastSheetSyncError(msg);
+          showToast(msg);
+        }
       } finally {
         isSyncingRef.current = false;
         if (showFeedback) setIsSyncingSheet(false);
       }
     },
-    [store?.id, store?.googleSheetWebhook]
+    [store?.id, store?.googleSheetWebhook, apiConfig?.googleSheetWebhook, isSupabaseMode, currentUser?.id]
   );
 
   const loadData = useCallback(async () => {
@@ -300,7 +384,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         body: JSON.stringify(apiRes.config)
       }).catch(() => {});
 
-      void syncOrdersWithGoogleSheets(loadedOrders, loadedPages, false);
+      void syncOrdersWithGoogleSheets(
+        loadedOrders,
+        loadedPages,
+        false,
+        apiRes.config.googleSheetWebhook
+      );
     } catch (err) {
       console.error('Failed to load store data:', err);
       setLoadError('تعذر تحميل بيانات المتجر، يرجى إعادة المحاولة');
@@ -783,6 +872,54 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     );
   };
 
+  const handleDeleteOrders = async (orderIds: string[]): Promise<void> => {
+    if (!store?.id || orderIds.length === 0) return;
+    const idSet = new Set(orderIds);
+    const targets = orders.filter(o => idSet.has(o.id));
+    if (targets.length === 0) return;
+
+    const res = await storage.deleteOrders(store.id, orderIds);
+    if (!res.success) {
+      showToast('خطأ: ' + (res.error || 'تعذر حذف الطلبات'));
+      return;
+    }
+
+    storage.rememberDeletedSheetOrderNumbers(
+      store.id,
+      targets.map(o => o.orderNumber)
+    );
+
+    // Best-effort removal from Google Sheet as well (for updated Apps Script deployments)
+    targets.forEach(target => {
+      const lp = landingPages.find(p => p.id === target.landingPageId);
+      const webhook =
+        lp?.integrations?.googleSheetWebhook?.trim() ||
+        apiConfig?.googleSheetWebhook?.trim() ||
+        store.googleSheetWebhook?.trim();
+      if (webhook) {
+        void deleteOrderInGoogleSheet(webhook, target.orderNumber);
+      }
+    });
+
+    setOrders(prev => prev.filter(o => !idSet.has(o.id)));
+    if (selectedOrder && idSet.has(selectedOrder.id)) {
+      setSelectedOrder(null);
+    }
+
+    try {
+      const refreshedOrders = await storage.getOrders(store.id);
+      setOrders(refreshedOrders);
+    } catch {
+      // keep optimistic removal
+    }
+
+    showToast(
+      targets.length === 1
+        ? `تم حذف الطلب #${targets[0].orderNumber} نهائياً`
+        : `تم حذف ${targets.length} طلبات نهائياً`
+    );
+  };
+
   const handleSaveAntiFraudConfig = async (
     patch: Partial<
       Pick<
@@ -1218,13 +1355,18 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   onUpdateStatus={handleUpdateOrderStatus}
                   onBulkUpdateStatus={handleBulkUpdateStatus}
                   onBulkSendToCourier={handleBulkSendToCourier}
+                  onDeleteOrders={handleDeleteOrders}
                   onSaveAntiFraudConfig={handleSaveAntiFraudConfig}
                   onUpdateOrderDetails={handleUpdateOrderDetails}
                   onSendOrderToCourier={handleSendOrderToCourier}
                   onPullCourierStatus={handlePullCourierStatus}
                   onSendOrderWhatsAppApi={handleSendOrderWhatsAppApi}
-                  onSyncFromGoogleSheet={() => syncOrdersWithGoogleSheets(orders, landingPages, true)}
+                  onSyncFromGoogleSheet={() =>
+                    syncOrdersWithGoogleSheets(orders, landingPages, true, apiConfig?.googleSheetWebhook)
+                  }
                   isSyncingSheet={isSyncingSheet}
+                  lastSheetSyncError={lastSheetSyncError}
+                  onDismissSheetSyncError={() => setLastSheetSyncError(null)}
                   selectedOrder={selectedOrder}
                   onSelectOrder={setSelectedOrder}
                 />

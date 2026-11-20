@@ -480,6 +480,29 @@ export async function updateOrderInGoogleSheet(
   }
 }
 
+export async function deleteOrderInGoogleSheet(
+  webhookUrl: string | undefined,
+  orderId: string
+): Promise<void> {
+  const cleanUrl = webhookUrl?.trim();
+  const cleanOrderId = orderId?.trim();
+  if (!cleanUrl || !cleanOrderId) return;
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('action', 'delete');
+    formData.append('orderId', cleanOrderId);
+
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: formData
+    });
+  } catch (err) {
+    console.warn('Google Sheet delete request failed (non-blocking):', err);
+  }
+}
+
 export function mapSheetStatusToOrderStatus(raw?: string): OrderStatus {
   const text = (raw || '').trim().toLowerCase();
   if (!text) return 'new';
@@ -518,6 +541,7 @@ export interface SheetOrderRow {
   discount: number;
   total: number;
   trackingCode: string;
+  createdAt?: string;
   sheetUpdatedAt?: string;
 }
 
@@ -586,17 +610,17 @@ export async function fetchOrderFromGoogleSheet(
   }
 }
 
-export async function fetchAllOrdersFromGoogleSheet(
+export async function fetchAllOrdersFromGoogleSheetDetailed(
   webhookUrl: string | undefined
-): Promise<SheetOrderRow[] | null> {
+): Promise<{ ok: boolean; rows: SheetOrderRow[]; error?: string }> {
   const cleanUrl = webhookUrl?.trim();
   if (!cleanUrl || typeof fetch === 'undefined') {
-    return null;
+    return { ok: false, rows: [], error: 'رابط Google Sheet غير محدد' };
   }
 
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 7500);
+    const timer = setTimeout(() => ctrl.abort(), 18000);
     const res = await fetch('/api/integrations/google-sheet-read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -604,52 +628,119 @@ export async function fetchAllOrdersFromGoogleSheet(
       signal: ctrl.signal
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return { ok: false, rows: [], error: `تعذر الاتصال بخادم المزامنة (HTTP ${res.status})` };
+    }
     const payload = await res.json();
-    const data = payload?.data;
-    if (!data || data.status !== 'success' || !Array.isArray(data.orders)) {
-      return null;
+    if (!payload?.ok || !payload?.data) {
+      return {
+        ok: false,
+        rows: [],
+        error: payload?.error || 'لم يرجع رابط Google Sheet بيانات صالحة — تأكد من نشر كود doGet بصلاحية Anyone'
+      };
     }
 
-    return data.orders
-      .filter((r: any) => r && String(r.orderId || '').trim())
-      .map((r: any) => {
-        const rawShippingType = String(r.shippingType || r.deliveryType || '')
-          .trim()
-          .toLowerCase();
-        const parsedDeliveryType: DeliveryType | undefined = rawShippingType
-          ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
-            ? 'stop'
-            : 'home'
-          : undefined;
-        const shippingCost = Number(r.shippingCost) || 0;
-        const productPrice = Number(r.productPrice) || 0;
-        const discount = Number(r.discount) || 0;
-        const rawTotal = String(r.total ?? '').replace(/[^\d.]/g, '');
-        const parsedTotal =
-          parseFloat(rawTotal) || Math.max(0, shippingCost + productPrice - discount);
+    const data = payload.data;
+    const rawList: any[] | null = Array.isArray(data)
+      ? data
+      : Array.isArray(data.orders)
+        ? data.orders
+        : Array.isArray(data.data)
+          ? data.data
+          : Array.isArray(data.rows)
+            ? data.rows
+            : null;
 
-        return {
-          orderId: String(r.orderId).trim(),
-          fullName: String(r.fullName || '').trim(),
-          phone: normalizeSheetPhone(r.phone),
-          wilaya: String(r.wilaya || '').trim(),
-          commune: String(r.commune || '').trim(),
-          deliveryType: parsedDeliveryType,
-          orderName: String(r.orderName || '').trim(),
-          orderStatus: String(r.orderStatus || '').trim(),
-          status: mapSheetStatusToOrderStatus(r.orderStatus),
-          shippingCost,
-          productPrice,
-          discount,
-          total: parsedTotal,
-          trackingCode: String(r.trackingCode || '').trim(),
-          sheetUpdatedAt: r.sheetUpdatedAt ? String(r.sheetUpdatedAt).trim() : undefined
-        };
+    if (!rawList) {
+      return {
+        ok: false,
+        rows: [],
+        error: 'استجابة Google Sheet لا تحتوي على قائمة طلبات (orders) — تأكد من تحديث كود Apps Script (doGet)'
+      };
+    }
+
+    const parseNum = (val: unknown): number => {
+      const cleaned = String(val ?? '').replace(/[^\d.-]/g, '');
+      const num = parseFloat(cleaned);
+      return Number.isFinite(num) ? Math.max(0, num) : 0;
+    };
+
+    const rows: SheetOrderRow[] = [];
+    rawList.forEach((r: any, idx: number) => {
+      if (!r || typeof r !== 'object') return;
+      const rawId = String(
+        r.orderId ?? r.order_id ?? r.orderNumber ?? r['رقم الطلب'] ?? ''
+      )
+        .replace(/^#/, '')
+        .trim();
+      const fullName = String(
+        r.fullName ?? r.customerName ?? r.name ?? r['الاسم الكامل'] ?? ''
+      ).trim();
+      const phone = normalizeSheetPhone(r.phone ?? r.customerPhone ?? r['الهاتف'] ?? '');
+      if (!rawId && !fullName && !phone) return;
+
+      const orderId = rawId || `GS-ROW-${idx + 2}`;
+      const rawShippingType = String(
+        r.shippingType ?? r.deliveryType ?? r['طريقة التوصيل'] ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      const parsedDeliveryType: DeliveryType | undefined = rawShippingType
+        ? rawShippingType.includes('stop') || rawShippingType.includes('مكتب')
+          ? 'stop'
+          : 'home'
+        : undefined;
+      const shippingCost = parseNum(r.shippingCost ?? r.shippingFee ?? r['مبلغ التوصيل']);
+      const productPrice = parseNum(r.productPrice ?? r.subtotal ?? r['مبلغ البضاعة']);
+      const discount = parseNum(r.discount ?? r['الخصم']);
+      const totalRaw = parseNum(r.total ?? r.totalPrice ?? r['المجموع الكلي']);
+      const parsedTotal = totalRaw || Math.max(0, shippingCost + productPrice - discount);
+      const orderStatus = String(
+        r.orderStatus ?? r.status ?? r['الحالة'] ?? ''
+      ).trim();
+
+      rows.push({
+        orderId,
+        fullName,
+        phone,
+        wilaya: String(r.wilaya ?? r.wilayaName ?? r['الولاية'] ?? '').trim(),
+        commune: String(r.commune ?? r['البلدية'] ?? '').trim(),
+        deliveryType: parsedDeliveryType,
+        orderName: String(
+          r.orderName ?? r.order ?? r.product ?? r.bundleLabel ?? r['المنتج'] ?? ''
+        ).trim(),
+        orderStatus,
+        status: mapSheetStatusToOrderStatus(orderStatus),
+        shippingCost,
+        productPrice,
+        discount,
+        total: parsedTotal,
+        trackingCode: String(
+          r.trackingCode ?? r.tracking ?? r['رمز التوصيل'] ?? ''
+        ).trim(),
+        createdAt: r.createdAt || r.date || r['التاريخ'] ? String(r.createdAt || r.date || r['التاريخ']).trim() : undefined,
+        sheetUpdatedAt: r.sheetUpdatedAt ? String(r.sheetUpdatedAt).trim() : undefined
       });
-  } catch {
-    return null;
+    });
+
+    return { ok: true, rows };
+  } catch (err: any) {
+    const isAbort = err?.name === 'AbortError';
+    return {
+      ok: false,
+      rows: [],
+      error: isAbort
+        ? 'انتهت مهلة الاتصال بـ Google Sheet — يرجى المحاولة مرة أخرى'
+        : 'تعذر الاتصال بـ Google Sheet حالياً'
+    };
   }
+}
+
+export async function fetchAllOrdersFromGoogleSheet(
+  webhookUrl: string | undefined
+): Promise<SheetOrderRow[] | null> {
+  const res = await fetchAllOrdersFromGoogleSheetDetailed(webhookUrl);
+  return res.ok ? res.rows : null;
 }
 
 export function normalizeWhatsAppNumber(raw?: string): string {
@@ -1038,12 +1129,23 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
   }
 
   var action = String(e.parameter.action || "create").trim();
-  var orderId = String(e.parameter.orderId || "").trim();
+  var orderId = String(e.parameter.orderId || "").replace(/^#/, "").trim();
+
+  if (action === "delete" && orderId) {
+    var delData = sheet.getDataRange().getValues();
+    for (var d = delData.length - 1; d >= 1; d--) {
+      if (String(delData[d][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
+        sheet.deleteRow(d + 1);
+        return ContentService.createTextOutput(JSON.stringify({ "result": "deleted" })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ "result": "not_found" })).setMimeType(ContentService.MimeType.JSON);
+  }
 
   if (action === "update" && orderId) {
     var data = sheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
-      if (String(data[i][1]).trim().toUpperCase() === orderId.toUpperCase()) {
+      if (String(data[i][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
         var r = i + 1;
         if (e.parameter.wilaya) sheet.getRange(r, 5).setValue(e.parameter.wilaya);
         if (e.parameter.commune !== undefined) sheet.getRange(r, 6).setValue(e.parameter.commune);
@@ -1094,7 +1196,7 @@ function doGet(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Orders") || ss.getActiveSheet();
   var action = (e && e.parameter && e.parameter.action) ? String(e.parameter.action).trim() : "";
-  var orderId = (e && e.parameter && e.parameter.orderId) ? String(e.parameter.orderId).trim().toUpperCase() : "";
+  var orderId = (e && e.parameter && e.parameter.orderId) ? String(e.parameter.orderId).replace(/^#/, "").trim().toUpperCase() : "";
   var callback = (e && e.parameter && e.parameter.callback) ? String(e.parameter.callback).trim() : "";
   var rows = sheet.getDataRange().getValues();
   var result = { status: "error" };
@@ -1102,12 +1204,15 @@ function doGet(e) {
   if (action === "list") {
     var list = [];
     for (var i = 1; i < rows.length; i++) {
-      var id = String(rows[i][1] || "").trim();
-      if (!id) continue;
+      var id = String(rows[i][1] || "").replace(/^#/, "").trim();
+      var name = String(rows[i][2] || "").trim();
+      var phone = String(rows[i][3] || "").trim();
+      if (!id && !name && !phone) continue;
       list.push({
-        orderId: id,
-        fullName: rows[i][2] || "",
-        phone: rows[i][3] || "",
+        createdAt: rows[i][0] instanceof Date ? rows[i][0].toISOString() : String(rows[i][0] || ""),
+        orderId: id || ("GS-ROW-" + (i + 1)),
+        fullName: name,
+        phone: phone,
         wilaya: rows[i][4] || "",
         commune: rows[i][5] || "",
         shippingType: rows[i][6] || "",
@@ -1124,10 +1229,10 @@ function doGet(e) {
     result = { status: "success", orders: list };
   } else if (orderId) {
     for (var j = 1; j < rows.length; j++) {
-      if (String(rows[j][1] || "").trim().toUpperCase() === orderId) {
+      if (String(rows[j][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId) {
         result = {
           status: "success",
-          orderId: String(rows[j][1]).trim(),
+          orderId: String(rows[j][1]).replace(/^#/, "").trim(),
           fullName: rows[j][2] || "",
           wilaya: rows[j][4] || "",
           commune: rows[j][5] || "",

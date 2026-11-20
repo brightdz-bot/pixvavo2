@@ -73,6 +73,7 @@ interface Props {
     note?: string
   ) => Promise<void>;
   onBulkSendToCourier?: (ordersToSend: Order[]) => Promise<void>;
+  onDeleteOrders?: (orderIds: string[]) => Promise<void>;
   onSaveAntiFraudConfig?: (
     patch: Partial<
       Pick<
@@ -99,6 +100,8 @@ interface Props {
   onSendOrderWhatsAppApi?: (order: Order) => Promise<void>;
   onSyncFromGoogleSheet?: () => void;
   isSyncingSheet?: boolean;
+  lastSheetSyncError?: string | null;
+  onDismissSheetSyncError?: () => void;
   selectedOrder?: Order | null;
   onSelectOrder: (order: Order | null) => void;
 }
@@ -126,6 +129,7 @@ export const OrdersTab: React.FC<Props> = ({
   onUpdateStatus,
   onBulkUpdateStatus,
   onBulkSendToCourier,
+  onDeleteOrders,
   onSaveAntiFraudConfig,
   onUpdateOrderDetails,
   onSendOrderToCourier,
@@ -133,6 +137,8 @@ export const OrdersTab: React.FC<Props> = ({
   onSendOrderWhatsAppApi,
   onSyncFromGoogleSheet,
   isSyncingSheet,
+  lastSheetSyncError,
+  onDismissSheetSyncError,
   selectedOrder,
   onSelectOrder
 }) => {
@@ -141,6 +147,7 @@ export const OrdersTab: React.FC<Props> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const [bulkCancelPendingIds, setBulkCancelPendingIds] = useState<string[] | null>(null);
+  const [ordersPendingDelete, setOrdersPendingDelete] = useState<Order[] | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const [printSlipOrders, setPrintSlipOrders] = useState<Order[]>([]);
@@ -613,6 +620,47 @@ export const OrdersTab: React.FC<Props> = ({
         onCancel={() => setBulkCancelPendingIds(null)}
       />
 
+      <ConfirmDialog
+        isOpen={Boolean(ordersPendingDelete && ordersPendingDelete.length > 0)}
+        danger
+        title={
+          ordersPendingDelete && ordersPendingDelete.length > 1
+            ? 'حذف الطلبات المحددة نهائياً'
+            : 'حذف الطلب نهائياً'
+        }
+        message={
+          ordersPendingDelete && ordersPendingDelete.length === 1
+            ? `سيتم حذف الطلب #${ordersPendingDelete[0].orderNumber} (${ordersPendingDelete[0].customerName}) نهائياً من لوحة التحكم ولن يظهر مجدداً في الإحصائيات أو القائمة.`
+            : ordersPendingDelete
+              ? `سيتم حذف ${ordersPendingDelete.length} طلبات نهائياً من لوحة التحكم ولن تظهر مجدداً في الإحصائيات أو القائمة.`
+              : ''
+        }
+        confirmLabel={
+          ordersPendingDelete && ordersPendingDelete.length > 1
+            ? `حذف ${ordersPendingDelete.length} طلبات نهائياً`
+            : 'تأكيد الحذف النهائي'
+        }
+        cancelLabel="تراجع"
+        onConfirm={async () => {
+          const targets = ordersPendingDelete || [];
+          setOrdersPendingDelete(null);
+          if (targets.length > 0 && onDeleteOrders) {
+            setIsBulkBusy(true);
+            try {
+              await onDeleteOrders(targets.map(o => o.id));
+              setSelectedIds(prev => {
+                const next = new Set(prev);
+                targets.forEach(o => next.delete(o.id));
+                return next;
+              });
+            } finally {
+              setIsBulkBusy(false);
+            }
+          }
+        }}
+        onCancel={() => setOrdersPendingDelete(null)}
+      />
+
       {/* Header & Top Action Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -755,6 +803,40 @@ export const OrdersTab: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Persistent Google Sheet Sync Diagnostic Banner */}
+      {lastSheetSyncError && (
+        <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-start gap-2.5 text-xs">
+            <FileSpreadsheet className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <div className="font-extrabold">تعذر سحب الطلبات من Google Sheet:</div>
+              <div className="text-[11px] leading-relaxed">{lastSheetSyncError}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {onGoToApiConfig && (
+              <button
+                type="button"
+                onClick={onGoToApiConfig}
+                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold cursor-pointer"
+              >
+                فحص رابط Sheet في إعدادات API
+              </button>
+            )}
+            {onDismissSheetSyncError && (
+              <button
+                type="button"
+                onClick={onDismissSheetSyncError}
+                className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/50 cursor-pointer"
+                title="إغلاق التنبيه"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Status Filter Tabs (Including Fraud / Duplicate Alert Filter) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         <button
@@ -888,6 +970,18 @@ export const OrdersTab: React.FC<Props> = ({
               <Printer className="w-3.5 h-3.5" />
               <span>طباعة البوليصات ({selectedOrdersList.length})</span>
             </button>
+
+            {onDeleteOrders && (
+              <button
+                type="button"
+                disabled={isBulkBusy}
+                onClick={() => setOrdersPendingDelete(selectedOrdersList)}
+                className="px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>حذف المحددة ({selectedOrdersList.length})</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1041,6 +1135,16 @@ export const OrdersTab: React.FC<Props> = ({
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
+                          {onDeleteOrders && (
+                            <button
+                              type="button"
+                              onClick={() => setOrdersPendingDelete([order])}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/50 dark:hover:text-rose-400 dark:hover:border-rose-800 cursor-pointer"
+                              title="حذف الطلب"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1561,6 +1665,22 @@ export const OrdersTab: React.FC<Props> = ({
                     إلغاء الطلب
                   </button>
                 </div>
+              </div>
+            )}
+
+            {onDeleteOrders && (
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+                <span className="text-[11px] text-slate-400">
+                  يمكنك حذف الطلبات التجريبية أو غير المرغوب فيها نهائياً من القائمة
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setOrdersPendingDelete([selectedOrder])}
+                  className="px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-600 hover:text-white text-rose-700 dark:text-rose-300 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف الطلب نهائياً</span>
+                </button>
               </div>
             )}
           </div>

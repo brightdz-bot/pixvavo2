@@ -10,7 +10,7 @@ import {
   ApiDiagnosticLog
 } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { normalizePhoneCanonical } from './integrations';
+import { normalizePhoneCanonical, SheetOrderRow } from './integrations';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
 
@@ -26,6 +26,7 @@ const ORDERS_KEY = 'brightdz_orders';
 const USERS_KEY = 'brightdz_users';
 const API_CONFIGS_KEY = 'brightdz_api_configs';
 const ORDER_COURIER_META_KEY = 'brightdz_order_courier_meta';
+const DELETED_SHEET_ORDERS_KEY = 'brightdz_deleted_sheet_orders';
 
 const INITIAL_STORES: Store[] = [
   {
@@ -1466,6 +1467,296 @@ class StorageService {
     });
     localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
     return { success: true };
+  }
+
+  getDeletedSheetOrderNumbers(storeId: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(`${DELETED_SHEET_ORDERS_KEY}_${storeId}`);
+      const list = raw ? JSON.parse(raw) : [];
+      return new Set(
+        Array.isArray(list) ? list.map((x: unknown) => String(x || '').trim().toUpperCase()).filter(Boolean) : []
+      );
+    } catch {
+      return new Set();
+    }
+  }
+
+  rememberDeletedSheetOrderNumbers(storeId: string, orderNumbers: string[]): void {
+    try {
+      const existing = this.getDeletedSheetOrderNumbers(storeId);
+      orderNumbers.forEach(num => {
+        const clean = String(num || '').replace(/^#/, '').trim().toUpperCase();
+        if (clean) existing.add(clean);
+      });
+      const trimmed = Array.from(existing).slice(-500);
+      localStorage.setItem(`${DELETED_SHEET_ORDERS_KEY}_${storeId}`, JSON.stringify(trimmed));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  async importOrdersFromSheet(
+    storeId: string,
+    rows: SheetOrderRow[],
+    landingPages: LandingPage[] = []
+  ): Promise<{ success: boolean; importedCount: number; error?: string }> {
+    if (!storeId || !Array.isArray(rows) || rows.length === 0) {
+      return { success: true, importedCount: 0 };
+    }
+
+    const prepared = rows.map(row => {
+      const cleanWilaya = (row.wilaya || '').trim();
+      const matchedWilaya =
+        (cleanWilaya
+          ? ALGERIA_WILAYAS.find(
+              w =>
+                w.nameAr === cleanWilaya ||
+                w.id === cleanWilaya.padStart(2, '0') ||
+                cleanWilaya.includes(w.nameAr)
+            )
+          : undefined) || ALGERIA_WILAYAS[15];
+      const deliveryType: DeliveryType = row.deliveryType === 'stop' ? 'stop' : 'home';
+      const commune = (row.commune || '').trim();
+      const bundleLabel = (row.orderName || '').trim() || 'طلب من Google Sheet';
+      const matchedPage = landingPages.find(
+        lp =>
+          bundleLabel.includes(lp.title) ||
+          lp.offers.some(o => bundleLabel.includes(o.title))
+      );
+      const shippingFee = Math.max(0, Number(row.shippingCost) || 0);
+      const subtotal =
+        row.productPrice > 0
+          ? Math.max(0, row.productPrice - Math.max(0, row.discount || 0))
+          : Math.max(0, (row.total || 0) - shippingFee);
+      const total = row.total > 0 ? row.total : subtotal + shippingFee;
+      const address = `${matchedWilaya.nameAr}${commune ? ' - ' + commune : ''}${
+        deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''
+      }`;
+
+      return {
+        orderNumber: row.orderId.replace(/^#/, '').trim().toUpperCase(),
+        landingPageId: matchedPage?.id,
+        customerName: (row.fullName || '').trim() || 'زبون Google Sheet',
+        customerPhone: (row.phone || '').trim() || '0000000000',
+        wilayaId: matchedWilaya.id,
+        wilayaName: cleanWilaya || matchedWilaya.nameAr,
+        commune,
+        deliveryType,
+        address,
+        bundleLabel,
+        subtotal,
+        shippingFee,
+        total,
+        status: row.status || ('new' as OrderStatus),
+        trackingCode: (row.trackingCode || '').trim() || undefined,
+        createdAt: row.createdAt || row.sheetUpdatedAt || new Date().toISOString()
+      };
+    });
+
+    if (this.useSupabase() && supabase && isUuid(storeId)) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+
+      if (accessToken && typeof fetch !== 'undefined') {
+        try {
+          const res = await fetch('/api/orders/import-from-sheet', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${accessToken}`
+            },
+            body: JSON.stringify({ storeId, orders: prepared })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data?.ok) {
+            return { success: true, importedCount: Number(data.importedCount) || 0 };
+          }
+          // Fall through to RPC only if server lacks service key
+          if (data?.code !== 'missing_service_key') {
+            return {
+              success: false,
+              importedCount: 0,
+              error: data?.message || 'تعذر استيراد الطلبات من Google Sheet'
+            };
+          }
+        } catch (err: any) {
+          console.warn('Server import-from-sheet failed, trying RPC fallback:', err);
+        }
+      }
+
+      // Fallback RPC if server service key is not configured
+      let importedCount = 0;
+      let lastError: string | undefined;
+      for (const item of prepared) {
+        const { error } = await supabase.rpc('import_order_from_sheet', {
+          p_store_id: storeId,
+          p_order_number: item.orderNumber,
+          p_customer_name: item.customerName,
+          p_customer_phone: item.customerPhone,
+          p_wilaya_id: item.wilayaId,
+          p_wilaya_name: item.wilayaName,
+          p_commune: item.commune || null,
+          p_delivery_type: item.deliveryType,
+          p_address: item.address,
+          p_bundle_label: item.bundleLabel,
+          p_subtotal: item.subtotal,
+          p_shipping_fee: item.shippingFee,
+          p_total: item.total,
+          p_status: item.status,
+          p_tracking_code: item.trackingCode || null,
+          p_landing_page_id: item.landingPageId && isUuid(item.landingPageId) ? item.landingPageId : null,
+          p_created_at: item.createdAt
+        });
+        if (!error) importedCount += 1;
+        else lastError = error.message;
+      }
+
+      if (importedCount > 0 || !lastError) {
+        return { success: true, importedCount };
+      }
+      return {
+        success: false,
+        importedCount: 0,
+        error: `تعذر استيراد الطلبات الجديدة في Supabase: ${lastError}`
+      };
+    }
+
+    // Local fallback
+    const all = this.getLocalOrders();
+    const existingNums = new Set(all.map(o => o.orderNumber.toUpperCase()));
+    let importedCount = 0;
+
+    for (const item of prepared) {
+      if (existingNums.has(item.orderNumber)) continue;
+      existingNums.add(item.orderNumber);
+      const parsedTs = new Date(item.createdAt);
+      const iso = Number.isNaN(parsedTs.getTime()) ? new Date().toISOString() : parsedTs.toISOString();
+      const newOrd: Order = {
+        id: 'ord_gs_' + Math.random().toString(36).substring(2, 10),
+        orderNumber: item.orderNumber,
+        storeId,
+        landingPageId: item.landingPageId,
+        bundleLabel: item.bundleLabel,
+        customerName: item.customerName,
+        customerPhone: item.customerPhone,
+        wilayaId: item.wilayaId,
+        wilayaName: item.wilayaName,
+        commune: item.commune,
+        deliveryType: item.deliveryType,
+        address: item.address,
+        items: [
+          {
+            productId: item.landingPageId || 'sheet_import',
+            title: item.bundleLabel,
+            price: item.subtotal || item.total,
+            quantity: 1,
+            variantText: item.bundleLabel
+          }
+        ],
+        subtotal: item.subtotal,
+        shippingFee: item.shippingFee,
+        total: item.total,
+        status: item.status,
+        trackingCode: item.trackingCode,
+        statusHistory: [
+          {
+            status: item.status,
+            timestamp: iso,
+            note: 'تم استيراد الطلب تلقائياً من Google Sheet'
+          }
+        ],
+        paymentMethod: 'cod',
+        notes: 'مستورد من Google Sheet',
+        createdAt: iso,
+        updatedAt: new Date().toISOString()
+      };
+      all.unshift(newOrd);
+      importedCount += 1;
+    }
+
+    if (importedCount > 0) {
+      localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
+    }
+    return { success: true, importedCount };
+  }
+
+  async deleteOrders(
+    storeId: string,
+    orderIds: string[]
+  ): Promise<{ success: boolean; deletedCount: number; error?: string }> {
+    const cleanIds = Array.from(new Set(orderIds.map(id => String(id || '').trim()).filter(Boolean)));
+    if (!storeId || cleanIds.length === 0) {
+      return { success: false, deletedCount: 0, error: 'لم يتم تحديد أي طلب للحذف' };
+    }
+
+    if (this.useSupabase() && supabase && isUuid(storeId)) {
+      const uuidIds = cleanIds.filter(id => isUuid(id));
+      if (uuidIds.length === 0) {
+        return { success: false, deletedCount: 0, error: 'معرّفات الطلبات غير صالحة' };
+      }
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+
+      if (accessToken && typeof fetch !== 'undefined') {
+        try {
+          const res = await fetch('/api/orders/delete', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${accessToken}`
+            },
+            body: JSON.stringify({ storeId, orderIds: uuidIds })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data?.ok) {
+            return { success: true, deletedCount: Number(data.deletedCount) || uuidIds.length };
+          }
+          if (data?.code !== 'missing_service_key') {
+            return {
+              success: false,
+              deletedCount: 0,
+              error: data?.message || 'تعذر حذف الطلبات من قاعدة البيانات'
+            };
+          }
+        } catch (err: any) {
+          console.warn('Server /api/orders/delete failed, trying Supabase fallback:', err);
+        }
+      }
+
+      // Fallback 1: RPC delete_orders
+      const rpcRes = await supabase.rpc('delete_orders', {
+        p_store_id: storeId,
+        p_order_ids: uuidIds
+      });
+      if (!rpcRes.error) {
+        return { success: true, deletedCount: Number(rpcRes.data) || uuidIds.length };
+      }
+
+      // Fallback 2: Direct table delete (works if owner DELETE policy exists)
+      const directRes = await supabase
+        .from('orders')
+        .delete()
+        .eq('store_id', storeId)
+        .in('id', uuidIds);
+      if (!directRes.error) {
+        return { success: true, deletedCount: uuidIds.length };
+      }
+
+      return {
+        success: false,
+        deletedCount: 0,
+        error: directRes.error.message || rpcRes.error.message || 'تعذر حذف الطلبات'
+      };
+    }
+
+    // Local fallback
+    const all = this.getLocalOrders();
+    const idSet = new Set(cleanIds);
+    const remaining = all.filter(o => !(o.storeId === storeId && idSet.has(o.id)));
+    const deletedCount = all.length - remaining.length;
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(remaining));
+    return { success: true, deletedCount };
   }
 
   async trackOrder(orderNumber: string): Promise<any> {
