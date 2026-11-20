@@ -1242,189 +1242,363 @@ function isValidDzPhone(raw) {
   var sub = p.slice(2);
   if (/^([0-9])\\1{7}$/.test(sub)) return false;
   if (/([0-9])\\1{5,}/.test(sub)) return false;
+  if (/^([0-9]{2})\\1{3}$/.test(sub)) return false;
   if ("01234567890".indexOf(sub) !== -1 || "98765432109".indexOf(sub) !== -1) return false;
   return true;
 }
 
 function doPost(e) {
   if (!e || !e.parameter) {
-    return ContentService.createTextOutput(JSON.stringify({ "result": "error" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({"result": "error", "message": "No parameters provided"})).setMimeType(ContentService.MimeType.JSON);
   }
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Orders") || ss.getActiveSheet();
 
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(["التاريخ", "رقم الطلب", "الاسم الكامل", "الهاتف", "الولاية", "البلدية", "طريقة التوصيل", "المنتج", "الحالة", "مبلغ التوصيل", "مبلغ البضاعة", "الخصم", "سبب الخصم", "المجموع الكلي", "رمز التوصيل", "تأكيد عبر واتساب", "شحن عبر واتساب", "رابط التتبع", "آخر تحديث"]);
+    sheet.appendRow([
+      "التاريخ", "رقم الطلب", "الاسم الكامل", "الهاتف", "الولاية", "البلدية",
+      "طريقة التوصيل", "المنتج", "الحالة", "مبلغ التوصيل", "مبلغ البضاعة",
+      "الخصم", "سبب الخصم", "المجموع الكلي", "رمز التوصيل",
+      "تأكيد عبر واتساب", "شحن عبر واتساب", "رابط التتبع", "آخر تعديل من الشيت"
+    ]);
   }
 
   var action = String(e.parameter.action || "create").trim().toLowerCase();
   var orderId = String(e.parameter.orderId || "").replace(/^#/, "").trim();
 
+  // 1. حذف صف عند حذف الطلب من لوحة المتجر
   if (action === "delete") {
     if (!orderId) {
-      return ContentService.createTextOutput(JSON.stringify({ "result": "invalid_order_id" })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({"result": "invalid_order_id"}))
+        .setMimeType(ContentService.MimeType.JSON);
     }
-    var delData = sheet.getDataRange().getValues();
+    var delRows = sheet.getDataRange().getValues();
     var deletedAny = false;
-    for (var d = delData.length - 1; d >= 1; d--) {
-      if (String(delData[d][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
+    for (var d = delRows.length - 1; d >= 1; d--) {
+      var delOrderId = String(delRows[d][1] || "").replace(/^#/, "").trim().toLowerCase();
+      if (delOrderId === orderId.toLowerCase()) {
         sheet.deleteRow(d + 1);
         deletedAny = true;
       }
     }
-    return ContentService.createTextOutput(JSON.stringify({ "result": deletedAny ? "deleted" : "not_found" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({"result": deletedAny ? "deleted" : "not_found"}))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
+  // 2. تحديث صف موجود عند التعديل من لوحة المتجر أو صفحة الهبوط
   if (action === "update") {
     if (!orderId) {
-      return ContentService.createTextOutput(JSON.stringify({ "result": "invalid_order_id" })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({"result": "invalid_order_id"}))
+        .setMimeType(ContentService.MimeType.JSON);
     }
-    var data = sheet.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
-        var r = i + 1;
-        if (e.parameter.wilaya) sheet.getRange(r, 5).setValue(e.parameter.wilaya);
-        if (e.parameter.commune !== undefined) sheet.getRange(r, 6).setValue(e.parameter.commune);
-        if (e.parameter.shippingType) sheet.getRange(r, 7).setValue(e.parameter.shippingType);
-        if (e.parameter.order) sheet.getRange(r, 8).setValue(e.parameter.order);
-        if (e.parameter.status) sheet.getRange(r, 9).setValue(e.parameter.status);
-        if (e.parameter.shippingCost !== undefined) sheet.getRange(r, 10).setValue(parseFloat(e.parameter.shippingCost) || 0);
-        if (e.parameter.productPrice !== undefined) sheet.getRange(r, 11).setValue(parseFloat(e.parameter.productPrice) || 0);
-        if (e.parameter.trackingCode !== undefined) sheet.getRange(r, 15).setValue(e.parameter.trackingCode);
-        sheet.getRange(r, 19).setValue(new Date().toISOString());
-        return ContentService.createTextOutput(JSON.stringify({ "result": "updated" })).setMimeType(ContentService.MimeType.JSON);
+    var rows = sheet.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var existingOrderId = String(rows[i][1] || "").replace(/^#/, "").trim().toLowerCase();
+      if (existingOrderId === orderId.toLowerCase()) {
+        var rowNum = i + 1;
+        if (e.parameter.wilaya !== undefined) sheet.getRange(rowNum, 5).setValue(e.parameter.wilaya);
+        if (e.parameter.commune !== undefined) sheet.getRange(rowNum, 6).setValue(e.parameter.commune);
+        if (e.parameter.shippingType !== undefined) sheet.getRange(rowNum, 7).setValue(e.parameter.shippingType);
+        if (e.parameter.order !== undefined) sheet.getRange(rowNum, 8).setValue(e.parameter.order);
+        if (e.parameter.status !== undefined && e.parameter.status !== "") sheet.getRange(rowNum, 9).setValue(e.parameter.status);
+        if (e.parameter.shippingCost !== undefined) sheet.getRange(rowNum, 10).setValue(parseFloat(e.parameter.shippingCost) || 0);
+        if (e.parameter.productPrice !== undefined) sheet.getRange(rowNum, 11).setValue(parseFloat(e.parameter.productPrice) || 0);
+        if (e.parameter.trackingCode !== undefined) sheet.getRange(rowNum, 15).setValue(e.parameter.trackingCode);
+
+        // مسح علامة التعديل اليدوي من الشيت لأن التحديث قادم من المتجر
+        sheet.getRange(rowNum, 19).setValue("");
+        SpreadsheetApp.flush();
+
+        var uFullName = sheet.getRange(rowNum, 3).getValue();
+        var uPhone = sheet.getRange(rowNum, 4).getValue();
+        var uWilaya = sheet.getRange(rowNum, 5).getValue();
+        var uCommune = sheet.getRange(rowNum, 6).getValue();
+        var uShippingType = sheet.getRange(rowNum, 7).getValue();
+        var uOrder = sheet.getRange(rowNum, 8).getValue();
+        var uStatus = sheet.getRange(rowNum, 9).getValue();
+        var uShippingCost = parseFloat(sheet.getRange(rowNum, 10).getValue()) || 0;
+        var uProductPrice = parseFloat(sheet.getRange(rowNum, 11).getValue()) || 0;
+        var uDiscount = parseFloat(sheet.getRange(rowNum, 12).getValue()) || 0;
+        var uTrackingCode = sheet.getRange(rowNum, 15).getValue();
+
+        var uFormattedPhone = normalizeDzPhone(uPhone);
+        if (uFormattedPhone.indexOf("0") === 0) {
+          uFormattedPhone = "213" + uFormattedPhone.substring(1);
+        }
+
+        var uFormulas = generateWhatsAppFormulas(
+          uFormattedPhone, uFullName, uOrder, uWilaya, uCommune, uShippingType,
+          uShippingCost, uProductPrice, uDiscount, orderId, uStatus, uTrackingCode
+        );
+        sheet.getRange(rowNum, 16).setValue(uFormulas.confirmFormula);
+        sheet.getRange(rowNum, 17).setValue(uFormulas.shippingFormula);
+        sheet.getRange(rowNum, 18).setValue(uFormulas.trackingFormula);
+
+        return ContentService.createTextOutput(JSON.stringify({"result": "updated"}))
+          .setMimeType(ContentService.MimeType.JSON);
       }
     }
-    // IMPORTANT: Never fall through to appendRow on update when order is missing
-    return ContentService.createTextOutput(JSON.stringify({ "result": "not_found" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({"result": "not_found"}))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
+  // رفض أي إجراء غير معروف لمنع إضافة صفوف فارغة
   if (action !== "create") {
-    return ContentService.createTextOutput(JSON.stringify({ "result": "ignored" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({"result": "ignored"}))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // Strict anti-fake / anti-empty order guard before appending any new row
+  // 3. التحقق الصارم قبل إضافة طلب جديد (منع الطلبات الوهمية أو الفارغة)
   var fullName = String(e.parameter.fullName || "").replace(/\\s+/g, " ").trim();
   var phone = normalizeDzPhone(e.parameter.phone || "");
   var wilaya = String(e.parameter.wilaya || "").trim();
-  var orderText = String(e.parameter.order || "").trim();
+  var commune = String(e.parameter.commune || "").trim();
+  var shippingType = String(e.parameter.shippingType || "").trim();
+  var order = String(e.parameter.order || "").trim();
+  var status = String(e.parameter.status || "قيد التأكيد").trim();
   var nameLetters = fullName.replace(/[^\\u0621-\\u064A\\u0671-\\u06D3a-zA-Z]/g, "");
 
-  if (!orderId || nameLetters.length < 2 || !isValidDzPhone(phone) || (!wilaya && !orderText)) {
-    return ContentService.createTextOutput(JSON.stringify({ "result": "rejected_invalid_or_empty" })).setMimeType(ContentService.MimeType.JSON);
+  if (!orderId || nameLetters.length < 2 || !isValidDzPhone(phone) || (!wilaya && !order)) {
+    return ContentService.createTextOutput(JSON.stringify({"result": "rejected_invalid_or_empty"}))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // Prevent duplicate orderId rows
-  var existingData = sheet.getDataRange().getValues();
-  for (var k = 1; k < existingData.length; k++) {
-    if (String(existingData[k][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
-      return ContentService.createTextOutput(JSON.stringify({ "result": "duplicate_ignored" })).setMimeType(ContentService.MimeType.JSON);
+  // منع تكرار نفس رقم الطلب مرتين في الجدول
+  var existingRows = sheet.getDataRange().getValues();
+  for (var k = 1; k < existingRows.length; k++) {
+    if (String(existingRows[k][1] || "").replace(/^#/, "").trim().toLowerCase() === orderId.toLowerCase()) {
+      return ContentService.createTextOutput(JSON.stringify({"result": "duplicate_ignored"}))
+        .setMimeType(ContentService.MimeType.JSON);
     }
   }
 
-  var nextRow = sheet.getLastRow() + 1;
   var shippingCost = parseFloat(e.parameter.shippingCost) || 0;
   var productPrice = parseFloat(e.parameter.productPrice) || 0;
   var discount = parseFloat(e.parameter.discount) || 0;
-  var nowIso = new Date().toISOString();
+  var discountReason = e.parameter.discountReason || "";
+  var trackingCode = e.parameter.trackingCode || "";
+  var date = new Date();
+  var nextRow = sheet.getLastRow() + 1;
+
+  var formattedPhone = phone;
+  if (formattedPhone.indexOf("0") === 0) {
+    formattedPhone = "213" + formattedPhone.substring(1);
+  }
+
+  var formulas = generateWhatsAppFormulas(
+    formattedPhone, fullName, order, wilaya, commune, shippingType,
+    shippingCost, productPrice, discount, orderId, status, trackingCode
+  );
 
   sheet.appendRow([
-    new Date(),
+    date,
     orderId,
     fullName,
     phone,
     wilaya,
-    e.parameter.commune || "",
-    e.parameter.shippingType || "",
-    orderText,
-    e.parameter.status || "قيد التأكيد",
+    commune,
+    shippingType,
+    order,
+    status,
     shippingCost,
     productPrice,
     discount,
-    e.parameter.discountReason || "",
+    discountReason,
     "=J" + nextRow + "+K" + nextRow + "-L" + nextRow,
-    e.parameter.trackingCode || "",
-    "",
-    "",
-    "",
-    nowIso
+    trackingCode,
+    formulas.confirmFormula,
+    formulas.shippingFormula,
+    formulas.trackingFormula,
+    ""
   ]);
 
-  return ContentService.createTextOutput(JSON.stringify({ "result": "success" })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({"result": "success"}))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  var sheet = e.range.getSheet();
+  if (sheet.getName() !== "Orders") return;
+
+  var row = e.range.getRow();
+  var col = e.range.getColumn();
+
+  if (row <= 1) return;
+
+  if (col >= 2 && col <= 15) {
+    var wilaya = sheet.getRange(row, 5).getValue();
+    var commune = sheet.getRange(row, 6).getValue();
+    var shippingType = sheet.getRange(row, 7).getValue();
+    var order = sheet.getRange(row, 8).getValue();
+    var status = sheet.getRange(row, 9).getValue();
+    var shippingCost = parseFloat(sheet.getRange(row, 10).getValue()) || 0;
+    var productPrice = parseFloat(sheet.getRange(row, 11).getValue()) || 0;
+    var discount = parseFloat(sheet.getRange(row, 12).getValue()) || 0;
+    var trackingCode = sheet.getRange(row, 15).getValue();
+
+    var phone = sheet.getRange(row, 4).getValue();
+    var fullName = sheet.getRange(row, 3).getValue();
+    var orderId = sheet.getRange(row, 2).getValue();
+
+    var formattedPhone = normalizeDzPhone(phone);
+    if (formattedPhone.indexOf("0") === 0) {
+      formattedPhone = "213" + formattedPhone.substring(1);
+    }
+
+    var formulas = generateWhatsAppFormulas(
+      formattedPhone, fullName, order, wilaya, commune, shippingType,
+      shippingCost, productPrice, discount, orderId, status, trackingCode
+    );
+
+    sheet.getRange(row, 16).setValue(formulas.confirmFormula);
+    sheet.getRange(row, 17).setValue(formulas.shippingFormula);
+    sheet.getRange(row, 18).setValue(formulas.trackingFormula);
+    sheet.getRange(row, 19).setValue(new Date().toISOString());
+  }
+}
+
+function generateWhatsAppFormulas(phone, fullName, order, wilaya, commune, shippingType, shippingCost, productPrice, discount, orderId, status, trackingCode) {
+  var totalCalculated = (shippingCost + productPrice) - discount;
+
+  var confirmMsg = "السلام عليكم " + fullName + "،\\n" +
+                   "وصلتنا طلبيتك من متجر BrightDZ.\\n" +
+                   "المنتج: " + order + "\\n" +
+                   (discount > 0 ? "المبلغ الأصلي: " + (shippingCost + productPrice) + " دج\\nخصم خاص: -" + discount + " دج\\n" : "") +
+                   "المبلغ الإجمالي: " + totalCalculated + " دج (الدفع عند الاستلام)\\n" +
+                   "التوصيل: " + (shippingType ? shippingType : "توصيل") + (wilaya ? " إلى " + wilaya : "") + (commune ? " (" + commune + ")" : "") + "\\n\\n" +
+                   "باش نبعثوها، أكّد الطلب بالرد على هذه الرسالة (اكتب: تأكيد).\\n" +
+                   "لأي سؤال، كلّمنا على WhatsApp في الرقم +213 798 35 31 65.\\n" +
+                   "شكراً على ثقتك.";
+  var confirmUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(confirmMsg);
+  var confirmFormula = '=HYPERLINK("' + confirmUrl + '", "💬 اضغط للتأكيد")';
+
+  var shippingMsg = "مرحباً الزبون الكريم " + fullName + "،\\n\\n" +
+                    "نود إعلامك أن طلبيتك رقم (" + orderId + ") الخاصة بـ (" + order + ") حالتها الآن: *" + (status || "في شركة التوصيل") + "*.\\n\\n" +
+                    (trackingCode ? "رمز التوصيل الخاص بك لدى شركة الشحن هو: *" + trackingCode + "*\\n\\n" : "") +
+                    "سيتصل بك عامل التوصيل قريباً لتسليمك الطلبية، فضلاً حضّر المبلغ " + totalCalculated + " دج للدفع عند الاستلام.\\n\\n" +
+                    "شكراً لتسوقك معنا في متجر Bright DZ! 🌍";
+  var shippingUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(shippingMsg);
+  var shippingFormula = '=HYPERLINK("' + shippingUrl + '", "📦 اضغط لإرسال رمز الشحن")';
+
+  var trackingSiteUrl = "https://brightdz.vercel.app/";
+  var trackingMsg = "مرحباً " + fullName + " 👋\\n\\n" +
+                    "يمكنك متابعة حالة طلبيتك رقم (" + orderId + ") بشكل مباشر عبر زيارة صفحة التتبع في متجرنا:\\n" +
+                    trackingSiteUrl + "\\n\\n" +
+                    "رقم الطلب الخاص بك: *" + orderId + "*\\n" +
+                    "شكراً لتسوقك مع Bright DZ! 🌍";
+  var trackingUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(trackingMsg);
+  var trackingFormula = '=HYPERLINK("' + trackingUrl + '", "🔍 رابط تتبع الطلب")';
+
+  return {
+    confirmFormula: confirmFormula,
+    shippingFormula: shippingFormula,
+    trackingFormula: trackingFormula
+  };
 }
 
 function doGet(e) {
+  if (!e || !e.parameter) {
+    return ContentService.createTextOutput(JSON.stringify({"status": "error", "scriptVersion": SCRIPT_VERSION, "message": "No parameters"})).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var callback = e.parameter.callback;
+  var action = String(e.parameter.action || "").trim().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Orders") || ss.getActiveSheet();
-  var action = (e && e.parameter && e.parameter.action) ? String(e.parameter.action).trim() : "";
-  var orderId = (e && e.parameter && e.parameter.orderId) ? String(e.parameter.orderId).replace(/^#/, "").trim().toUpperCase() : "";
-  var callback = (e && e.parameter && e.parameter.callback) ? String(e.parameter.callback).trim() : "";
-  var rows = sheet.getDataRange().getValues();
-  var result = { status: "error", scriptVersion: SCRIPT_VERSION };
+  var data = sheet.getDataRange().getValues();
 
+  // إرجاع جميع الطلبات للمزامنة التلقائية مع لوحة المتجر (مع تجاهل الصفوف الفارغة)
   if (action === "list") {
-    var list = [];
-    for (var i = 1; i < rows.length; i++) {
-      var id = String(rows[i][1] || "").replace(/^#/, "").trim();
-      var name = String(rows[i][2] || "").trim();
-      var phone = String(rows[i][3] || "").trim();
-      var wilayaVal = String(rows[i][4] || "").trim();
-      var orderVal = String(rows[i][7] || "").trim();
-      // Skip blank/phantom rows containing only date & order number
-      if ((!name && !phone) || (!phone && !wilayaVal && !orderVal)) continue;
-      list.push({
-        createdAt: rows[i][0] instanceof Date ? rows[i][0].toISOString() : String(rows[i][0] || ""),
-        orderId: id || ("GS-ROW-" + (i + 1)),
-        fullName: name,
-        phone: phone,
-        wilaya: wilayaVal,
-        commune: rows[i][5] || "",
-        shippingType: rows[i][6] || "",
-        orderName: orderVal,
-        orderStatus: rows[i][8] || "قيد التأكيد",
-        shippingCost: Number(rows[i][9]) || 0,
-        productPrice: Number(rows[i][10]) || 0,
-        discount: Number(rows[i][11]) || 0,
-        total: rows[i][13] || "",
-        trackingCode: rows[i][14] || "",
-        sheetUpdatedAt: rows[i][18] || ""
+    var ordersList = [];
+    for (var j = 1; j < data.length; j++) {
+      var rowOrderId = String(data[j][1] || "").replace(/^#/, "").trim();
+      var rowName = String(data[j][2] || "").trim();
+      var rowPhone = String(data[j][3] || "").trim();
+      var rowWilaya = String(data[j][4] || "").trim();
+      var rowOrderName = String(data[j][7] || "").trim();
+      if (!rowOrderId) continue;
+      if ((!rowName && !rowPhone) || (!rowPhone && !rowWilaya && !rowOrderName)) continue;
+
+      ordersList.push({
+        createdAt: data[j][0] instanceof Date ? data[j][0].toISOString() : String(data[j][0] || ""),
+        orderId: rowOrderId,
+        fullName: rowName,
+        phone: rowPhone,
+        wilaya: rowWilaya,
+        commune: String(data[j][5] || ""),
+        shippingType: String(data[j][6] || ""),
+        orderName: rowOrderName,
+        orderStatus: String(data[j][8] || "قيد التأكيد"),
+        shippingCost: parseFloat(data[j][9]) || 0,
+        productPrice: parseFloat(data[j][10]) || 0,
+        discount: parseFloat(data[j][11]) || 0,
+        total: data[j][13],
+        trackingCode: String(data[j][14] || ""),
+        sheetUpdatedAt: data[j][18] ? String(data[j][18]) : ""
       });
     }
-    result = { status: "success", scriptVersion: SCRIPT_VERSION, orders: list };
-  } else if (orderId) {
-    for (var j = 1; j < rows.length; j++) {
-      if (String(rows[j][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId) {
+    var listOutput = JSON.stringify({ status: "success", scriptVersion: SCRIPT_VERSION, orders: ordersList });
+    if (callback) {
+      return ContentService.createTextOutput(callback + "(" + listOutput + ");")
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(listOutput)
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // البحث عن طلب واحد لصفحة تتبع الزبون
+  var searchOrderId = String(e.parameter.orderId || e.parameter.id || "").replace(/^#/, "").trim().toLowerCase();
+  var result = {
+    status: "not_found",
+    scriptVersion: SCRIPT_VERSION,
+    orderStatus: "قيد التأكيد",
+    orderName: "",
+    wilaya: "",
+    commune: "",
+    shippingType: "",
+    total: "",
+    fullName: "",
+    trackingCode: "",
+    sheetUpdatedAt: ""
+  };
+
+  if (searchOrderId !== "") {
+    for (var i = 1; i < data.length; i++) {
+      var cellOrderId = String(data[i][1] || "").replace(/^#/, "").trim().toLowerCase();
+      if (cellOrderId === searchOrderId) {
+        var calculatedTotal = data[i][13];
+        var totalText = (calculatedTotal !== "" && calculatedTotal !== null && calculatedTotal !== undefined) ? (calculatedTotal + " دج") : "";
+
         result = {
           status: "success",
-          orderId: String(rows[j][1]).replace(/^#/, "").trim(),
-          fullName: rows[j][2] || "",
-          wilaya: rows[j][4] || "",
-          commune: rows[j][5] || "",
-          shippingType: rows[j][6] || "",
-          orderName: rows[j][7] || "",
-          orderStatus: rows[j][8] || "قيد التأكيد",
-          total: rows[j][13] || "",
-          trackingCode: rows[j][14] || "",
-          sheetUpdatedAt: rows[j][18] || ""
+          scriptVersion: SCRIPT_VERSION,
+          orderId: String(data[i][1] || "").replace(/^#/, "").trim(),
+          fullName: data[i][2] || "",
+          wilaya: data[i][4] || "",
+          commune: data[i][5] || "",
+          shippingType: data[i][6] || "",
+          orderName: data[i][7] || "",
+          orderStatus: data[i][8] || "قيد التأكيد",
+          total: totalText,
+          trackingCode: data[i][14] || "",
+          sheetUpdatedAt: data[i][18] ? String(data[i][18]) : ""
         };
         break;
       }
     }
   }
 
-  var out = JSON.stringify(result);
-  if (callback) {
-    return ContentService.createTextOutput(callback + "(" + out + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);
-  }
-  return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
-}
+  var jsonOutput = JSON.stringify(result);
 
-function onEdit(e) {
-  if (!e || !e.range) return;
-  var sheet = e.source.getActiveSheet();
-  var row = e.range.getRow();
-  if (row > 1 && e.range.getColumn() < 19) {
-    sheet.getRange(row, 19).setValue(new Date().toISOString());
+  if (callback) {
+    return ContentService.createTextOutput(callback + "(" + jsonOutput + ");")
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  } else {
+    return ContentService.createTextOutput(jsonOutput)
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }`;
 
