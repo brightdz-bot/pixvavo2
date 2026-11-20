@@ -3,6 +3,10 @@ import type { Express, Request, Response } from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  ECOTRACK_WILAYA_HUB,
+  resolveOfficialEcotrackCommune
+} from '../src/data/ecotrackCommunes.ts';
 
 export type CourierProvider =
   | 'none'
@@ -1291,37 +1295,45 @@ export function createApiApp(): Express {
         const stopDeskCandidates = ecoCandidates.filter(c => c.hasStopDesk);
         const desiredCommune = String(order.commune || toWilayaMeta.nameFr).trim();
 
+        // Always resolve against the exact official 58-wilaya Ecotrack / 48Hr Express French communes table
+        const officialPdfRes = resolveOfficialEcotrackCommune(toWilayaCode, order.commune);
+        const officialHub = ECOTRACK_WILAYA_HUB[toWilayaCode] || officialPdfRes.commune;
+
         const pickPool =
           isStopDesk && stopDeskCandidates.length > 0 ? stopDeskCandidates : ecoCandidates;
 
         const rankedFromPool = rankCandidateNames(
-          desiredCommune,
+          officialPdfRes.matched ? officialPdfRes.commune : desiredCommune,
           pickPool.map(c => ({ name: c.name, arName: c.arName, preferred: c.hasStopDesk })),
-          toWilayaMeta.nameFr
+          officialHub
         );
 
-        const asciiWilayaFr = toWilayaMeta.nameFr
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .trim();
+        // Prefer exact official PDF commune spelling (cross-checked with live active pool when available)
+        const exactInLivePool = pickPool.find(
+          c => stripLatinDiacritics(c.name) === stripLatinDiacritics(officialPdfRes.commune)
+        );
+
+        let resolvedCommune = officialPdfRes.commune;
+        if (exactInLivePool) {
+          resolvedCommune = exactInLivePool.name;
+        } else if (isStopDesk && rankedFromPool.length > 0) {
+          resolvedCommune = rankedFromPool[0];
+        } else if (!officialPdfRes.matched && rankedFromPool.length > 0) {
+          resolvedCommune = rankedFromPool[0];
+        }
+
         const staticWilayaFallbacks = Array.from(
           new Set(
             [
+              officialHub,
+              officialPdfRes.commune,
+              ...officialPdfRes.ranked.slice(0, 4),
               toWilayaCode === 16 ? 'Alger Centre' : '',
               toWilayaCode === 16 ? 'Bab El Oued' : '',
-              toWilayaCode === 16 ? 'Hydra' : '',
-              toWilayaCode === 58 ? 'El Meniaa' : '',
-              asciiWilayaFr,
-              toWilayaMeta.nameFr,
-              `${asciiWilayaFr} Centre`
+              toWilayaCode === 16 ? 'Hydra' : ''
             ].filter(Boolean)
           )
         );
-
-        let resolvedCommune = rankedFromPool[0] || desiredCommune;
-        if (rankedFromPool.length === 0 && hasArabicChars(desiredCommune)) {
-          resolvedCommune = staticWilayaFallbacks[0] || toWilayaMeta.nameFr;
-        }
 
         const buildEcoPayload = (communeName: string, extraNote = '') => {
           const baseNote = String(order.notes || '').trim();

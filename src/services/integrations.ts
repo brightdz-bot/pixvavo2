@@ -1,5 +1,6 @@
 import { CourierProvider, DeliveryType, Order, OrderStatus, StoreApiConfig } from '../types';
 import { formatPlainDZD, getWilayaById } from '../data/wilayas';
+import { ECOTRACK_WILAYA_HUB, resolveOfficialEcotrackCommune } from '../data/ecotrackCommunes';
 
 declare global {
   interface Window {
@@ -1326,13 +1327,31 @@ const COURIER_EXPORT_HEADERS = [
 function buildCourierExportRow(o: Order): Array<string | number> {
   const wilayaMeta = getWilayaById(o.wilayaId);
   const numericWilayaCode = parseInt(String(o.wilayaId || ''), 10);
-  const codeWilaya = Number.isFinite(numericWilayaCode) ? String(numericWilayaCode) : String(o.wilayaId || '');
-  const wilayaLabel = wilayaMeta?.nameFr || o.wilayaName || '';
-  const communeLabel = (o.commune || '').trim() || wilayaLabel;
+  const resolved = resolveOfficialEcotrackCommune(
+    Number.isFinite(numericWilayaCode) ? numericWilayaCode : 16,
+    o.commune
+  );
+  const codeWilaya = String(resolved.wilayaCode);
+  const wilayaLabel = (
+    wilayaMeta?.nameFr ||
+    ECOTRACK_WILAYA_HUB[resolved.wilayaCode] ||
+    o.wilayaName ||
+    ''
+  )
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  const communeLabel = resolved.commune;
   const addressLabel =
     (o.address || '').trim() ||
     `${wilayaLabel}${communeLabel && communeLabel !== wilayaLabel ? ' - ' + communeLabel : ''}`;
   const productLabel = (o.bundleLabel || '').trim() || o.items.map(it => it.title).join(' + ');
+  const baseNotes = (o.notes || '').trim();
+  const originalCommune = (o.commune || '').trim();
+  const notesWithCommune =
+    !resolved.matched && originalCommune && !baseNotes.includes(originalCommune)
+      ? [baseNotes, `بلدية الزبون: ${originalCommune}`].filter(Boolean).join(' | ')
+      : baseNotes;
 
   return [
     o.orderNumber,
@@ -1346,7 +1365,7 @@ function buildCourierExportRow(o: Order): Array<string | number> {
     productLabel,
     1,
     Math.round(o.total || 0),
-    (o.notes || '').trim(),
+    notesWithCommune,
     '',
     '',
     '',
