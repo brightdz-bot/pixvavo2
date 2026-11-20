@@ -5,7 +5,9 @@ import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import { storage } from '../../services/storage';
 import { applyBrowserBranding } from '../../services/branding';
 import {
+  captureMetaAttributionCookies,
   trackMetaPixelPage,
+  trackMetaPixelInitiateCheckout,
   trackMetaPixelPurchase,
   sendOrderToGoogleSheet,
   updateOrderInGoogleSheet,
@@ -118,11 +120,17 @@ export const LandingPageView: React.FC<Props> = ({
   const [promoError, setPromoError] = useState<string | null>(null);
   const [isValidatingPromo, setIsValidatingPromo] = useState(false);
 
-  // Custom Store WhatsApp Templates
+  // Custom Store WhatsApp Templates & Public Pixel IDs Fallback
   const [waTemplates, setWaTemplates] = useState<{ confirm: string; shipping: string }>({
     confirm: '',
     shipping: ''
   });
+  const [publicPixelIds, setPublicPixelIds] = useState<{ meta: string; tiktok: string }>({
+    meta: '',
+    tiktok: ''
+  });
+  const trackedPageViewKeyRef = useRef<string>('');
+  const trackedInitiateCheckoutRef = useRef<boolean>(false);
 
   // Modals & Tracking Mode
   const [isTrackingMode, setIsTrackingMode] = useState(false);
@@ -162,8 +170,14 @@ export const LandingPageView: React.FC<Props> = ({
     total?: number;
   } | null>(null);
 
-  const effectivePixelId = page.integrations?.pixelId?.trim() || store.defaultPixelId?.trim();
-  const effectiveTiktokPixelId = page.integrations?.tiktokPixelId?.trim() || store.tiktokPixelId?.trim();
+  const effectivePixelId =
+    page.integrations?.pixelId?.trim() ||
+    store.defaultPixelId?.trim() ||
+    publicPixelIds.meta.trim();
+  const effectiveTiktokPixelId =
+    page.integrations?.tiktokPixelId?.trim() ||
+    store.tiktokPixelId?.trim() ||
+    publicPixelIds.tiktok.trim();
   const effectiveWhatsapp =
     page.integrations?.whatsappNumber?.trim() || store.defaultWhatsapp?.trim() || store.phone?.trim();
   const effectiveWebhook =
@@ -171,6 +185,7 @@ export const LandingPageView: React.FC<Props> = ({
 
   // Sync on page switch
   useEffect(() => {
+    captureMetaAttributionCookies();
     setActiveImage(page.mainImage || allGallery[0] || '');
     setImgError(false);
     const def = page.offers.find(o => o.isDefault) || page.offers[0];
@@ -190,13 +205,25 @@ export const LandingPageView: React.FC<Props> = ({
     setIsEditingTrackedOrder(false);
     setTrackedEditError(null);
     setTrackedEditSuccess(null);
-    trackMetaPixelPage(effectivePixelId, page.title, page.category, def?.price || 0, {
-      storeId: store.id,
-      tiktokPixelId: effectiveTiktokPixelId
-    });
+    trackedPageViewKeyRef.current = '';
+    trackedInitiateCheckoutRef.current = false;
   }, [page.id]);
 
-  // Fetch non-secret custom WhatsApp templates & browser favicon for store
+  // Fire PageView + ViewContent once per page/pixel resolution (supports async public-settings fallback)
+  useEffect(() => {
+    const def = page.offers.find(o => o.isDefault) || page.offers[0];
+    const trackKey = `${page.id}|${effectivePixelId}|${effectiveTiktokPixelId}`;
+    if (trackedPageViewKeyRef.current === trackKey) return;
+    if (!effectivePixelId && !effectiveTiktokPixelId && trackedPageViewKeyRef.current) return;
+    trackedPageViewKeyRef.current = trackKey;
+    trackMetaPixelPage(effectivePixelId, page.title, page.category, def?.price || 0, {
+      storeId: store.id,
+      contentId: page.id,
+      tiktokPixelId: effectiveTiktokPixelId
+    });
+  }, [page.id, page.title, page.category, store.id, effectivePixelId, effectiveTiktokPixelId]);
+
+  // Fetch non-secret custom WhatsApp templates, browser favicon & public Pixel IDs for store
   useEffect(() => {
     let active = true;
     const localCfg = storage.getLocalStoreApiConfig(store.id);
@@ -205,6 +232,10 @@ export const LandingPageView: React.FC<Props> = ({
         confirm: localCfg.whatsappConfirmTemplate || '',
         shipping: localCfg.whatsappShippingTemplate || ''
       });
+      setPublicPixelIds(prev => ({
+        meta: localCfg.metaPixelId || prev.meta,
+        tiktok: localCfg.tiktokPixelId || prev.tiktok
+      }));
     }
     applyBrowserBranding({
       title: `${page.title} | ${store.name}`,
@@ -218,6 +249,12 @@ export const LandingPageView: React.FC<Props> = ({
           confirm: data.whatsappConfirmTemplate || prev.confirm,
           shipping: data.whatsappShippingTemplate || prev.shipping
         }));
+        if (data.metaPixelId || data.tiktokPixelId) {
+          setPublicPixelIds(prev => ({
+            meta: data.metaPixelId || prev.meta,
+            tiktok: data.tiktokPixelId || prev.tiktok
+          }));
+        }
         if (data.faviconUrl || store.logoUrl) {
           applyBrowserBranding({
             title: `${page.title} | ${store.name}`,
@@ -504,6 +541,8 @@ export const LandingPageView: React.FC<Props> = ({
 
     trackMetaPixelPurchase(effectivePixelId, bundleDetails, finalTotalDisplay, orderNum, {
       storeId: store.id,
+      contentId: page.id,
+      numItems: selectedOffer.quantity || 1,
       tiktokPixelId: effectiveTiktokPixelId,
       customerPhone: cleanPhone,
       customerName: fullName.trim(),
@@ -1374,7 +1413,25 @@ export const LandingPageView: React.FC<Props> = ({
                   )}
                 </AnimatePresence>
 
-                <form onSubmit={handleCheckoutSubmit} className="space-y-5">
+                <form
+                  onSubmit={handleCheckoutSubmit}
+                  onFocus={() => {
+                    if (!trackedInitiateCheckoutRef.current) {
+                      trackedInitiateCheckoutRef.current = true;
+                      trackMetaPixelInitiateCheckout(
+                        effectivePixelId,
+                        selectedOffer?.title || page.title,
+                        grandTotal,
+                        {
+                          storeId: store.id,
+                          contentId: page.id,
+                          numItems: selectedOffer?.quantity || 1
+                        }
+                      );
+                    }
+                  }}
+                  className="space-y-5"
+                >
                   {/* Synced Offer Dropdown */}
                   <div>
                     <label className="block text-xs font-bold mb-2">العرض المختار:</label>

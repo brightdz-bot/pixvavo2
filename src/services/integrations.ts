@@ -12,9 +12,105 @@ declare global {
 
 const initializedPixels = new Set<string>();
 const initializedTikTokPixels = new Set<string>();
+const FBC_SESSION_KEY = 'brightdz_meta_fbc';
 
 export function generateTrackingEventId(prefix = 'evt'): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function readCookie(name: string): string {
+  if (typeof document === 'undefined') return '';
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+export function captureMetaAttributionCookies(): { fbp?: string; fbc?: string } {
+  if (typeof window === 'undefined') return {};
+  let fbp = readCookie('_fbp') || undefined;
+  let fbc = readCookie('_fbc') || undefined;
+
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fbclid = params.get('fbclid')?.trim();
+    if (fbclid) {
+      const builtFbc = `fb.1.${Date.now()}.${fbclid}`;
+      fbc = builtFbc;
+      try {
+        sessionStorage.setItem(FBC_SESSION_KEY, builtFbc);
+      } catch {
+        // ignore storage restrictions
+      }
+      try {
+        document.cookie = `_fbc=${encodeURIComponent(builtFbc)}; path=/; max-age=${90 * 86400}; SameSite=Lax`;
+      } catch {
+        // ignore cookie restrictions
+      }
+    } else if (!fbc) {
+      try {
+        const stored = sessionStorage.getItem(FBC_SESSION_KEY);
+        if (stored) fbc = stored;
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore URL parsing errors
+  }
+
+  return { fbp, fbc };
+}
+
+function ensureMetaPixelLoaded(pixelId: string | undefined): string {
+  const cleanId = pixelId?.trim() || '';
+  if (!cleanId || typeof window === 'undefined' || typeof document === 'undefined') return '';
+  try {
+    if (!window.fbq) {
+      (function (f: any, b: Document, e: string, v: string) {
+        if (f.fbq) return;
+        const n: any = (f.fbq = function (...args: any[]) {
+          if (n.callMethod) {
+            n.callMethod.apply(n, args);
+          } else {
+            n.queue.push(args);
+          }
+        });
+        if (!f._fbq) f._fbq = n;
+        n.push = n;
+        n.loaded = true;
+        n.version = '2.0';
+        n.queue = [];
+        const t = b.createElement(e) as HTMLScriptElement;
+        t.async = true;
+        t.src = v;
+        t.onerror = () => {};
+        const s = b.getElementsByTagName(e)[0];
+        if (s && s.parentNode) {
+          s.parentNode.insertBefore(t, s);
+        } else {
+          b.head.appendChild(t);
+        }
+      })(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js');
+    }
+    if (window.fbq && !initializedPixels.has(cleanId)) {
+      window.fbq('init', cleanId);
+      initializedPixels.add(cleanId);
+    }
+  } catch {
+    // Never break storefront UX if ad blockers block Facebook Pixel
+  }
+  return cleanId;
+}
+
+export function trackMetaPixelStorefrontVisit(pixelId: string | undefined): void {
+  captureMetaAttributionCookies();
+  const cleanId = ensureMetaPixelLoaded(pixelId);
+  if (cleanId && typeof window !== 'undefined' && window.fbq) {
+    try {
+      window.fbq('track', 'PageView');
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export function trackTikTokPixelPage(
@@ -96,64 +192,34 @@ export function trackMetaPixelPage(
   value: number,
   options?: {
     storeId?: string;
+    contentId?: string;
     tiktokPixelId?: string;
   }
 ): void {
-  const cleanId = pixelId?.trim();
+  const { fbp, fbc } = captureMetaAttributionCookies();
+  const cleanId = ensureMetaPixelLoaded(pixelId);
   const eventId = generateTrackingEventId('view');
 
   if (options?.tiktokPixelId) {
     trackTikTokPixelPage(options.tiktokPixelId, contentName, value, eventId);
   }
 
-  if (cleanId && typeof window !== 'undefined' && typeof document !== 'undefined') {
+  if (cleanId && typeof window !== 'undefined' && window.fbq) {
     try {
-      if (!window.fbq) {
-        (function (f: any, b: Document, e: string, v: string) {
-          if (f.fbq) return;
-          const n: any = (f.fbq = function (...args: any[]) {
-            if (n.callMethod) {
-              n.callMethod.apply(n, args);
-            } else {
-              n.queue.push(args);
-            }
-          });
-          if (!f._fbq) f._fbq = n;
-          n.push = n;
-          n.loaded = true;
-          n.version = '2.0';
-          n.queue = [];
-          const t = b.createElement(e) as HTMLScriptElement;
-          t.async = true;
-          t.src = v;
-          t.onerror = () => {};
-          const s = b.getElementsByTagName(e)[0];
-          if (s && s.parentNode) {
-            s.parentNode.insertBefore(t, s);
-          } else {
-            b.head.appendChild(t);
-          }
-        })(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js');
-      }
-
-      if (window.fbq) {
-        if (!initializedPixels.has(cleanId)) {
-          window.fbq('init', cleanId);
-          initializedPixels.add(cleanId);
-        }
-        window.fbq('track', 'PageView');
-        window.fbq(
-          'track',
-          'ViewContent',
-          {
-            content_name: contentName,
-            content_category: category,
-            value,
-            currency: 'DZD'
-          },
-          { eventID: eventId }
-        );
-      }
+      window.fbq('track', 'PageView');
+      window.fbq(
+        'track',
+        'ViewContent',
+        {
+          content_name: contentName,
+          content_category: category,
+          content_type: 'product',
+          content_ids: options?.contentId ? [options.contentId] : undefined,
+          value: Number(value) || 0,
+          currency: 'DZD'
+        },
+        { eventID: eventId }
+      );
     } catch {
       // Never break storefront UX if ad blockers block Facebook Pixel
     }
@@ -165,10 +231,69 @@ export function trackMetaPixelPage(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         storeId: options.storeId,
+        pixelId: cleanId || undefined,
         eventName: 'ViewContent',
         eventId,
-        value,
+        value: Number(value) || 0,
         contentName,
+        contentId: options.contentId,
+        fbp,
+        fbc,
+        pageUrl: typeof window !== 'undefined' ? window.location.href : ''
+      })
+    }).catch(() => {});
+  }
+}
+
+export function trackMetaPixelInitiateCheckout(
+  pixelId: string | undefined,
+  contentName: string,
+  value: number,
+  options?: {
+    storeId?: string;
+    contentId?: string;
+    numItems?: number;
+  }
+): void {
+  const { fbp, fbc } = captureMetaAttributionCookies();
+  const cleanId = ensureMetaPixelLoaded(pixelId);
+  const eventId = generateTrackingEventId('ic');
+
+  if (cleanId && typeof window !== 'undefined' && window.fbq) {
+    try {
+      window.fbq(
+        'track',
+        'InitiateCheckout',
+        {
+          content_name: contentName,
+          content_type: 'product',
+          content_ids: options?.contentId ? [options.contentId] : undefined,
+          num_items: options?.numItems || 1,
+          value: Number(value) || 0,
+          currency: 'DZD'
+        },
+        { eventID: eventId }
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  if (options?.storeId && typeof fetch !== 'undefined') {
+    void fetch('/api/integrations/track-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storeId: options.storeId,
+        pixelId: cleanId || undefined,
+        eventName: 'InitiateCheckout',
+        eventId,
+        value: Number(value) || 0,
+        contentName,
+        contentId: options.contentId,
+        numItems: options.numItems || 1,
+        fbp,
+        fbc,
         pageUrl: typeof window !== 'undefined' ? window.location.href : ''
       })
     }).catch(() => {});
@@ -182,14 +307,18 @@ export function trackMetaPixelPurchase(
   orderNumber: string,
   options?: {
     storeId?: string;
+    contentId?: string;
+    numItems?: number;
     tiktokPixelId?: string;
     customerPhone?: string;
     customerName?: string;
     wilayaName?: string;
   }
 ): void {
-  const cleanId = pixelId?.trim();
+  const { fbp, fbc } = captureMetaAttributionCookies();
+  const cleanId = ensureMetaPixelLoaded(pixelId);
   const eventId = `purchase_${orderNumber}`;
+  const numericValue = Math.round(Number(value) || 0);
 
   if (cleanId && typeof window !== 'undefined' && window.fbq) {
     try {
@@ -198,7 +327,10 @@ export function trackMetaPixelPurchase(
         'Purchase',
         {
           content_name: contentName,
-          value,
+          content_type: 'product',
+          content_ids: options?.contentId ? [options.contentId] : [orderNumber],
+          num_items: options?.numItems || 1,
+          value: numericValue,
           currency: 'DZD',
           order_id: orderNumber
         },
@@ -215,7 +347,7 @@ export function trackMetaPixelPurchase(
         'CompletePayment',
         {
           content_name: contentName,
-          value,
+          value: numericValue,
           currency: 'DZD',
           order_id: orderNumber
         },
@@ -232,14 +364,19 @@ export function trackMetaPixelPurchase(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         storeId: options.storeId,
+        pixelId: cleanId || undefined,
         eventName: 'Purchase',
         eventId,
         orderNumber,
-        value,
+        value: numericValue,
         contentName,
+        contentId: options.contentId,
+        numItems: options.numItems || 1,
         customerPhone: options.customerPhone,
         customerName: options.customerName,
         wilayaName: options.wilayaName,
+        fbp,
+        fbc,
         pageUrl: typeof window !== 'undefined' ? window.location.href : ''
       })
     }).catch(() => {});

@@ -1590,9 +1590,14 @@ export function createApiApp(): Express {
       orderNumber,
       value = 0,
       contentName = '',
+      contentId = '',
+      numItems = 1,
+      pixelId: incomingPixelId = '',
       customerPhone = '',
       customerName = '',
       wilayaName = '',
+      fbp = '',
+      fbc = '',
       pageUrl = '',
       isTest = false,
       target = 'all'
@@ -1604,15 +1609,32 @@ export function createApiApp(): Express {
       '';
     const userAgent = req.headers['user-agent'] || '';
     const e164Phone = normalizePhoneE164Digits(customerPhone);
-    const firstName = String(customerName || '').trim().split(/\s+/)[0] || '';
+    const nameTokens = String(customerName || '').trim().split(/\s+/).filter(Boolean);
+    const firstName = nameTokens[0] || '';
+    const lastName = nameTokens.slice(1).join(' ') || '';
+    const effectiveMetaPixelId = String(incomingPixelId || cfg.metaPixelId || '').trim();
     const results: Record<string, { ok: boolean; message: string; latencyMs?: number }> = {};
 
     if (
       (target === 'all' || target === 'meta') &&
       (cfg.metaCapiEnabled || isTest) &&
-      cfg.metaPixelId &&
+      effectiveMetaPixelId &&
       cfg.metaCapiToken
     ) {
+      const userData: Record<string, any> = {
+        client_ip_address: clientIp || undefined,
+        client_user_agent: userAgent || undefined,
+        ph: e164Phone ? [sha256(e164Phone)] : undefined,
+        fn: firstName ? [sha256(firstName)] : undefined,
+        ln: lastName ? [sha256(lastName)] : undefined,
+        ct: wilayaName ? [sha256(wilayaName)] : undefined,
+        country: [sha256('dz')],
+        external_id: e164Phone ? [sha256(e164Phone)] : orderNumber ? [sha256(String(orderNumber))] : undefined
+      };
+      if (String(fbp || '').trim()) userData.fbp = String(fbp).trim();
+      if (String(fbc || '').trim()) userData.fbc = String(fbc).trim();
+
+      const resolvedContentId = String(contentId || orderNumber || '').trim();
       const metaEventPayload: any = {
         data: [
           {
@@ -1621,29 +1643,26 @@ export function createApiApp(): Express {
             event_id: eventId || `${orderNumber || 'evt'}_${Date.now()}`,
             action_source: 'website',
             event_source_url: pageUrl || undefined,
-            user_data: {
-              client_ip_address: clientIp || undefined,
-              client_user_agent: userAgent || undefined,
-              ph: e164Phone ? [sha256(e164Phone)] : undefined,
-              fn: firstName ? [sha256(firstName)] : undefined,
-              ct: wilayaName ? [sha256(wilayaName)] : undefined,
-              country: [sha256('dz')]
-            },
+            user_data: userData,
             custom_data: {
               currency: 'DZD',
               value: Number(value) || 0,
+              content_type: 'product',
+              content_ids: resolvedContentId ? [resolvedContentId] : undefined,
+              num_items: Number(numItems) || 1,
               content_name: contentName || undefined,
               order_id: orderNumber || undefined
             }
           }
         ]
       };
-      if (cfg.metaTestEventCode?.trim()) {
+      // Only attach test_event_code on explicit test requests; attaching it to real orders excludes them from Ads Manager attribution!
+      if (isTest && cfg.metaTestEventCode?.trim()) {
         metaEventPayload.test_event_code = cfg.metaTestEventCode.trim();
       }
 
       try {
-        const metaUrl = `https://graph.facebook.com/v21.0/${encodeURIComponent(cfg.metaPixelId.trim())}/events?access_token=${encodeURIComponent(cfg.metaCapiToken.trim())}`;
+        const metaUrl = `https://graph.facebook.com/v21.0/${encodeURIComponent(effectiveMetaPixelId)}/events?access_token=${encodeURIComponent(cfg.metaCapiToken.trim())}`;
         const mRes = await fetchJsonWithTimeout(metaUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1699,7 +1718,7 @@ export function createApiApp(): Express {
           }
         ]
       };
-      if (cfg.tiktokTestEventCode?.trim()) {
+      if (isTest && cfg.tiktokTestEventCode?.trim()) {
         ttPayload.test_event_code = cfg.tiktokTestEventCode.trim();
       }
 
@@ -1862,7 +1881,7 @@ export function createApiApp(): Express {
               method: 'GET',
               headers: {
                 apikey: serviceRoleKey,
-                Authorization: `Bearer ${serviceRoleKey}`,
+                ...(serviceRoleKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceRoleKey}` } : {}),
                 Accept: 'application/json'
               }
             },
@@ -1898,7 +1917,7 @@ export function createApiApp(): Express {
     res.json({ ok: true, allowed: true });
   });
 
-  // 8. Public Storefront Settings (WhatsApp custom message templates + favicon - non-secret)
+  // 8. Public Storefront Settings (WhatsApp templates, favicon, and public Pixel IDs - non-secret)
   app.get('/api/store/public-settings', async (req: Request, res: Response) => {
     const storeId = String(req.query?.storeId || '').trim();
     if (!storeId) {
@@ -1906,7 +1925,9 @@ export function createApiApp(): Express {
         ok: true,
         whatsappConfirmTemplate: '',
         whatsappShippingTemplate: '',
-        faviconUrl: ''
+        faviconUrl: '',
+        metaPixelId: '',
+        tiktokPixelId: ''
       });
       return;
     }
@@ -1915,7 +1936,9 @@ export function createApiApp(): Express {
       ok: true,
       whatsappConfirmTemplate: cfg?.whatsappConfirmTemplate || '',
       whatsappShippingTemplate: cfg?.whatsappShippingTemplate || '',
-      faviconUrl: cfg?.faviconUrl || ''
+      faviconUrl: cfg?.faviconUrl || '',
+      metaPixelId: cfg?.metaPixelId || '',
+      tiktokPixelId: cfg?.tiktokPixelId || ''
     });
   });
 

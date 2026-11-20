@@ -3,7 +3,11 @@ import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { Store, LandingPage, OrderStatus } from '../../types';
 import { storage } from '../../services/storage';
 import { useAuth } from '../../services/authContext';
-import { fetchOrderFromGoogleSheet } from '../../services/integrations';
+import {
+  captureMetaAttributionCookies,
+  fetchOrderFromGoogleSheet,
+  trackMetaPixelStorefrontVisit
+} from '../../services/integrations';
 import { formatDZD } from '../../data/wilayas';
 import { LandingPageView } from './LandingPageView';
 import { applyBrowserBranding } from '../../services/branding';
@@ -54,6 +58,7 @@ export const PublicStorefront: React.FC<Props> = ({
   }, [initialSlug]);
 
   useEffect(() => {
+    captureMetaAttributionCookies();
     let mounted = true;
     async function load() {
       setIsLoading(true);
@@ -83,11 +88,19 @@ export const PublicStorefront: React.FC<Props> = ({
         if (mounted && localCfg?.faviconUrl) {
           setFaviconUrl(localCfg.faviconUrl);
         }
+        const initialPixel = s.defaultPixelId?.trim() || localCfg?.metaPixelId?.trim() || '';
+        if (initialPixel && !initialSlug) {
+          trackMetaPixelStorefrontVisit(initialPixel);
+        }
         fetch(`/api/store/public-settings?storeId=${encodeURIComponent(s.id)}`)
           .then(r => (r.ok ? r.json() : null))
           .then(data => {
-            if (mounted && data?.ok && data.faviconUrl) {
+            if (!mounted || !data?.ok) return;
+            if (data.faviconUrl) {
               setFaviconUrl(data.faviconUrl);
+            }
+            if (!initialPixel && data.metaPixelId && !initialSlug) {
+              trackMetaPixelStorefrontVisit(data.metaPixelId);
             }
           })
           .catch(() => {});

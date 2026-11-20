@@ -504,7 +504,7 @@ export const ApiConfigTab: React.FC<Props> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold mb-1">Test Event Code (اختياري للاختبار في Events Manager)</label>
+              <label className="block text-xs font-bold mb-1">Test Event Code (اختياري لزر "اختبار Meta" فقط)</label>
               <input
                 type="text"
                 dir="ltr"
@@ -513,6 +513,9 @@ export const ApiConfigTab: React.FC<Props> = ({
                 placeholder="TEST12345"
                 className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
               />
+              <p className="text-[10px] text-slate-400 mt-1">
+                يُستخدم فقط عند الضغط على زر «اختبار Meta» ولا يُرسل مع طلبات الزبائن الحقيقية حتى تُحتسب في Ads Manager.
+              </p>
             </div>
 
             {metaFeedback && (
