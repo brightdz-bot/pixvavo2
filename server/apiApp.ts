@@ -73,9 +73,76 @@ const RUNTIME_CONFIG_PATH = process.env.VERCEL
   ? '/tmp/.brightdz-api-cache.json'
   : path.resolve(process.cwd(), '.brightdz-api-cache.json');
 
+const RUNTIME_ABANDONED_PATH = process.env.VERCEL
+  ? '/tmp/.brightdz-abandoned-cache.json'
+  : path.resolve(process.cwd(), '.brightdz-abandoned-cache.json');
+
 const storeConfigMap = new Map<string, ServerStoreApiConfig>();
 const recentPhoneOrdersMap = new Map<string, number[]>();
 const recentIpOrdersMap = new Map<string, number[]>();
+
+interface CachedAbandonedOrder {
+  id: string;
+  sessionId: string;
+  storeId: string;
+  landingPageId?: string;
+  landingPageTitle?: string;
+  offerId?: string;
+  bundleLabel?: string;
+  variantLabel?: string;
+  customerName?: string;
+  customerPhone: string;
+  wilayaId?: string;
+  wilayaName?: string;
+  commune?: string;
+  deliveryType: 'home' | 'stop';
+  subtotal: number;
+  shippingFee: number;
+  total: number;
+  status: 'new' | 'contacted' | 'recovered' | 'dismissed';
+  recoveredOrderNumber?: string;
+  contactedAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const abandonedByStoreMap = new Map<string, Map<string, CachedAbandonedOrder>>();
+
+function loadPersistedAbandonedOrders() {
+  try {
+    if (fs.existsSync(RUNTIME_ABANDONED_PATH)) {
+      const raw = fs.readFileSync(RUNTIME_ABANDONED_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, CachedAbandonedOrder[]>;
+      Object.entries(parsed).forEach(([storeId, list]) => {
+        if (!Array.isArray(list)) return;
+        const m = new Map<string, CachedAbandonedOrder>();
+        list.forEach(item => {
+          if (item?.sessionId) m.set(item.sessionId, item);
+        });
+        abandonedByStoreMap.set(storeId, m);
+      });
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+function persistAbandonedOrders() {
+  try {
+    const out: Record<string, CachedAbandonedOrder[]> = {};
+    abandonedByStoreMap.forEach((m, storeId) => {
+      out[storeId] = Array.from(m.values())
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 300);
+    });
+    fs.writeFileSync(RUNTIME_ABANDONED_PATH, JSON.stringify(out, null, 2), 'utf8');
+  } catch {
+    // non-fatal
+  }
+}
+
+loadPersistedAbandonedOrders();
 
 function loadPersistedServerConfigs() {
   try {
@@ -2629,6 +2696,444 @@ export function createApiApp(): Express {
         message: `تعذر حذف الطلبات: ${err?.message || 'خطأ شبكة'}`
       });
     }
+  });
+
+  // 11. Abandoned Checkout Capture & Owner Recovery Endpoints
+  const mapDbAbandonedRow = (row: any): CachedAbandonedOrder => ({
+    id: String(row.id || ''),
+    sessionId: String(row.session_id || row.sessionId || ''),
+    storeId: String(row.store_id || row.storeId || ''),
+    landingPageId: row.landing_page_id || row.landingPageId || undefined,
+    landingPageTitle: row.landing_page_title || row.landingPageTitle || undefined,
+    offerId: row.offer_id || row.offerId || undefined,
+    bundleLabel: row.bundle_label || row.bundleLabel || undefined,
+    variantLabel: row.variant_label || row.variantLabel || undefined,
+    customerName: row.customer_name || row.customerName || undefined,
+    customerPhone: String(row.customer_phone || row.customerPhone || ''),
+    wilayaId: row.wilaya_id || row.wilayaId || undefined,
+    wilayaName: row.wilaya_name || row.wilayaName || undefined,
+    commune: row.commune || undefined,
+    deliveryType: (row.delivery_type || row.deliveryType) === 'stop' ? 'stop' : 'home',
+    subtotal: Number(row.subtotal) || 0,
+    shippingFee: Number(row.shipping_fee ?? row.shippingFee) || 0,
+    total: Number(row.total) || 0,
+    status: (['new', 'contacted', 'recovered', 'dismissed'].includes(String(row.status))
+      ? String(row.status)
+      : 'new') as CachedAbandonedOrder['status'],
+    recoveredOrderNumber: row.recovered_order_number || row.recoveredOrderNumber || undefined,
+    contactedAt: row.contacted_at || row.contactedAt || undefined,
+    notes: row.notes || undefined,
+    createdAt: String(row.created_at || row.createdAt || new Date().toISOString()),
+    updatedAt: String(row.updated_at || row.updatedAt || new Date().toISOString())
+  });
+
+  app.post(
+    '/api/abandoned-orders/capture',
+    express.text({ type: 'text/plain', limit: '64kb' }),
+    async (req: Request, res: Response) => {
+      let body: any = req.body;
+      if (typeof body === 'string') {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          body = {};
+        }
+      }
+      const storeId = String(body?.storeId || '').trim();
+      const sessionId = String(body?.sessionId || '').trim().slice(0, 80);
+      const action = String(body?.action || 'upsert').trim().toLowerCase();
+      const honeypot = String(body?.honeypot || '').trim();
+
+      if (!storeId || !sessionId || honeypot.length > 0) {
+        res.json({ ok: false, ignored: true });
+        return;
+      }
+
+      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
+        .trim()
+        .replace(/\/+$/, '');
+      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '').trim();
+      const srHeaders: Record<string, string> = serviceRoleKey
+        ? {
+            apikey: serviceRoleKey,
+            ...(serviceRoleKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceRoleKey}` } : {}),
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          }
+        : {};
+      const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
+      const nowIso = new Date().toISOString();
+
+      // Mark session recovered when customer finishes real order
+      if (action === 'recovered') {
+        const orderNumber = String(body?.orderNumber || '').replace(/^#/, '').trim().toUpperCase();
+        const storeMap = abandonedByStoreMap.get(storeId);
+        if (storeMap?.has(sessionId)) {
+          const prev = storeMap.get(sessionId)!;
+          storeMap.set(sessionId, {
+            ...prev,
+            status: 'recovered',
+            recoveredOrderNumber: orderNumber || prev.recoveredOrderNumber,
+            updatedAt: nowIso
+          });
+          persistAbandonedOrders();
+        }
+        if (supabaseUrl && serviceRoleKey && isStoreUuid) {
+          try {
+            await fetchJsonWithTimeout(
+              `${supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&session_id=eq.${encodeURIComponent(sessionId)}`,
+              {
+                method: 'PATCH',
+                headers: srHeaders,
+                body: JSON.stringify({
+                  status: 'recovered',
+                  recovered_order_number: orderNumber || null,
+                  updated_at: nowIso
+                })
+              },
+              5000
+            );
+          } catch {
+            // non-fatal
+          }
+        }
+        res.json({ ok: true, recovered: true });
+        return;
+      }
+
+      // Strict Algerian phone validation so fake numbers never pollute abandoned leads
+      const phoneCheck = validateAlgerianPhone(String(body?.customerPhone || body?.phone || ''));
+      if (!phoneCheck.valid) {
+        res.json({ ok: false, ignored: true, code: phoneCheck.code || 'invalid_phone' });
+        return;
+      }
+
+      const rawName = String(body?.customerName || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+      const landingPageId =
+        body?.landingPageId &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.landingPageId))
+          ? String(body.landingPageId)
+          : undefined;
+      const deliveryType: 'home' | 'stop' = body?.deliveryType === 'stop' ? 'stop' : 'home';
+      const subtotal = Math.max(0, Number(body?.subtotal) || 0);
+      const shippingFee = Math.max(0, Number(body?.shippingFee) || 0);
+      const total = Math.max(0, Number(body?.total) || subtotal + shippingFee);
+
+      let storeMap = abandonedByStoreMap.get(storeId);
+      if (!storeMap) {
+        storeMap = new Map<string, CachedAbandonedOrder>();
+        abandonedByStoreMap.set(storeId, storeMap);
+      }
+      const existing = storeMap.get(sessionId);
+      if (existing?.status === 'recovered') {
+        res.json({ ok: true, ignored: true, alreadyRecovered: true });
+        return;
+      }
+
+      const nextRecord: CachedAbandonedOrder = {
+        id: existing?.id || `ab_${crypto.randomBytes(6).toString('hex')}`,
+        sessionId,
+        storeId,
+        landingPageId: landingPageId || existing?.landingPageId,
+        landingPageTitle: String(body?.landingPageTitle || '').trim().slice(0, 180) || existing?.landingPageTitle,
+        offerId: String(body?.offerId || '').trim().slice(0, 80) || existing?.offerId,
+        bundleLabel: String(body?.bundleLabel || '').trim().slice(0, 200) || existing?.bundleLabel,
+        variantLabel: String(body?.variantLabel || '').trim().slice(0, 160) || existing?.variantLabel,
+        customerName: rawName || existing?.customerName,
+        customerPhone: phoneCheck.normalized,
+        wilayaId: String(body?.wilayaId || '').trim().slice(0, 10) || existing?.wilayaId,
+        wilayaName: String(body?.wilayaName || '').trim().slice(0, 100) || existing?.wilayaName,
+        commune: String(body?.commune || '').trim().slice(0, 120) || existing?.commune,
+        deliveryType,
+        subtotal,
+        shippingFee,
+        total,
+        status: existing?.status || 'new',
+        recoveredOrderNumber: existing?.recoveredOrderNumber,
+        contactedAt: existing?.contactedAt,
+        notes: existing?.notes,
+        createdAt: existing?.createdAt || nowIso,
+        updatedAt: nowIso
+      };
+
+      storeMap.set(sessionId, nextRecord);
+      persistAbandonedOrders();
+
+      // Persist to Supabase abandoned_orders table when available
+      if (supabaseUrl && serviceRoleKey && isStoreUuid) {
+        try {
+          const upsertRes = await fetchJsonWithTimeout(
+            `${supabaseUrl}/rest/v1/abandoned_orders?on_conflict=store_id,session_id`,
+            {
+              method: 'POST',
+              headers: {
+                ...srHeaders,
+                Prefer: 'resolution=merge-duplicates,return=representation'
+              },
+              body: JSON.stringify({
+                session_id: sessionId,
+                store_id: storeId,
+                landing_page_id: nextRecord.landingPageId || null,
+                landing_page_title: nextRecord.landingPageTitle || null,
+                offer_id: nextRecord.offerId || null,
+                bundle_label: nextRecord.bundleLabel || null,
+                variant_label: nextRecord.variantLabel || null,
+                customer_name: nextRecord.customerName || null,
+                customer_phone: nextRecord.customerPhone,
+                wilaya_id: nextRecord.wilayaId || null,
+                wilaya_name: nextRecord.wilayaName || null,
+                commune: nextRecord.commune || null,
+                delivery_type: nextRecord.deliveryType,
+                subtotal: nextRecord.subtotal,
+                shipping_fee: nextRecord.shippingFee,
+                total: nextRecord.total,
+                status: nextRecord.status,
+                updated_at: nowIso
+              })
+            },
+            6000
+          );
+          if (upsertRes.ok && Array.isArray(upsertRes.json) && upsertRes.json[0]?.id) {
+            nextRecord.id = String(upsertRes.json[0].id);
+            storeMap.set(sessionId, nextRecord);
+            persistAbandonedOrders();
+          }
+        } catch {
+          // fallback stays in server cache
+        }
+      }
+
+      res.json({ ok: true, id: nextRecord.id, sessionId });
+    }
+  );
+
+  app.get('/api/abandoned-orders/list', async (req: Request, res: Response) => {
+    const storeId = String(req.query?.storeId || '').trim();
+    if (!storeId) {
+      res.json({ ok: true, items: [], needsSqlMigration: false });
+      return;
+    }
+
+    const cachedItems = Array.from(abandonedByStoreMap.get(storeId)?.values() || []);
+    const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
+    const hasAuthHeader = Boolean(req.headers.authorization);
+
+    if (isStoreUuid && hasAuthHeader) {
+      const auth = await verifySupabaseStoreOwner(req, storeId);
+      if (auth.ok) {
+        try {
+          const dbRes = await fetchJsonWithTimeout(
+            `${auth.supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&order=updated_at.desc&limit=300`,
+            {
+              method: 'GET',
+              headers: {
+                apikey: auth.serviceRoleKey,
+                ...(auth.serviceRoleKey.startsWith('eyJ')
+                  ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+                  : {}),
+                Accept: 'application/json'
+              }
+            },
+            8000
+          );
+          if (dbRes.ok && Array.isArray(dbRes.json)) {
+            const dbItems = dbRes.json.map(mapDbAbandonedRow);
+            const merged = new Map<string, CachedAbandonedOrder>();
+            cachedItems.forEach(item => merged.set(item.sessionId, item));
+            dbItems.forEach(item => merged.set(item.sessionId, item));
+            const sorted = Array.from(merged.values()).sort(
+              (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            );
+            res.json({ ok: true, items: sorted, needsSqlMigration: false });
+            return;
+          }
+          const errText = `${dbRes.text || ''} ${JSON.stringify(dbRes.json || {})}`;
+          const missingTable = /42P01|does not exist|relation .*abandoned_orders|could not find the table/i.test(errText);
+          res.json({
+            ok: true,
+            items: cachedItems.sort(
+              (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            ),
+            needsSqlMigration: missingTable
+          });
+          return;
+        } catch {
+          // fall through to cached items
+        }
+      } else if (auth.code !== 'missing_service_key') {
+        res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+        return;
+      }
+    }
+
+    res.json({
+      ok: true,
+      items: cachedItems.sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      ),
+      needsSqlMigration: false
+    });
+  });
+
+  app.post('/api/abandoned-orders/update', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const id = String(req.body?.id || '').trim();
+    const sessionId = String(req.body?.sessionId || '').trim();
+    const status = String(req.body?.status || '').trim();
+    const recoveredOrderNumber = req.body?.recoveredOrderNumber !== undefined
+      ? String(req.body.recoveredOrderNumber || '').trim()
+      : undefined;
+    const contactedAt = req.body?.contactedAt !== undefined
+      ? String(req.body.contactedAt || '').trim()
+      : undefined;
+    const notes = req.body?.notes !== undefined ? String(req.body.notes || '').trim().slice(0, 400) : undefined;
+
+    if (!storeId || (!id && !sessionId)) {
+      res.status(400).json({ ok: false, message: 'معرّف الطلب المتروك غير صالح' });
+      return;
+    }
+
+    const allowed = new Set(['new', 'contacted', 'recovered', 'dismissed']);
+    const nextStatus = allowed.has(status) ? (status as CachedAbandonedOrder['status']) : undefined;
+    const nowIso = new Date().toISOString();
+
+    const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
+    if (isStoreUuid && req.headers.authorization) {
+      const auth = await verifySupabaseStoreOwner(req, storeId);
+      if (!auth.ok && auth.code !== 'missing_service_key') {
+        res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+        return;
+      }
+      if (auth.ok) {
+        const patch: Record<string, any> = { updated_at: nowIso };
+        if (nextStatus) patch.status = nextStatus;
+        if (recoveredOrderNumber !== undefined) patch.recovered_order_number = recoveredOrderNumber || null;
+        if (contactedAt !== undefined) patch.contacted_at = contactedAt || null;
+        if (notes !== undefined) patch.notes = notes || null;
+
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const filter = uuidRe.test(id)
+          ? `store_id=eq.${encodeURIComponent(storeId)}&id=eq.${encodeURIComponent(id)}`
+          : `store_id=eq.${encodeURIComponent(storeId)}&session_id=eq.${encodeURIComponent(sessionId)}`;
+        try {
+          await fetchJsonWithTimeout(
+            `${auth.supabaseUrl}/rest/v1/abandoned_orders?${filter}`,
+            {
+              method: 'PATCH',
+              headers: {
+                apikey: auth.serviceRoleKey,
+                ...(auth.serviceRoleKey.startsWith('eyJ')
+                  ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+                  : {}),
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+              },
+              body: JSON.stringify(patch)
+            },
+            6000
+          );
+        } catch {
+          // non-fatal
+        }
+      }
+    }
+
+    const storeMap = abandonedByStoreMap.get(storeId);
+    if (storeMap) {
+      for (const [k, item] of storeMap.entries()) {
+        if (item.id === id || (sessionId && item.sessionId === sessionId)) {
+          storeMap.set(k, {
+            ...item,
+            ...(nextStatus ? { status: nextStatus } : {}),
+            ...(recoveredOrderNumber !== undefined ? { recoveredOrderNumber: recoveredOrderNumber || undefined } : {}),
+            ...(contactedAt !== undefined ? { contactedAt: contactedAt || undefined } : {}),
+            ...(notes !== undefined ? { notes: notes || undefined } : {}),
+            updatedAt: nowIso
+          });
+        }
+      }
+      persistAbandonedOrders();
+    }
+
+    res.json({ ok: true });
+  });
+
+  app.post('/api/abandoned-orders/delete', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const ids: string[] = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const sessionIds: string[] = Array.isArray(req.body?.sessionIds)
+      ? req.body.sessionIds.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+      : [];
+
+    if (!storeId || (ids.length === 0 && sessionIds.length === 0)) {
+      res.status(400).json({ ok: false, message: 'يرجى تحديد عنصر واحد على الأقل للحذف' });
+      return;
+    }
+
+    const isStoreUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeId);
+    if (isStoreUuid && req.headers.authorization) {
+      const auth = await verifySupabaseStoreOwner(req, storeId);
+      if (!auth.ok && auth.code !== 'missing_service_key') {
+        res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+        return;
+      }
+      if (auth.ok) {
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const uuidIds = ids.filter(x => uuidRe.test(x));
+        try {
+          if (uuidIds.length > 0) {
+            await fetchJsonWithTimeout(
+              `${auth.supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&id=in.(${uuidIds.join(',')})`,
+              {
+                method: 'DELETE',
+                headers: {
+                  apikey: auth.serviceRoleKey,
+                  ...(auth.serviceRoleKey.startsWith('eyJ')
+                    ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+                    : {}),
+                  Accept: 'application/json'
+                }
+              },
+              8000
+            );
+          } else if (sessionIds.length > 0) {
+            const encodedSessions = sessionIds.map(s => `"${s.replace(/"/g, '')}"`).join(',');
+            await fetchJsonWithTimeout(
+              `${auth.supabaseUrl}/rest/v1/abandoned_orders?store_id=eq.${encodeURIComponent(storeId)}&session_id=in.(${encodeURIComponent(encodedSessions)})`,
+              {
+                method: 'DELETE',
+                headers: {
+                  apikey: auth.serviceRoleKey,
+                  ...(auth.serviceRoleKey.startsWith('eyJ')
+                    ? { Authorization: `Bearer ${auth.serviceRoleKey}` }
+                    : {}),
+                  Accept: 'application/json'
+                }
+              },
+              8000
+            );
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+    }
+
+    const storeMap = abandonedByStoreMap.get(storeId);
+    if (storeMap) {
+      const idSet = new Set(ids);
+      const sessSet = new Set(sessionIds);
+      for (const [k, item] of storeMap.entries()) {
+        if (idSet.has(item.id) || sessSet.has(item.sessionId)) {
+          storeMap.delete(k);
+        }
+      }
+      persistAbandonedOrders();
+    }
+
+    res.json({ ok: true });
   });
 
   return app;

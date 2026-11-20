@@ -1,4 +1,12 @@
-import { CourierProvider, DeliveryType, Order, OrderStatus, StoreApiConfig } from '../types';
+import {
+  AbandonedOrder,
+  AbandonedOrderStatus,
+  CourierProvider,
+  DeliveryType,
+  Order,
+  OrderStatus,
+  StoreApiConfig
+} from '../types';
 import { formatPlainDZD, getWilayaById } from '../data/wilayas';
 import { ECOTRACK_WILAYA_HUB, resolveOfficialEcotrackCommune } from '../data/ecotrackCommunes';
 import {
@@ -879,6 +887,278 @@ export const DEFAULT_WHATSAPP_SHIPPING_TEMPLATE =
   `المبلغ المطلوب عند الاستلام: {total}\n` +
   `شكراً على ثقتك بنا.`;
 
+export const ABANDONED_STAGE_LABELS: Record<AbandonedOrderStatus, string> = {
+  new: 'جديد',
+  contacted: 'تم التواصل',
+  recovered: 'تم الاسترجاع',
+  dismissed: 'مستبعد'
+};
+
+export const DEFAULT_WHATSAPP_ABANDONED_TEMPLATE =
+  `السلام عليكم {customerName}،\n` +
+  `لاحظنا أنك بدأت بتسجيل طلبك من متجر {storeName} ولم تكمل التأكيد.\n` +
+  `المنتج: {product}\n` +
+  `العرض: {offer}\n` +
+  `المبلغ الإجمالي: {total} (الدفع عند الاستلام)\n` +
+  `إذا واجهتك أي مشكلة أو أردت منا تأكيد الطلب لك مباشرة، أجبنا هنا فقط وسنجهز لك الطرد بكل سرور.`;
+
+export function buildAbandonedReminderWhatsAppUrl(
+  customerPhone: string | undefined,
+  storeName: string,
+  abandoned: {
+    customerName?: string;
+    landingPageTitle?: string;
+    bundleLabel?: string;
+    variantLabel?: string;
+    wilayaName?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+    total?: number;
+  },
+  customTemplate?: string
+): string {
+  const num = normalizeWhatsAppNumber(customerPhone);
+  if (!num) return '';
+
+  const cleanName = String(abandoned.customerName || '').trim();
+  const productText = String(abandoned.landingPageTitle || '').trim();
+  const offerText = [abandoned.bundleLabel, abandoned.variantLabel]
+    .map(v => String(v || '').trim())
+    .filter(Boolean)
+    .join(' • ');
+  const totalText = abandoned.total && abandoned.total > 0 ? formatPlainDZD(abandoned.total) : '';
+  const wilayaText = [abandoned.wilayaName, abandoned.commune]
+    .map(v => String(v || '').trim())
+    .filter(Boolean)
+    .join(' - ');
+
+  let text = String(customTemplate?.trim() || DEFAULT_WHATSAPP_ABANDONED_TEMPLATE);
+  const vars: Record<string, string> = {
+    customerName: cleanName,
+    storeName: storeName || 'المتجر',
+    product: productText || offerText || 'المنتج المختار',
+    offer: offerText,
+    bundle: offerText || productText,
+    total: totalText,
+    wilaya: wilayaText,
+    commune: String(abandoned.commune || '').trim()
+  };
+
+  Object.entries(vars).forEach(([k, v]) => {
+    text = text.split(`{${k}}`).join(v);
+  });
+
+  // Gracefully tidy greeting & empty lines when optional fields (name/offer/total) are blank
+  text = text
+    .replace(/السلام عليكم\s+،/g, 'السلام عليكم،')
+    .replace(/مرحباً\s+،/g, 'مرحباً،')
+    .split('\n')
+    .filter(line => {
+      const t = line.trim();
+      if (!offerText && t.startsWith('العرض:') && t.replace('العرض:', '').trim() === '') return false;
+      if (!totalText && t.startsWith('المبلغ الإجمالي:') && t.includes('(الدفع عند الاستلام)') && t.replace('المبلغ الإجمالي:', '').replace('(الدفع عند الاستلام)', '').trim() === '') return false;
+      return true;
+    })
+    .join('\n')
+    .trim();
+
+  return `https://wa.me/${num}?text=${encodeURIComponent(text)}`;
+}
+
+export interface SheetAbandonedRow {
+  sessionId: string;
+  customerName: string;
+  customerPhone: string;
+  wilayaName: string;
+  commune: string;
+  deliveryType: DeliveryType;
+  productLabel: string;
+  total: number;
+  status: AbandonedOrderStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export function mapSheetAbandonedStatus(raw?: string): AbandonedOrderStatus {
+  const t = String(raw || '').trim().toLowerCase();
+  if (t.includes('استرج') || t.includes('مؤكد') || t.includes('recover')) return 'recovered';
+  if (t.includes('تواصل') || t.includes('contact')) return 'contacted';
+  if (t.includes('مستبع') || t.includes('ملغ') || t.includes('dismiss')) return 'dismissed';
+  return 'new';
+}
+
+export async function sendAbandonedOrderToGoogleSheet(
+  webhookUrl: string | undefined,
+  payload: {
+    sessionId: string;
+    fullName?: string;
+    phone: string;
+    wilaya?: string;
+    commune?: string;
+    deliveryType: DeliveryType;
+    productDetails: string;
+    totalPrice: number;
+    statusLabel?: string;
+  }
+): Promise<void> {
+  const cleanUrl = webhookUrl?.trim();
+  const cleanSession = String(payload.sessionId || '').trim();
+  const phoneCheck = validateAlgerianPhone(payload.phone);
+  if (!cleanUrl || !cleanSession || !phoneCheck.valid) return;
+
+  try {
+    // Safety guard: ONLY send abandoned actions to Apps Script v4+ so older scripts
+    // never fall through and append an abandoned lead into the main Orders sheet!
+    const { scriptVersion } = await ensureSheetScriptCapabilities(cleanUrl);
+    if (scriptVersion < 4) return;
+
+    const formData = new URLSearchParams();
+    formData.append('action', 'abandoned_upsert');
+    formData.append('sessionId', cleanSession);
+    formData.append('fullName', String(payload.fullName || '').trim());
+    formData.append('phone', phoneCheck.normalized);
+    formData.append('wilaya', String(payload.wilaya || '').trim());
+    formData.append('commune', String(payload.commune || '').trim());
+    formData.append(
+      'shippingType',
+      payload.deliveryType === 'stop' ? 'مكتب الشحن Stop Desk' : 'توصيل للمنزل'
+    );
+    formData.append('order', String(payload.productDetails || '').trim());
+    formData.append('totalPrice', String(Math.round(payload.totalPrice || 0)));
+    formData.append('status', payload.statusLabel || 'جديد');
+
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: formData
+    });
+  } catch (err) {
+    console.warn('Google Sheet abandoned upsert failed (non-blocking):', err);
+  }
+}
+
+export async function updateAbandonedStatusInGoogleSheet(
+  webhookUrl: string | undefined,
+  sessionId: string,
+  statusLabel: string
+): Promise<void> {
+  const cleanUrl = webhookUrl?.trim();
+  const cleanSession = String(sessionId || '').trim();
+  if (!cleanUrl || !cleanSession) return;
+
+  try {
+    const { scriptVersion } = await ensureSheetScriptCapabilities(cleanUrl);
+    if (scriptVersion < 4) return;
+
+    const formData = new URLSearchParams();
+    formData.append('action', 'abandoned_status');
+    formData.append('sessionId', cleanSession);
+    formData.append('status', statusLabel);
+
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: formData
+    });
+  } catch (err) {
+    console.warn('Google Sheet abandoned status update failed (non-blocking):', err);
+  }
+}
+
+export async function deleteAbandonedOrderInGoogleSheet(
+  webhookUrl: string | undefined,
+  sessionId: string
+): Promise<void> {
+  const cleanUrl = webhookUrl?.trim();
+  const cleanSession = String(sessionId || '').trim();
+  if (!cleanUrl || !cleanSession) return;
+
+  try {
+    const { scriptVersion } = await ensureSheetScriptCapabilities(cleanUrl);
+    if (scriptVersion < 4) return;
+
+    const formData = new URLSearchParams();
+    formData.append('action', 'abandoned_delete');
+    formData.append('sessionId', cleanSession);
+
+    await fetch(cleanUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: formData
+    });
+  } catch (err) {
+    console.warn('Google Sheet abandoned delete failed (non-blocking):', err);
+  }
+}
+
+export async function fetchAbandonedOrdersFromGoogleSheet(
+  webhookUrl: string | undefined
+): Promise<{ ok: boolean; rows: SheetAbandonedRow[]; scriptVersion: number; error?: string }> {
+  const cleanUrl = webhookUrl?.trim();
+  if (!cleanUrl || typeof fetch === 'undefined') {
+    return { ok: false, rows: [], scriptVersion: 0, error: 'رابط Google Sheet غير محدد' };
+  }
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 16000);
+    const res = await fetch('/api/integrations/google-sheet-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: cleanUrl, action: 'list_abandoned' }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      return { ok: false, rows: [], scriptVersion: 0, error: `تعذر الاتصال بخادم المزامنة (HTTP ${res.status})` };
+    }
+    const payload = await res.json();
+    const data = payload?.data;
+    const ver = Number(data?.scriptVersion || 0);
+    if (Number.isFinite(ver) && ver > 0) {
+      sheetScriptVersionByUrl.set(cleanUrl, ver);
+    }
+    if (!payload?.ok || !data || !Array.isArray(data.abandoned)) {
+      return {
+        ok: false,
+        rows: [],
+        scriptVersion: Number.isFinite(ver) ? ver : 0,
+        error: 'يلزم تحديث كود Google Sheet إلى النسخة الجديدة (الإصدار 4) لتفعيل ورقة الطلبات المتروكة'
+      };
+    }
+
+    const rows: SheetAbandonedRow[] = [];
+    data.abandoned.forEach((r: any, idx: number) => {
+      if (!r || typeof r !== 'object') return;
+      const phoneCheck = validateAlgerianPhone(String(r.phone || r.customerPhone || ''));
+      if (!phoneCheck.valid) return;
+      const rawShip = String(r.shippingType || r.deliveryType || '').toLowerCase();
+      rows.push({
+        sessionId: String(r.sessionId || '').trim() || `GS-AB-${idx + 2}`,
+        customerName: String(r.fullName || r.customerName || '').trim(),
+        customerPhone: phoneCheck.normalized,
+        wilayaName: String(r.wilaya || r.wilayaName || '').trim(),
+        commune: String(r.commune || '').trim(),
+        deliveryType: rawShip.includes('stop') || rawShip.includes('مكتب') ? 'stop' : 'home',
+        productLabel: String(r.orderName || r.product || r.order || '').trim(),
+        total: Math.max(0, parseFloat(String(r.total || '0').replace(/[^\d.]/g, '')) || 0),
+        status: mapSheetAbandonedStatus(r.status),
+        createdAt: r.createdAt ? String(r.createdAt).trim() : undefined,
+        updatedAt: r.updatedAt ? String(r.updatedAt).trim() : undefined
+      });
+    });
+
+    return { ok: true, rows, scriptVersion: Number.isFinite(ver) ? ver : 4 };
+  } catch (err: any) {
+    return {
+      ok: false,
+      rows: [],
+      scriptVersion: 0,
+      error: err?.name === 'AbortError' ? 'انتهت مهلة الاتصال بـ Google Sheet' : 'تعذر الاتصال بـ Google Sheet'
+    };
+  }
+}
+
 export function renderWhatsAppTemplate(
   template: string,
   vars: Record<string, string | number | undefined>
@@ -1226,7 +1506,8 @@ export function triggerAutoOrderWhatsApp(params: {
   }).catch(() => {});
 }
 
-export const GOOGLE_APPS_SCRIPT_TEMPLATE = `var SCRIPT_VERSION = 3;
+export const GOOGLE_APPS_SCRIPT_TEMPLATE = `var SCRIPT_VERSION = 4;
+var ABANDONED_SHEET_NAME = "الطلبات المتروكة";
 
 function normalizeDzPhone(raw) {
   var digits = String(raw || "").replace(/[^0-9]/g, "");
@@ -1247,12 +1528,141 @@ function isValidDzPhone(raw) {
   return true;
 }
 
+function getOrCreateAbandonedSheet(ss) {
+  var abSheet = ss.getSheetByName(ABANDONED_SHEET_NAME);
+  if (!abSheet) {
+    abSheet = ss.insertSheet(ABANDONED_SHEET_NAME);
+  }
+  if (abSheet.getLastRow() === 0) {
+    abSheet.appendRow([
+      "التاريخ", "معرّف الجلسة", "الاسم الكامل", "الهاتف", "الولاية", "البلدية",
+      "طريقة التوصيل", "المنتج / العرض", "المبلغ الإجمالي", "الحالة",
+      "تذكير عبر واتساب", "آخر تحديث"
+    ]);
+  }
+  return abSheet;
+}
+
+function generateAbandonedWhatsAppFormula(phone, fullName, productText, totalPrice) {
+  var formatted = normalizeDzPhone(phone);
+  if (formatted.indexOf("0") === 0) formatted = "213" + formatted.substring(1);
+  var greeting = fullName ? ("السلام عليكم " + fullName + "،") : "السلام عليكم،";
+  var msg = greeting + "\\n" +
+            "لاحظنا أنك بدأت بتسجيل طلبك من متجر BrightDZ ولم تكمل التأكيد.\\n" +
+            (productText ? ("المنتج: " + productText + "\\n") : "") +
+            (totalPrice > 0 ? ("المبلغ الإجمالي: " + totalPrice + " دج (الدفع عند الاستلام)\\n") : "") +
+            "إذا واجهتك أي مشكلة أو أردت منا تأكيد الطلب لك مباشرة، أجبنا هنا فقط وسنجهز لك الطرد بكل سرور.";
+  var url = "https://wa.me/" + formatted + "?text=" + encodeURIComponent(msg);
+  return '=HYPERLINK("' + url + '", "💬 تذكير عبر واتساب")';
+}
+
 function doPost(e) {
   if (!e || !e.parameter) {
     return ContentService.createTextOutput(JSON.stringify({"result": "error", "message": "No parameters provided"})).setMimeType(ContentService.MimeType.JSON);
   }
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var action = String(e.parameter.action || "create").trim().toLowerCase();
+
+  // --- مسارات ورقة الطلبات المتروكة المنفصلة ---
+  if (action === "abandoned_upsert") {
+    var sessionId = String(e.parameter.sessionId || "").trim();
+    var abPhone = normalizeDzPhone(e.parameter.phone || "");
+    if (!sessionId || !isValidDzPhone(abPhone)) {
+      return ContentService.createTextOutput(JSON.stringify({"result": "rejected_invalid"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var abSheet = getOrCreateAbandonedSheet(ss);
+    var abFullName = String(e.parameter.fullName || "").trim();
+    var abWilaya = String(e.parameter.wilaya || "").trim();
+    var abCommune = String(e.parameter.commune || "").trim();
+    var abShip = String(e.parameter.shippingType || "").trim();
+    var abOrder = String(e.parameter.order || "").trim();
+    var abTotal = parseFloat(e.parameter.totalPrice) || 0;
+    var abStatus = String(e.parameter.status || "جديد").trim();
+    var nowIso = new Date().toISOString();
+    var waFormula = generateAbandonedWhatsAppFormula(abPhone, abFullName, abOrder, abTotal);
+
+    var abRows = abSheet.getDataRange().getValues();
+    for (var a = 1; a < abRows.length; a++) {
+      if (String(abRows[a][1] || "").trim() === sessionId) {
+        var rIdx = a + 1;
+        if (abFullName) abSheet.getRange(rIdx, 3).setValue(abFullName);
+        abSheet.getRange(rIdx, 4).setValue(abPhone);
+        if (abWilaya) abSheet.getRange(rIdx, 5).setValue(abWilaya);
+        if (abCommune) abSheet.getRange(rIdx, 6).setValue(abCommune);
+        if (abShip) abSheet.getRange(rIdx, 7).setValue(abShip);
+        if (abOrder) abSheet.getRange(rIdx, 8).setValue(abOrder);
+        if (abTotal > 0) abSheet.getRange(rIdx, 9).setValue(abTotal);
+        abSheet.getRange(rIdx, 11).setValue(waFormula);
+        abSheet.getRange(rIdx, 12).setValue(nowIso);
+        return ContentService.createTextOutput(JSON.stringify({"result": "abandoned_updated"}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    abSheet.appendRow([
+      new Date(),
+      sessionId,
+      abFullName,
+      abPhone,
+      abWilaya,
+      abCommune,
+      abShip,
+      abOrder,
+      abTotal,
+      abStatus,
+      waFormula,
+      nowIso
+    ]);
+    return ContentService.createTextOutput(JSON.stringify({"result": "abandoned_created"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "abandoned_status") {
+    var stSessionId = String(e.parameter.sessionId || "").trim();
+    var stVal = String(e.parameter.status || "").trim();
+    if (!stSessionId) {
+      return ContentService.createTextOutput(JSON.stringify({"result": "invalid_session"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var stSheet = ss.getSheetByName(ABANDONED_SHEET_NAME);
+    if (stSheet) {
+      var stRows = stSheet.getDataRange().getValues();
+      for (var s = 1; s < stRows.length; s++) {
+        if (String(stRows[s][1] || "").trim() === stSessionId) {
+          if (stVal) stSheet.getRange(s + 1, 10).setValue(stVal);
+          stSheet.getRange(s + 1, 12).setValue(new Date().toISOString());
+          return ContentService.createTextOutput(JSON.stringify({"result": "abandoned_status_updated"}))
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({"result": "not_found"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === "abandoned_delete") {
+    var delSessionId = String(e.parameter.sessionId || "").trim();
+    if (!delSessionId) {
+      return ContentService.createTextOutput(JSON.stringify({"result": "invalid_session"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var rmSheet = ss.getSheetByName(ABANDONED_SHEET_NAME);
+    var removedAny = false;
+    if (rmSheet) {
+      var rmRows = rmSheet.getDataRange().getValues();
+      for (var m = rmRows.length - 1; m >= 1; m--) {
+        if (String(rmRows[m][1] || "").trim() === delSessionId) {
+          rmSheet.deleteRow(m + 1);
+          removedAny = true;
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({"result": removedAny ? "abandoned_deleted" : "not_found"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   var sheet = ss.getSheetByName("Orders") || ss.getActiveSheet();
 
   if (sheet.getLastRow() === 0) {
@@ -1264,7 +1674,6 @@ function doPost(e) {
     ]);
   }
 
-  var action = String(e.parameter.action || "create").trim().toLowerCase();
   var orderId = String(e.parameter.orderId || "").replace(/^#/, "").trim();
 
   // 1. حذف صف عند حذف الطلب من لوحة المتجر
@@ -1507,6 +1916,41 @@ function doGet(e) {
   var callback = e.parameter.callback;
   var action = String(e.parameter.action || "").trim().toLowerCase();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // إرجاع قائمة الطلبات المتروكة من الورقة المنفصلة
+  if (action === "list_abandoned") {
+    var abSheet = ss.getSheetByName(ABANDONED_SHEET_NAME);
+    var abList = [];
+    if (abSheet && abSheet.getLastRow() > 1) {
+      var abData = abSheet.getDataRange().getValues();
+      for (var q = 1; q < abData.length; q++) {
+        var sId = String(abData[q][1] || "").trim();
+        var sPhone = normalizeDzPhone(abData[q][3] || "");
+        if (!isValidDzPhone(sPhone)) continue;
+        abList.push({
+          createdAt: abData[q][0] instanceof Date ? abData[q][0].toISOString() : String(abData[q][0] || ""),
+          sessionId: sId || ("GS-AB-" + (q + 1)),
+          fullName: String(abData[q][2] || "").trim(),
+          phone: sPhone,
+          wilaya: String(abData[q][4] || "").trim(),
+          commune: String(abData[q][5] || "").trim(),
+          shippingType: String(abData[q][6] || "").trim(),
+          orderName: String(abData[q][7] || "").trim(),
+          total: parseFloat(abData[q][8]) || 0,
+          status: String(abData[q][9] || "جديد").trim(),
+          updatedAt: abData[q][11] ? String(abData[q][11]) : ""
+        });
+      }
+    }
+    var abOut = JSON.stringify({ status: "success", scriptVersion: SCRIPT_VERSION, abandoned: abList });
+    if (callback) {
+      return ContentService.createTextOutput(callback + "(" + abOut + ");")
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return ContentService.createTextOutput(abOut)
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
   var sheet = ss.getSheetByName("Orders") || ss.getActiveSheet();
   var data = sheet.getDataRange().getValues();
 

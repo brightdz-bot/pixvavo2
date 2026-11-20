@@ -45,6 +45,34 @@ export interface Order {
   updatedAt: string;
 }
 
+export type AbandonedOrderStatus = 'new' | 'contacted' | 'recovered' | 'dismissed';
+
+export interface AbandonedOrder {
+  id: string;
+  sessionId: string;
+  storeId: string;
+  landingPageId?: string;
+  landingPageTitle?: string;
+  offerId?: string;
+  bundleLabel?: string;
+  variantLabel?: string;
+  customerName?: string;
+  customerPhone: string;
+  wilayaId?: string;
+  wilayaName?: string;
+  commune?: string;
+  deliveryType: DeliveryType;
+  subtotal: number;
+  shippingFee: number;
+  total: number;
+  status: AbandonedOrderStatus;
+  recoveredOrderNumber?: string;
+  contactedAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProductVariant {
   id: string;
   name: string; // e.g. المقاس أو اللون
@@ -245,6 +273,7 @@ export interface StoreApiConfig {
   promoCoupons?: PromoCoupon[];
   whatsappConfirmTemplate?: string;
   whatsappShippingTemplate?: string;
+  whatsappAbandonedTemplate?: string;
   faviconUrl?: string;
   diagnosticLogs: ApiDiagnosticLog[];
   updatedAt?: string;

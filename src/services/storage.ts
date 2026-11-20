@@ -7,10 +7,20 @@ import {
   LandingPage,
   DeliveryType,
   StoreApiConfig,
-  ApiDiagnosticLog
+  ApiDiagnosticLog,
+  AbandonedOrder,
+  AbandonedOrderStatus
 } from '../types';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { normalizePhoneCanonical, SheetOrderRow } from './integrations';
+import {
+  normalizePhoneCanonical,
+  SheetOrderRow,
+  SheetAbandonedRow,
+  ABANDONED_STAGE_LABELS,
+  sendAbandonedOrderToGoogleSheet,
+  updateAbandonedStatusInGoogleSheet,
+  deleteAbandonedOrderInGoogleSheet
+} from './integrations';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
 import {
@@ -32,6 +42,148 @@ const USERS_KEY = 'brightdz_users';
 const API_CONFIGS_KEY = 'brightdz_api_configs';
 const ORDER_COURIER_META_KEY = 'brightdz_order_courier_meta';
 const DELETED_SHEET_ORDERS_KEY = 'brightdz_deleted_sheet_orders';
+const ABANDONED_ORDERS_KEY = 'brightdz_abandoned_orders';
+
+export const ABANDONED_SQL_MIGRATION_SNIPPET = `BEGIN;
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE SET search_path = '' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin');
+$$;
+CREATE OR REPLACE FUNCTION public.owns_store(p_store_id UUID)
+RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE SET search_path = '' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.stores WHERE id = p_store_id AND owner_id = auth.uid());
+$$;
+
+CREATE TABLE IF NOT EXISTS public.abandoned_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id TEXT NOT NULL,
+  store_id UUID NOT NULL,
+  landing_page_id UUID,
+  landing_page_title TEXT,
+  offer_id TEXT,
+  bundle_label TEXT,
+  variant_label TEXT,
+  customer_name TEXT,
+  customer_phone TEXT NOT NULL,
+  wilaya_id TEXT,
+  wilaya_name TEXT,
+  commune TEXT,
+  delivery_type TEXT NOT NULL DEFAULT 'home',
+  subtotal NUMERIC NOT NULL DEFAULT 0,
+  shipping_fee NUMERIC NOT NULL DEFAULT 0,
+  total NUMERIC NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'new',
+  recovered_order_number TEXT,
+  contacted_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT abandoned_orders_store_session_unique UNIQUE (store_id, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_abandoned_orders_store_updated
+  ON public.abandoned_orders (store_id, updated_at DESC);
+
+ALTER TABLE public.abandoned_orders ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS abandoned_orders_owner_select ON public.abandoned_orders;
+CREATE POLICY abandoned_orders_owner_select ON public.abandoned_orders
+  FOR SELECT TO authenticated
+  USING (public.owns_store(public.abandoned_orders.store_id) OR public.is_admin());
+
+DROP POLICY IF EXISTS abandoned_orders_owner_update ON public.abandoned_orders;
+CREATE POLICY abandoned_orders_owner_update ON public.abandoned_orders
+  FOR UPDATE TO authenticated
+  USING (public.owns_store(public.abandoned_orders.store_id) OR public.is_admin())
+  WITH CHECK (public.owns_store(public.abandoned_orders.store_id) OR public.is_admin());
+
+DROP POLICY IF EXISTS abandoned_orders_owner_delete ON public.abandoned_orders;
+CREATE POLICY abandoned_orders_owner_delete ON public.abandoned_orders
+  FOR DELETE TO authenticated
+  USING (public.owns_store(public.abandoned_orders.store_id) OR public.is_admin());
+
+GRANT SELECT, UPDATE, DELETE ON TABLE public.abandoned_orders TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.upsert_abandoned_order(
+  p_store_id UUID, p_session_id TEXT, p_customer_phone TEXT,
+  p_customer_name TEXT DEFAULT NULL, p_landing_page_id UUID DEFAULT NULL,
+  p_landing_page_title TEXT DEFAULT NULL, p_offer_id TEXT DEFAULT NULL,
+  p_bundle_label TEXT DEFAULT NULL, p_variant_label TEXT DEFAULT NULL,
+  p_wilaya_id TEXT DEFAULT NULL, p_wilaya_name TEXT DEFAULT NULL,
+  p_commune TEXT DEFAULT NULL, p_delivery_type TEXT DEFAULT 'home',
+  p_subtotal NUMERIC DEFAULT 0, p_shipping_fee NUMERIC DEFAULT 0, p_total NUMERIC DEFAULT 0
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_phone TEXT; v_session TEXT; v_id UUID;
+BEGIN
+  v_session := left(trim(COALESCE(p_session_id, '')), 80);
+  v_phone := regexp_replace(COALESCE(p_customer_phone, ''), '[^0-9]', '', 'g');
+  IF left(v_phone, 5) = '00213' AND length(v_phone) >= 13 THEN v_phone := '0' || substr(v_phone, 6);
+  ELSIF left(v_phone, 3) = '213' AND length(v_phone) >= 11 THEN v_phone := '0' || substr(v_phone, 4);
+  ELSIF length(v_phone) = 9 AND left(v_phone, 1) IN ('5','6','7') THEN v_phone := '0' || v_phone;
+  END IF;
+  IF p_store_id IS NULL OR v_session = '' OR v_phone !~ '^0[567][0-9]{8}$' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'invalid_payload');
+  END IF;
+  INSERT INTO public.abandoned_orders (
+    session_id, store_id, landing_page_id, landing_page_title, offer_id,
+    bundle_label, variant_label, customer_name, customer_phone,
+    wilaya_id, wilaya_name, commune, delivery_type,
+    subtotal, shipping_fee, total, status, created_at, updated_at
+  ) VALUES (
+    v_session, p_store_id, p_landing_page_id,
+    NULLIF(left(trim(COALESCE(p_landing_page_title, '')), 180), ''),
+    NULLIF(left(trim(COALESCE(p_offer_id, '')), 80), ''),
+    NULLIF(left(trim(COALESCE(p_bundle_label, '')), 200), ''),
+    NULLIF(left(trim(COALESCE(p_variant_label, '')), 160), ''),
+    NULLIF(left(trim(COALESCE(p_customer_name, '')), 100), ''),
+    v_phone,
+    NULLIF(left(trim(COALESCE(p_wilaya_id, '')), 10), ''),
+    NULLIF(left(trim(COALESCE(p_wilaya_name, '')), 100), ''),
+    NULLIF(left(trim(COALESCE(p_commune, '')), 120), ''),
+    CASE WHEN p_delivery_type = 'stop' THEN 'stop' ELSE 'home' END,
+    GREATEST(0, COALESCE(p_subtotal, 0)),
+    GREATEST(0, COALESCE(p_shipping_fee, 0)),
+    GREATEST(0, COALESCE(p_total, 0)),
+    'new', now(), now()
+  )
+  ON CONFLICT (store_id, session_id) DO UPDATE SET
+    landing_page_id = COALESCE(EXCLUDED.landing_page_id, public.abandoned_orders.landing_page_id),
+    landing_page_title = COALESCE(EXCLUDED.landing_page_title, public.abandoned_orders.landing_page_title),
+    offer_id = COALESCE(EXCLUDED.offer_id, public.abandoned_orders.offer_id),
+    bundle_label = COALESCE(EXCLUDED.bundle_label, public.abandoned_orders.bundle_label),
+    variant_label = COALESCE(EXCLUDED.variant_label, public.abandoned_orders.variant_label),
+    customer_name = COALESCE(EXCLUDED.customer_name, public.abandoned_orders.customer_name),
+    customer_phone = EXCLUDED.customer_phone,
+    wilaya_id = COALESCE(EXCLUDED.wilaya_id, public.abandoned_orders.wilaya_id),
+    wilaya_name = COALESCE(EXCLUDED.wilaya_name, public.abandoned_orders.wilaya_name),
+    commune = COALESCE(EXCLUDED.commune, public.abandoned_orders.commune),
+    delivery_type = EXCLUDED.delivery_type,
+    subtotal = EXCLUDED.subtotal,
+    shipping_fee = EXCLUDED.shipping_fee,
+    total = EXCLUDED.total,
+    updated_at = now()
+  WHERE public.abandoned_orders.status <> 'recovered'
+  RETURNING id INTO v_id;
+  RETURN jsonb_build_object('ok', true, 'id', v_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.complete_abandoned_order(
+  p_store_id UUID, p_session_id TEXT, p_order_number TEXT DEFAULT NULL
+) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  UPDATE public.abandoned_orders
+  SET status = 'recovered',
+      recovered_order_number = COALESCE(NULLIF(trim(COALESCE(p_order_number, '')), ''), recovered_order_number),
+      updated_at = now()
+  WHERE store_id = p_store_id AND session_id = trim(COALESCE(p_session_id, ''));
+  RETURN true;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.upsert_abandoned_order(UUID, TEXT, TEXT, TEXT, UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, NUMERIC, NUMERIC, NUMERIC) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_abandoned_order(UUID, TEXT, TEXT) TO anon, authenticated;
+COMMIT;`;
 
 export const ORDERS_SQL_MIGRATION_SNIPPET = `BEGIN;
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -2004,6 +2156,7 @@ class StorageService {
       promoCoupons: [],
       whatsappConfirmTemplate: '',
       whatsappShippingTemplate: '',
+      whatsappAbandonedTemplate: '',
       faviconUrl: '',
       diagnosticLogs: []
     };
@@ -2160,6 +2313,653 @@ class StorageService {
     };
     await this.saveStoreApiConfig(nextConfig);
     return nextConfig;
+  }
+
+  // --- ABANDONED ORDERS CAPTURE & RECOVERY ---
+  private getLocalAbandonedOrders(): AbandonedOrder[] {
+    try {
+      const raw = localStorage.getItem(ABANDONED_ORDERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private saveLocalAbandonedOrders(list: AbandonedOrder[]): void {
+    try {
+      localStorage.setItem(ABANDONED_ORDERS_KEY, JSON.stringify(list.slice(0, 400)));
+    } catch {
+      // ignore localStorage errors
+    }
+  }
+
+  private mapSupabaseAbandonedRow(r: any): AbandonedOrder {
+    const validStatus: AbandonedOrderStatus =
+      r.status === 'contacted' || r.status === 'recovered' || r.status === 'dismissed'
+        ? r.status
+        : 'new';
+    return {
+      id: String(r.id || r.session_id || ''),
+      sessionId: String(r.session_id || r.id || ''),
+      storeId: String(r.store_id || ''),
+      landingPageId: r.landing_page_id ? String(r.landing_page_id) : undefined,
+      landingPageTitle: r.landing_page_title ? String(r.landing_page_title) : undefined,
+      offerId: r.offer_id ? String(r.offer_id) : undefined,
+      bundleLabel: r.bundle_label ? String(r.bundle_label) : undefined,
+      variantLabel: r.variant_label ? String(r.variant_label) : undefined,
+      customerName: r.customer_name ? String(r.customer_name) : undefined,
+      customerPhone: String(r.customer_phone || ''),
+      wilayaId: r.wilaya_id ? String(r.wilaya_id) : undefined,
+      wilayaName: r.wilaya_name ? String(r.wilaya_name) : undefined,
+      commune: r.commune ? String(r.commune) : undefined,
+      deliveryType: r.delivery_type === 'stop' ? 'stop' : 'home',
+      subtotal: Number(r.subtotal) || 0,
+      shippingFee: Number(r.shipping_fee) || 0,
+      total: Number(r.total) || 0,
+      status: validStatus,
+      recoveredOrderNumber: r.recovered_order_number ? String(r.recovered_order_number) : undefined,
+      contactedAt: r.contacted_at ? String(r.contacted_at) : undefined,
+      notes: r.notes ? String(r.notes) : undefined,
+      createdAt: String(r.created_at || new Date().toISOString()),
+      updatedAt: String(r.updated_at || r.created_at || new Date().toISOString())
+    };
+  }
+
+  async captureAbandonedOrder(
+    params: {
+      storeId: string;
+      sessionId: string;
+      customerPhone: string;
+      customerName?: string;
+      landingPageId?: string;
+      landingPageTitle?: string;
+      offerId?: string;
+      bundleLabel?: string;
+      variantLabel?: string;
+      wilayaId?: string;
+      wilayaName?: string;
+      commune?: string;
+      deliveryType?: DeliveryType;
+      subtotal?: number;
+      shippingFee?: number;
+      total?: number;
+      honeypot?: string;
+    },
+    webhookUrl?: string
+  ): Promise<{ ok: boolean }> {
+    const phoneCheck = validateAlgerianPhone(params.customerPhone);
+    const cleanSession = String(params.sessionId || '').trim();
+    if (!params.storeId || !cleanSession || !phoneCheck.valid) {
+      return { ok: false };
+    }
+    if (String(params.honeypot || '').trim().length > 0) {
+      return { ok: false };
+    }
+
+    const now = new Date().toISOString();
+    const deliveryType: DeliveryType = params.deliveryType === 'stop' ? 'stop' : 'home';
+    const subtotal = Math.max(0, Number(params.subtotal) || 0);
+    const shippingFee = Math.max(0, Number(params.shippingFee) || 0);
+    const total = Math.max(0, Number(params.total) || subtotal + shippingFee);
+
+    // 1. Save/merge into localStorage immediately
+    const allLocal = this.getLocalAbandonedOrders();
+    const existingIdx = allLocal.findIndex(
+      a => a.storeId === params.storeId && a.sessionId === cleanSession
+    );
+    const existing = existingIdx >= 0 ? allLocal[existingIdx] : undefined;
+    if (existing?.status === 'recovered') {
+      return { ok: true };
+    }
+
+    const nextRecord: AbandonedOrder = {
+      id: existing?.id || cleanSession,
+      sessionId: cleanSession,
+      storeId: params.storeId,
+      landingPageId: params.landingPageId || existing?.landingPageId,
+      landingPageTitle: params.landingPageTitle || existing?.landingPageTitle,
+      offerId: params.offerId || existing?.offerId,
+      bundleLabel: params.bundleLabel || existing?.bundleLabel,
+      variantLabel: params.variantLabel || existing?.variantLabel,
+      customerName: params.customerName?.trim() || existing?.customerName,
+      customerPhone: phoneCheck.normalized,
+      wilayaId: params.wilayaId || existing?.wilayaId,
+      wilayaName: params.wilayaName || existing?.wilayaName,
+      commune: params.commune || existing?.commune,
+      deliveryType,
+      subtotal,
+      shippingFee,
+      total,
+      status: existing?.status || 'new',
+      recoveredOrderNumber: existing?.recoveredOrderNumber,
+      contactedAt: existing?.contactedAt,
+      notes: existing?.notes,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+
+    if (existingIdx >= 0) {
+      allLocal[existingIdx] = nextRecord;
+    } else {
+      allLocal.unshift(nextRecord);
+    }
+    this.saveLocalAbandonedOrders(allLocal);
+
+    // 2. Post to backend /api/abandoned-orders/capture (persists to server cache + Supabase if service key present)
+    const serverPayload = {
+      action: 'upsert',
+      storeId: params.storeId,
+      sessionId: cleanSession,
+      customerPhone: phoneCheck.normalized,
+      customerName: params.customerName?.trim() || '',
+      landingPageId: params.landingPageId || '',
+      landingPageTitle: params.landingPageTitle || '',
+      offerId: params.offerId || '',
+      bundleLabel: params.bundleLabel || '',
+      variantLabel: params.variantLabel || '',
+      wilayaId: params.wilayaId || '',
+      wilayaName: params.wilayaName || '',
+      commune: params.commune || '',
+      deliveryType,
+      subtotal,
+      shippingFee,
+      total,
+      honeypot: ''
+    };
+
+    void fetch('/api/abandoned-orders/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(serverPayload),
+      keepalive: true
+    }).catch(() => {});
+
+    // 3. Direct Supabase anon-safe RPC fallback (works even if server has no service_role key)
+    if (this.useSupabase() && supabase && isUuid(params.storeId)) {
+      void supabase
+        .rpc('upsert_abandoned_order', {
+          p_store_id: params.storeId,
+          p_session_id: cleanSession,
+          p_customer_phone: phoneCheck.normalized,
+          p_customer_name: params.customerName?.trim() || null,
+          p_landing_page_id: isUuid(params.landingPageId) ? params.landingPageId : null,
+          p_landing_page_title: params.landingPageTitle || null,
+          p_offer_id: params.offerId || null,
+          p_bundle_label: params.bundleLabel || null,
+          p_variant_label: params.variantLabel || null,
+          p_wilaya_id: params.wilayaId || null,
+          p_wilaya_name: params.wilayaName || null,
+          p_commune: params.commune || null,
+          p_delivery_type: deliveryType,
+          p_subtotal: subtotal,
+          p_shipping_fee: shippingFee,
+          p_total: total
+        })
+        .then(() => {}, () => {});
+    }
+
+    // 4. Optional separate worksheet sync in Google Sheet (auto-gated to Apps Script v4+)
+    if (webhookUrl?.trim()) {
+      const productDetails = [
+        params.landingPageTitle,
+        params.bundleLabel,
+        params.variantLabel ? `(${params.variantLabel})` : ''
+      ]
+        .filter(Boolean)
+        .join(' - ');
+      void sendAbandonedOrderToGoogleSheet(webhookUrl, {
+        sessionId: cleanSession,
+        fullName: params.customerName?.trim() || '',
+        phone: phoneCheck.normalized,
+        wilaya: params.wilayaName || '',
+        commune: params.commune || '',
+        deliveryType,
+        productDetails: productDetails || 'طلب غير مكتمل',
+        totalPrice: total,
+        statusLabel: ABANDONED_STAGE_LABELS[nextRecord.status]
+      });
+    }
+
+    return { ok: true };
+  }
+
+  captureAbandonedOrderBeacon(params: {
+    storeId: string;
+    sessionId: string;
+    customerPhone: string;
+    customerName?: string;
+    landingPageId?: string;
+    landingPageTitle?: string;
+    offerId?: string;
+    bundleLabel?: string;
+    variantLabel?: string;
+    wilayaId?: string;
+    wilayaName?: string;
+    commune?: string;
+    deliveryType?: DeliveryType;
+    subtotal?: number;
+    shippingFee?: number;
+    total?: number;
+  }): void {
+    const phoneCheck = validateAlgerianPhone(params.customerPhone);
+    const cleanSession = String(params.sessionId || '').trim();
+    if (!params.storeId || !cleanSession || !phoneCheck.valid) return;
+
+    const payload = JSON.stringify({
+      action: 'upsert',
+      storeId: params.storeId,
+      sessionId: cleanSession,
+      customerPhone: phoneCheck.normalized,
+      customerName: params.customerName?.trim() || '',
+      landingPageId: params.landingPageId || '',
+      landingPageTitle: params.landingPageTitle || '',
+      offerId: params.offerId || '',
+      bundleLabel: params.bundleLabel || '',
+      variantLabel: params.variantLabel || '',
+      wilayaId: params.wilayaId || '',
+      wilayaName: params.wilayaName || '',
+      commune: params.commune || '',
+      deliveryType: params.deliveryType === 'stop' ? 'stop' : 'home',
+      subtotal: Math.max(0, Number(params.subtotal) || 0),
+      shippingFee: Math.max(0, Number(params.shippingFee) || 0),
+      total: Math.max(0, Number(params.total) || 0)
+    });
+
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        const blob = new Blob([payload], { type: 'text/plain;charset=UTF-8' });
+        navigator.sendBeacon('/api/abandoned-orders/capture', blob);
+        return;
+      }
+      void fetch('/api/abandoned-orders/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true
+      }).catch(() => {});
+    } catch {
+      // ignore beacon errors
+    }
+  }
+
+  async markAbandonedOrderRecovered(
+    storeId: string,
+    sessionId: string,
+    orderNumber?: string,
+    webhookUrl?: string
+  ): Promise<void> {
+    const cleanSession = String(sessionId || '').trim();
+    if (!storeId || !cleanSession) return;
+    const now = new Date().toISOString();
+
+    const allLocal = this.getLocalAbandonedOrders();
+    let changed = false;
+    const nextLocal = allLocal.map(item => {
+      if (item.storeId === storeId && item.sessionId === cleanSession) {
+        changed = true;
+        return {
+          ...item,
+          status: 'recovered' as AbandonedOrderStatus,
+          recoveredOrderNumber: orderNumber || item.recoveredOrderNumber,
+          updatedAt: now
+        };
+      }
+      return item;
+    });
+    if (changed) {
+      this.saveLocalAbandonedOrders(nextLocal);
+    }
+
+    void fetch('/api/abandoned-orders/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'recovered',
+        storeId,
+        sessionId: cleanSession,
+        orderNumber: orderNumber || ''
+      }),
+      keepalive: true
+    }).catch(() => {});
+
+    if (this.useSupabase() && supabase && isUuid(storeId)) {
+      void supabase
+        .rpc('complete_abandoned_order', {
+          p_store_id: storeId,
+          p_session_id: cleanSession,
+          p_order_number: orderNumber || null
+        })
+        .then(() => {}, () => {});
+    }
+
+    if (webhookUrl?.trim()) {
+      void deleteAbandonedOrderInGoogleSheet(webhookUrl, cleanSession);
+    }
+  }
+
+  async getAbandonedOrders(
+    storeId: string
+  ): Promise<{ items: AbandonedOrder[]; needsSqlMigration: boolean }> {
+    if (!storeId) return { items: [], needsSqlMigration: false };
+
+    let needsSqlMigration = false;
+    const mergedBySession = new Map<string, AbandonedOrder>();
+    const addOrMerge = (item: AbandonedOrder) => {
+      const key = String(item.sessionId || item.id || '').trim();
+      if (!key) return;
+      const existing = mergedBySession.get(key);
+      if (!existing) {
+        mergedBySession.set(key, item);
+        return;
+      }
+      const existingTs = new Date(existing.updatedAt || existing.createdAt).getTime() || 0;
+      const incomingTs = new Date(item.updatedAt || item.createdAt).getTime() || 0;
+      // Prefer UUID record id & newer timestamp
+      const newer = incomingTs >= existingTs ? item : existing;
+      const older = incomingTs >= existingTs ? existing : item;
+      mergedBySession.set(key, {
+        ...older,
+        ...newer,
+        id: isUuid(newer.id) ? newer.id : isUuid(older.id) ? older.id : newer.id,
+        status:
+          existing.status === 'recovered' || item.status === 'recovered'
+            ? 'recovered'
+            : newer.status,
+        recoveredOrderNumber: newer.recoveredOrderNumber || older.recoveredOrderNumber
+      });
+    };
+
+    // 1. Local cache
+    this.getLocalAbandonedOrders()
+      .filter(a => a.storeId === storeId)
+      .forEach(addOrMerge);
+
+    // 2. Backend API (returns Supabase rows if service key configured + server runtime cache)
+    let accessToken = '';
+    if (this.useSupabase() && supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        accessToken = sessionData?.session?.access_token || '';
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      const res = await fetch(
+        `/api/abandoned-orders/list?storeId=${encodeURIComponent(storeId)}`,
+        {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.needsSqlMigration) needsSqlMigration = true;
+        if (Array.isArray(data?.items)) {
+          data.items.forEach((item: AbandonedOrder) => addOrMerge(item));
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+
+    // 3. Direct Supabase query via owner RLS (works even without service_role key on backend)
+    if (this.useSupabase() && supabase && isUuid(storeId) && accessToken) {
+      const { data, error } = await supabase
+        .from('abandoned_orders')
+        .select('*')
+        .eq('store_id', storeId)
+        .order('updated_at', { ascending: false })
+        .limit(300);
+
+      if (error) {
+        const msg = (error.message || '').toLowerCase();
+        if (
+          error.code === '42P01' ||
+          error.code === 'PGRST205' ||
+          msg.includes('does not exist') ||
+          msg.includes('could not find the table')
+        ) {
+          needsSqlMigration = true;
+        }
+      } else if (Array.isArray(data)) {
+        needsSqlMigration = false;
+        data.forEach(r => addOrMerge(this.mapSupabaseAbandonedRow(r)));
+      }
+    }
+
+    const items = Array.from(mergedBySession.values()).sort(
+      (a, b) =>
+        (new Date(b.updatedAt || b.createdAt).getTime() || 0) -
+        (new Date(a.updatedAt || a.createdAt).getTime() || 0)
+    );
+    return { items, needsSqlMigration };
+  }
+
+  async updateAbandonedOrder(
+    storeId: string,
+    target: { id: string; sessionId: string },
+    patch: {
+      status?: AbandonedOrderStatus;
+      recoveredOrderNumber?: string;
+      contactedAt?: string;
+      notes?: string;
+    },
+    webhookUrl?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!storeId) return { success: false, error: 'معرّف المتجر غير صالح' };
+    const now = new Date().toISOString();
+
+    // Update local cache
+    const allLocal = this.getLocalAbandonedOrders();
+    const updatedLocal = allLocal.map(item => {
+      if (
+        item.storeId === storeId &&
+        (item.id === target.id || item.sessionId === target.sessionId)
+      ) {
+        return {
+          ...item,
+          ...(patch.status ? { status: patch.status } : {}),
+          ...(patch.recoveredOrderNumber !== undefined
+            ? { recoveredOrderNumber: patch.recoveredOrderNumber }
+            : {}),
+          ...(patch.contactedAt !== undefined ? { contactedAt: patch.contactedAt } : {}),
+          ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+          updatedAt: now
+        };
+      }
+      return item;
+    });
+    this.saveLocalAbandonedOrders(updatedLocal);
+
+    let accessToken = '';
+    if (this.useSupabase() && supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        accessToken = sessionData?.session?.access_token || '';
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      await fetch('/api/abandoned-orders/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        },
+        body: JSON.stringify({
+          storeId,
+          id: target.id,
+          sessionId: target.sessionId,
+          ...patch
+        })
+      });
+    } catch {
+      // ignore
+    }
+
+    if (this.useSupabase() && supabase && isUuid(storeId) && accessToken) {
+      const dbPatch: Record<string, any> = { updated_at: now };
+      if (patch.status) dbPatch.status = patch.status;
+      if (patch.recoveredOrderNumber !== undefined) {
+        dbPatch.recovered_order_number = patch.recoveredOrderNumber || null;
+      }
+      if (patch.contactedAt !== undefined) {
+        dbPatch.contacted_at = patch.contactedAt || null;
+      }
+      if (patch.notes !== undefined) {
+        dbPatch.notes = patch.notes || null;
+      }
+
+      if (isUuid(target.id)) {
+        await supabase
+          .from('abandoned_orders')
+          .update(dbPatch)
+          .eq('store_id', storeId)
+          .eq('id', target.id);
+      } else if (target.sessionId) {
+        await supabase
+          .from('abandoned_orders')
+          .update(dbPatch)
+          .eq('store_id', storeId)
+          .eq('session_id', target.sessionId);
+      }
+    }
+
+    if (webhookUrl?.trim() && target.sessionId && patch.status) {
+      if (patch.status === 'recovered') {
+        void deleteAbandonedOrderInGoogleSheet(webhookUrl, target.sessionId);
+      } else {
+        void updateAbandonedStatusInGoogleSheet(
+          webhookUrl,
+          target.sessionId,
+          ABANDONED_STAGE_LABELS[patch.status]
+        );
+      }
+    }
+
+    return { success: true };
+  }
+
+  async deleteAbandonedOrders(
+    storeId: string,
+    targets: Array<{ id: string; sessionId: string }>,
+    webhookUrl?: string
+  ): Promise<{ success: boolean; deletedCount: number; error?: string }> {
+    if (!storeId || targets.length === 0) return { success: true, deletedCount: 0 };
+
+    const idSet = new Set(targets.map(t => t.id).filter(Boolean));
+    const sessionSet = new Set(targets.map(t => t.sessionId).filter(Boolean));
+
+    const allLocal = this.getLocalAbandonedOrders();
+    const remainingLocal = allLocal.filter(
+      item =>
+        !(
+          item.storeId === storeId &&
+          (idSet.has(item.id) || sessionSet.has(item.sessionId))
+        )
+    );
+    this.saveLocalAbandonedOrders(remainingLocal);
+
+    let accessToken = '';
+    if (this.useSupabase() && supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        accessToken = sessionData?.session?.access_token || '';
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      await fetch('/api/abandoned-orders/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        },
+        body: JSON.stringify({
+          storeId,
+          ids: Array.from(idSet),
+          sessionIds: Array.from(sessionSet)
+        })
+      });
+    } catch {
+      // ignore
+    }
+
+    if (this.useSupabase() && supabase && isUuid(storeId) && accessToken) {
+      const uuidIds = Array.from(idSet).filter(id => isUuid(id));
+      const sessions = Array.from(sessionSet);
+      if (uuidIds.length > 0) {
+        await supabase
+          .from('abandoned_orders')
+          .delete()
+          .eq('store_id', storeId)
+          .in('id', uuidIds);
+      }
+      if (sessions.length > 0) {
+        await supabase
+          .from('abandoned_orders')
+          .delete()
+          .eq('store_id', storeId)
+          .in('session_id', sessions);
+      }
+    }
+
+    if (webhookUrl?.trim()) {
+      targets.forEach(t => {
+        if (t.sessionId) {
+          void deleteAbandonedOrderInGoogleSheet(webhookUrl, t.sessionId);
+        }
+      });
+    }
+
+    return { success: true, deletedCount: targets.length };
+  }
+
+  async mergeAbandonedFromSheet(
+    storeId: string,
+    sheetRows: SheetAbandonedRow[],
+    existingItems: AbandonedOrder[]
+  ): Promise<number> {
+    if (!storeId || sheetRows.length === 0) return 0;
+    const existingSessions = new Set(existingItems.map(i => i.sessionId.toUpperCase()));
+    let imported = 0;
+
+    for (const row of sheetRows) {
+      const cleanSession = String(row.sessionId || '').trim();
+      if (!cleanSession || existingSessions.has(cleanSession.toUpperCase())) continue;
+      const phoneCheck = validateAlgerianPhone(row.customerPhone);
+      if (!phoneCheck.valid) continue;
+
+      const matchedWilaya = ALGERIA_WILAYAS.find(
+        w => w.nameAr === row.wilayaName || (row.wilayaName && row.wilayaName.includes(w.nameAr))
+      );
+      await this.captureAbandonedOrder({
+        storeId,
+        sessionId: cleanSession,
+        customerPhone: phoneCheck.normalized,
+        customerName: row.customerName || undefined,
+        bundleLabel: row.productLabel || undefined,
+        wilayaId: matchedWilaya?.id,
+        wilayaName: row.wilayaName || matchedWilaya?.nameAr,
+        commune: row.commune || undefined,
+        deliveryType: row.deliveryType,
+        total: row.total
+      });
+      if (row.status && row.status !== 'new') {
+        await this.updateAbandonedOrder(storeId, { id: cleanSession, sessionId: cleanSession }, {
+          status: row.status
+        });
+      }
+      imported += 1;
+    }
+
+    return imported;
   }
 
   resetDemoData(): void {

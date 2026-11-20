@@ -111,6 +111,14 @@ export const LandingPageView: React.FC<Props> = ({
   const formMountedAtRef = useRef<number>(Date.now());
   const submitLockRef = useRef<boolean>(false);
 
+  // Automatic Abandoned Checkout Capture Session Refs
+  const createAbandonedSessionId = () =>
+    `AB-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const abandonedSessionIdRef = useRef<string>(createAbandonedSessionId());
+  const orderCompletedForSessionRef = useRef<boolean>(false);
+  const lastAbandonedFingerprintRef = useRef<string>('');
+  const abandonedTimerRef = useRef<number | null>(null);
+
   // Promo Coupon State
   const [promoInput, setPromoInput] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<{
@@ -213,6 +221,13 @@ export const LandingPageView: React.FC<Props> = ({
     trackedInitiateCheckoutRef.current = false;
     formMountedAtRef.current = Date.now();
     setBotTrapField('');
+    abandonedSessionIdRef.current = createAbandonedSessionId();
+    orderCompletedForSessionRef.current = false;
+    lastAbandonedFingerprintRef.current = '';
+    if (abandonedTimerRef.current) {
+      window.clearTimeout(abandonedTimerRef.current);
+      abandonedTimerRef.current = null;
+    }
   }, [page.id]);
 
   // Fire PageView + ViewContent once per page/pixel resolution (supports async public-settings fallback)
@@ -335,6 +350,115 @@ export const LandingPageView: React.FC<Props> = ({
       .filter(Boolean)
       .join(' • ');
   }, [page.variants, selectedVariants]);
+
+  const buildAbandonedPayload = () => {
+    const phoneCheck = validateAlgerianPhone(phone);
+    if (
+      !phoneCheck.valid ||
+      isTrackingMode ||
+      isSubmitting ||
+      orderCompletedForSessionRef.current ||
+      botTrapField.trim().length > 0
+    ) {
+      return null;
+    }
+    return {
+      storeId: store.id,
+      sessionId: abandonedSessionIdRef.current,
+      customerPhone: phoneCheck.normalized,
+      customerName: fullName.trim() || undefined,
+      landingPageId: page.id,
+      landingPageTitle: page.title,
+      offerId: selectedOffer?.id,
+      bundleLabel: selectedOffer?.title || page.title,
+      variantLabel: variantSummary || undefined,
+      wilayaId: selectedWilaya.id,
+      wilayaName: selectedWilaya.nameAr,
+      commune: selectedCommune || undefined,
+      deliveryType,
+      subtotal: discountedProductPrice,
+      shippingFee: shippingCost,
+      total: grandTotal,
+      honeypot: botTrapField
+    };
+  };
+
+  const triggerImmediateAbandonedCapture = () => {
+    const payload = buildAbandonedPayload();
+    if (!payload) return;
+    const fingerprint = JSON.stringify([
+      payload.customerPhone,
+      payload.customerName || '',
+      payload.offerId || '',
+      payload.variantLabel || '',
+      payload.wilayaId || '',
+      payload.commune || '',
+      payload.deliveryType,
+      payload.total
+    ]);
+    if (fingerprint === lastAbandonedFingerprintRef.current) return;
+    lastAbandonedFingerprintRef.current = fingerprint;
+    void storage.captureAbandonedOrder(payload, effectiveWebhook);
+  };
+
+  // Debounced silent capture whenever customer enters a valid Algerian mobile number or updates form fields
+  useEffect(() => {
+    if (abandonedTimerRef.current) {
+      window.clearTimeout(abandonedTimerRef.current);
+      abandonedTimerRef.current = null;
+    }
+    const payload = buildAbandonedPayload();
+    if (!payload) return;
+
+    abandonedTimerRef.current = window.setTimeout(() => {
+      triggerImmediateAbandonedCapture();
+    }, 1800);
+
+    return () => {
+      if (abandonedTimerRef.current) {
+        window.clearTimeout(abandonedTimerRef.current);
+        abandonedTimerRef.current = null;
+      }
+    };
+  }, [
+    phone,
+    fullName,
+    selectedWilayaId,
+    selectedCommune,
+    deliveryType,
+    selectedOfferId,
+    variantSummary,
+    discountedProductPrice,
+    shippingCost,
+    grandTotal,
+    isTrackingMode,
+    isSubmitting,
+    botTrapField,
+    effectiveWebhook
+  ]);
+
+  // Beacon fallback if customer closes tab or switches apps immediately after typing their phone
+  const latestAbandonedPayloadRef = useRef<ReturnType<typeof buildAbandonedPayload>>(null);
+  latestAbandonedPayloadRef.current = buildAbandonedPayload();
+
+  useEffect(() => {
+    const handleLeave = () => {
+      const payload = latestAbandonedPayloadRef.current;
+      if (!payload) return;
+      storage.captureAbandonedOrderBeacon(payload);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        handleLeave();
+      }
+    };
+    window.addEventListener('pagehide', handleLeave);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('pagehide', handleLeave);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   const handleApplyPromo = async () => {
     setPromoError(null);
@@ -492,6 +616,9 @@ export const LandingPageView: React.FC<Props> = ({
     setFullName('');
     setPhone('');
     setFormError(null);
+    abandonedSessionIdRef.current = createAbandonedSessionId();
+    orderCompletedForSessionRef.current = false;
+    lastAbandonedFingerprintRef.current = '';
     scrollToElementWhenReady(targetSection);
   };
 
@@ -616,6 +743,19 @@ export const LandingPageView: React.FC<Props> = ({
     }
 
     const orderNum = res.order.orderNumber;
+    // Mark current abandoned session as recovered & clean up from "الطلبات المتروكة" sheet
+    if (abandonedTimerRef.current) {
+      window.clearTimeout(abandonedTimerRef.current);
+      abandonedTimerRef.current = null;
+    }
+    orderCompletedForSessionRef.current = true;
+    void storage.markAbandonedOrderRecovered(
+      store.id,
+      abandonedSessionIdRef.current,
+      orderNum,
+      effectiveWebhook
+    );
+
     const bundleDetails = `${selectedOffer.title}${variantSummary ? ` (${variantSummary})` : ''} (الكمية: ${selectedOffer.quantity})`;
     const finalTotalDisplay = activeDiscountAmount > 0 ? grandTotal : res.order.total;
 
@@ -1600,6 +1740,7 @@ export const LandingPageView: React.FC<Props> = ({
                         required
                         value={fullName}
                         onChange={e => setFullName(e.target.value)}
+                        onBlur={triggerImmediateAbandonedCapture}
                         placeholder="مثال: محمد الأمين"
                         className={`w-full p-3.5 pr-10 rounded-xl border text-sm focus:outline-none ${subtleInputBg}`}
                       />
@@ -1618,6 +1759,7 @@ export const LandingPageView: React.FC<Props> = ({
                         dir="ltr"
                         value={phone}
                         onChange={e => setPhone(e.target.value)}
+                        onBlur={triggerImmediateAbandonedCapture}
                         placeholder="06XX XX XX XX"
                         className={`w-full p-3.5 pr-10 rounded-xl border text-sm text-right font-mono focus:outline-none ${subtleInputBg}`}
                       />

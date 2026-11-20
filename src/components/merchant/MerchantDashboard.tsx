@@ -1,11 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
-import { DeliveryType, LandingPage, Order, OrderStatus, Store, StoreApiConfig } from '../../types';
+import {
+  AbandonedOrder,
+  AbandonedOrderStatus,
+  DeliveryType,
+  LandingPage,
+  Order,
+  OrderStatus,
+  Store,
+  StoreApiConfig
+} from '../../types';
 import { ALGERIA_WILAYAS } from '../../data/wilayas';
 import { OverviewTab } from './OverviewTab';
 import { LandingPagesTab } from './LandingPagesTab';
 import { OrdersTab } from './OrdersTab';
+import { AbandonedOrdersTab, ConvertAbandonedPayload } from './AbandonedOrdersTab';
 import { ApiConfigTab } from './ApiConfigTab';
 import { SettingsTab } from './SettingsTab';
 import { ThemeToggle } from '../common/ThemeToggle';
@@ -13,9 +23,12 @@ import { LoginModal } from '../visitor/LoginModal';
 import { applyBrowserBranding } from '../../services/branding';
 import {
   ORDER_STAGE_LABELS,
+  ABANDONED_STAGE_LABELS,
+  sendOrderToGoogleSheet,
   updateOrderInGoogleSheet,
   deleteOrderInGoogleSheet,
   fetchAllOrdersFromGoogleSheetDetailed,
+  fetchAbandonedOrdersFromGoogleSheet,
   SheetOrderRow,
   createCourierParcel,
   trackCourierParcel,
@@ -27,6 +40,7 @@ import {
   LayoutDashboard,
   Layers,
   ShoppingBag,
+  UserX,
   Settings,
   Plug,
   ExternalLink,
@@ -56,10 +70,19 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     logout
   } = useAuth();
 
-  const [activeTab, setActiveTabState] = useState<'overview' | 'pages' | 'orders' | 'api' | 'settings'>(() => {
+  const [activeTab, setActiveTabState] = useState<
+    'overview' | 'pages' | 'orders' | 'abandoned' | 'api' | 'settings'
+  >(() => {
     try {
       const saved = sessionStorage.getItem('brightdz_active_tab');
-      if (saved === 'overview' || saved === 'pages' || saved === 'orders' || saved === 'api' || saved === 'settings') {
+      if (
+        saved === 'overview' ||
+        saved === 'pages' ||
+        saved === 'orders' ||
+        saved === 'abandoned' ||
+        saved === 'api' ||
+        saved === 'settings'
+      ) {
         return saved;
       }
     } catch {
@@ -68,7 +91,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     return 'pages';
   });
 
-  const setActiveTab = (tab: 'overview' | 'pages' | 'orders' | 'api' | 'settings') => {
+  const setActiveTab = (
+    tab: 'overview' | 'pages' | 'orders' | 'abandoned' | 'api' | 'settings'
+  ) => {
     setActiveTabState(tab);
     try {
       sessionStorage.setItem('brightdz_active_tab', tab);
@@ -91,6 +116,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   // Data states
   const [landingPages, setLandingPages] = useState<LandingPage[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [abandonedOrders, setAbandonedOrders] = useState<AbandonedOrder[]>([]);
+  const [abandonedNeedsSql, setAbandonedNeedsSql] = useState(false);
+  const [isSyncingAbandoned, setIsSyncingAbandoned] = useState(false);
+  const [lastAbandonedSyncError, setLastAbandonedSyncError] = useState<string | null>(null);
   const [apiConfig, setApiConfig] = useState<StoreApiConfig | null>(null);
   const [needsSqlMigration, setNeedsSqlMigration] = useState(false);
   const [courierBusyOrderId, setCourierBusyOrderId] = useState<string | null>(null);
@@ -368,15 +397,18 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     setIsDataLoading(true);
     setLoadError(null);
     try {
-      const [loadedPages, loadedOrders, apiRes] = await Promise.all([
+      const [loadedPages, loadedOrders, apiRes, abandonedRes] = await Promise.all([
         storage.getLandingPages(store.id),
         storage.getOrders(store.id),
-        storage.getStoreApiConfig(store)
+        storage.getStoreApiConfig(store),
+        storage.getAbandonedOrders(store.id)
       ]);
       setLandingPages(loadedPages);
       setOrders(loadedOrders);
       setApiConfig(apiRes.config);
       setNeedsSqlMigration(Boolean(apiRes.needsSqlMigration));
+      setAbandonedOrders(abandonedRes.items);
+      setAbandonedNeedsSql(Boolean(abandonedRes.needsSqlMigration));
       applyBrowserBranding({
         title: `${store.name} | لوحة التحكم`,
         iconUrl: apiRes.config.faviconUrl || store.logoUrl
@@ -411,6 +443,13 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     if (!store?.id || isDataLoading || isAuthLoading || (isSupabaseMode && !currentUser?.id)) return;
     const timer = setInterval(() => {
       void syncOrdersWithGoogleSheets(orders, landingPages, false);
+      void storage
+        .getAbandonedOrders(store.id)
+        .then(res => {
+          setAbandonedOrders(res.items);
+          setAbandonedNeedsSql(Boolean(res.needsSqlMigration));
+        })
+        .catch(() => {});
     }, 8000);
     return () => clearInterval(timer);
   }, [store?.id, isDataLoading, isAuthLoading, isSupabaseMode, currentUser?.id, orders, landingPages, syncOrdersWithGoogleSheets]);
@@ -987,7 +1026,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     patch: Partial<
       Pick<
         StoreApiConfig,
-        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
+        | 'promoCoupons'
+        | 'whatsappConfirmTemplate'
+        | 'whatsappShippingTemplate'
+        | 'whatsappAbandonedTemplate'
+        | 'faviconUrl'
       >
     >,
     successMsg = 'تم التحديث بنجاح'
@@ -1002,6 +1045,195 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     } else {
       showToast('خطأ: ' + (res.error || 'تعذر حفظ التعديلات'));
     }
+  };
+
+  const resolveAbandonedWebhook = (landingPageId?: string) => {
+    const lp = landingPageId ? landingPages.find(p => p.id === landingPageId) : undefined;
+    return (
+      lp?.integrations?.googleSheetWebhook?.trim() ||
+      apiConfig?.googleSheetWebhook?.trim() ||
+      store?.googleSheetWebhook?.trim() ||
+      ''
+    );
+  };
+
+  const handleUpdateAbandonedStatus = async (
+    item: AbandonedOrder,
+    nextStatus: AbandonedOrderStatus
+  ) => {
+    if (!store?.id) return;
+    const webhook = resolveAbandonedWebhook(item.landingPageId);
+    const contactedAt =
+      nextStatus === 'contacted' ? new Date().toISOString() : item.contactedAt;
+    await storage.updateAbandonedOrder(
+      store.id,
+      { id: item.id, sessionId: item.sessionId },
+      { status: nextStatus, contactedAt },
+      webhook
+    );
+    setAbandonedOrders(prev =>
+      prev.map(a =>
+        a.id === item.id || a.sessionId === item.sessionId
+          ? { ...a, status: nextStatus, contactedAt, updatedAt: new Date().toISOString() }
+          : a
+      )
+    );
+    showToast(`تم تحديث الحالة إلى «${ABANDONED_STAGE_LABELS[nextStatus]}»`);
+  };
+
+  const handleDeleteAbandonedOrders = async (items: AbandonedOrder[]) => {
+    if (!store?.id || items.length === 0) return;
+    const defaultWebhook = resolveAbandonedWebhook(items[0]?.landingPageId);
+    await storage.deleteAbandonedOrders(
+      store.id,
+      items.map(i => ({ id: i.id, sessionId: i.sessionId })),
+      defaultWebhook
+    );
+    const removeIds = new Set(items.map(i => i.id));
+    const removeSessions = new Set(items.map(i => i.sessionId));
+    setAbandonedOrders(prev =>
+      prev.filter(a => !removeIds.has(a.id) && !removeSessions.has(a.sessionId))
+    );
+    showToast(
+      items.length === 1
+        ? 'تم حذف الطلب المتروك نهائياً'
+        : `تم حذف ${items.length} طلبات متروكة نهائياً`
+    );
+  };
+
+  const handleSyncAbandonedWithSheet = async () => {
+    if (!store?.id) return;
+    setIsSyncingAbandoned(true);
+    setLastAbandonedSyncError(null);
+    try {
+      const latest = await storage.getAbandonedOrders(store.id);
+      setAbandonedOrders(latest.items);
+      setAbandonedNeedsSql(Boolean(latest.needsSqlMigration));
+
+      const webhook = resolveAbandonedWebhook();
+      if (!webhook) {
+        showToast('تم تحديث الطلبات المتروكة من المتجر');
+        return;
+      }
+
+      const sheetRes = await fetchAbandonedOrdersFromGoogleSheet(webhook);
+      if (!sheetRes.ok) {
+        setLastAbandonedSyncError(
+          sheetRes.error || 'تعذر قراءة ورقة الطلبات المتروكة من غوغل شيت'
+        );
+        return;
+      }
+      if (sheetRes.scriptVersion < 4) {
+        setLastAbandonedSyncError(
+          'للمزامنة مع ورقة الطلبات المتروكة المستقلة في غوغل شيت، يرجى تحديث سكريبت غوغل إلى الإصدار الجديد ثم إعادة النشر.'
+        );
+        return;
+      }
+
+      const imported = await storage.mergeAbandonedFromSheet(
+        store.id,
+        sheetRes.rows,
+        latest.items
+      );
+      if (imported > 0) {
+        const refreshed = await storage.getAbandonedOrders(store.id);
+        setAbandonedOrders(refreshed.items);
+        showToast(`تم استيراد ${imported} طلب متروك جديد من ورقة غوغل شيت`);
+      } else {
+        showToast(`تمت المزامنة بنجاح (${sheetRes.rows.length} سجل في ورقة الطلبات المتروكة)`);
+      }
+    } catch {
+      setLastAbandonedSyncError('تعذر الاتصال بورقة الطلبات المتروكة حالياً');
+    } finally {
+      setIsSyncingAbandoned(false);
+    }
+  };
+
+  const handleConvertAbandonedToOrder = async (
+    payload: ConvertAbandonedPayload
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!store?.id) return { success: false, error: 'المتجر غير متاح' };
+
+    const placeRes = await storage.placeOrder({
+      storeId: store.id,
+      landingPageId: payload.landingPageId,
+      offerId: payload.offerId,
+      customerName: payload.customerName,
+      customerPhone: payload.customerPhone,
+      wilayaId: payload.wilayaId,
+      wilayaName: payload.wilayaName,
+      commune: payload.commune,
+      deliveryType: payload.deliveryType,
+      address: `${payload.wilayaName} - ${payload.commune}${
+        payload.deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''
+      }`,
+      variantLabel: payload.abandoned.variantLabel || undefined,
+      antiBot: { honeypot: '', fillTimeMs: 5000 }
+    });
+
+    if (!placeRes.success || !placeRes.order) {
+      return {
+        success: false,
+        error: placeRes.error || 'تعذر إنشاء الطلب من السجل المتروك'
+      };
+    }
+
+    const createdOrder = placeRes.order;
+    let finalStatus: OrderStatus = createdOrder.status;
+
+    if (payload.confirmImmediately && createdOrder.status !== 'confirmed') {
+      const upRes = await storage.updateOrderStatus(
+        createdOrder.id,
+        'confirmed',
+        'تم تأكيد الطلب وتحويله من قسم الطلبات المتروكة'
+      );
+      if (upRes.success) {
+        finalStatus = 'confirmed';
+      }
+    }
+
+    // Push newly converted order to main "Orders" Google Sheet
+    const lp = landingPages.find(p => p.id === payload.landingPageId);
+    const webhook = resolveAbandonedWebhook(payload.landingPageId);
+    const offer = lp?.offers.find(o => o.id === payload.offerId);
+    const bundleDetails = `${offer?.title || createdOrder.bundleLabel || lp?.title || 'طلب مسترجع'}${
+      payload.abandoned.variantLabel ? ` (${payload.abandoned.variantLabel})` : ''
+    }${offer?.quantity ? ` (الكمية: ${offer.quantity})` : ''}`;
+
+    recentSitePushRef.current[createdOrder.orderNumber.toUpperCase()] = Date.now();
+    sendOrderToGoogleSheet(webhook, {
+      orderId: createdOrder.orderNumber,
+      fullName: payload.customerName,
+      phone: payload.customerPhone,
+      wilaya: payload.wilayaName,
+      commune: payload.commune,
+      deliveryType: payload.deliveryType,
+      orderDetails: bundleDetails,
+      shippingCost: createdOrder.shippingFee,
+      productPrice: createdOrder.subtotal,
+      totalPrice: createdOrder.total,
+      statusLabel: ORDER_STAGE_LABELS[finalStatus]
+    });
+
+    // Mark abandoned session recovered & remove from "الطلبات المتروكة" sheet
+    await storage.updateAbandonedOrder(
+      store.id,
+      { id: payload.abandoned.id, sessionId: payload.abandoned.sessionId },
+      { status: 'recovered', recoveredOrderNumber: createdOrder.orderNumber },
+      webhook
+    );
+
+    const [updatedOrders, updatedPages, updatedAbandoned] = await Promise.all([
+      storage.getOrders(store.id),
+      storage.getLandingPages(store.id),
+      storage.getAbandonedOrders(store.id)
+    ]);
+    setOrders(updatedOrders);
+    setLandingPages(updatedPages);
+    setAbandonedOrders(updatedAbandoned.items);
+
+    showToast(`تم تحويل الطلب المتروك بنجاح إلى الطلب #${createdOrder.orderNumber}`);
+    return { success: true };
   };
 
   const handleInitialStoreSetup = async (e: React.FormEvent) => {
@@ -1143,6 +1375,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     { id: 'overview', label: 'نظرة عامة', icon: LayoutDashboard },
     { id: 'pages', label: 'صفحات الهبوط', icon: Layers, badge: landingPages.length },
     { id: 'orders', label: 'الطلبات والشحن', icon: ShoppingBag, badge: orders.filter(o => o.status === 'new').length },
+    {
+      id: 'abandoned',
+      label: 'الطلبات المتروكة',
+      icon: UserX,
+      badge: abandonedOrders.filter(a => a.status === 'new').length
+    },
     { id: 'api', label: 'إعدادات الـ API', icon: Plug },
     { id: 'settings', label: 'الإعدادات والتوصيل', icon: Settings }
   ];
@@ -1380,6 +1618,38 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   onDismissOrdersSql={() => setOrdersNeedsSql(false)}
                   selectedOrder={selectedOrder}
                   onSelectOrder={setSelectedOrder}
+                />
+              )}
+
+              {activeTab === 'abandoned' && (
+                <AbandonedOrdersTab
+                  store={store}
+                  abandonedOrders={abandonedOrders}
+                  landingPages={landingPages}
+                  apiConfig={apiConfig}
+                  isLoading={isDataLoading}
+                  isSyncingSheet={isSyncingAbandoned}
+                  lastSyncError={lastAbandonedSyncError}
+                  needsSqlMigration={abandonedNeedsSql}
+                  onDismissSyncError={() => setLastAbandonedSyncError(null)}
+                  onDismissSqlNotice={() => setAbandonedNeedsSql(false)}
+                  onSyncWithSheet={handleSyncAbandonedWithSheet}
+                  onUpdateStatus={handleUpdateAbandonedStatus}
+                  onDeleteItems={handleDeleteAbandonedOrders}
+                  onConvertToOrder={handleConvertAbandonedToOrder}
+                  onSaveReminderTemplate={template =>
+                    handleSaveStoreExtras(
+                      { whatsappAbandonedTemplate: template },
+                      'تم حفظ رسالة تذكير الطلبات المتروكة بنجاح'
+                    )
+                  }
+                  onOpenOrderByNumber={orderNum => {
+                    const found = orders.find(
+                      o => o.orderNumber.toUpperCase() === orderNum.toUpperCase()
+                    );
+                    if (found) setSelectedOrder(found);
+                    setActiveTab('orders');
+                  }}
                 />
               )}
 
