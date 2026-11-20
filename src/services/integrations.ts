@@ -1,5 +1,5 @@
 import { CourierProvider, DeliveryType, Order, OrderStatus, StoreApiConfig } from '../types';
-import { formatPlainDZD } from '../data/wilayas';
+import { formatPlainDZD, getWilayaById } from '../data/wilayas';
 
 declare global {
   interface Window {
@@ -1276,8 +1276,9 @@ export function normalizePhoneCanonical(raw?: string): string {
   return clean;
 }
 
-function escapeCsvCell(val: unknown): string {
-  const str = String(val ?? '').replace(/\r?\n/g, ' ');
+function escapeCsvCell(val: unknown, preserveNewlines = false): string {
+  const raw = String(val ?? '');
+  const str = preserveNewlines ? raw.replace(/\r\n/g, '\n') : raw.replace(/\r?\n/g, ' ');
   return `"${str.replace(/"/g, '""')}"`;
 }
 
@@ -1301,103 +1302,108 @@ function triggerFileDownload(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function exportOrdersToCourierCsv(orders: Order[], filenamePrefix = 'orders-courier'): void {
-  const headers = [
-    'reference',
-    'nom_client',
-    'telephone',
-    'code_wilaya',
-    'wilaya',
-    'commune',
-    'adresse',
-    'produit',
-    'stop_desk',
-    'montant_cod',
-    'frais_livraison',
-    'remarque',
-    'statut',
-    'tracking',
-    'date'
-  ];
+const COURIER_EXPORT_HEADERS = [
+  'reference commande',
+  'nom et prenom du destinataire*',
+  'telephone*',
+  'telephone 2',
+  'code wilaya*',
+  'wilaya de livraison',
+  'commune de livraison*',
+  'adresse de livraison*',
+  'produit*',
+  'poids (kg)',
+  'montant du colis*',
+  'remarque',
+  'FRAGILE\n( si oui mettez OUI sinon laissez vide )',
+  'ECHANGE\n( si oui mettez OUI sinon laissez vide )',
+  'PICK UP\n( si oui mettez OUI sinon laissez vide )',
+  'RECOUVREMENT\n( si oui mettez OUI sinon laissez vide )',
+  'STOP DESK\n( si oui mettez OUI sinon laissez vide )',
+  'Lien map'
+] as const;
 
-  const rows = orders.map(o => [
+function buildCourierExportRow(o: Order): Array<string | number> {
+  const wilayaMeta = getWilayaById(o.wilayaId);
+  const numericWilayaCode = parseInt(String(o.wilayaId || ''), 10);
+  const codeWilaya = Number.isFinite(numericWilayaCode) ? String(numericWilayaCode) : String(o.wilayaId || '');
+  const wilayaLabel = wilayaMeta?.nameFr || o.wilayaName || '';
+  const communeLabel = (o.commune || '').trim() || wilayaLabel;
+  const addressLabel =
+    (o.address || '').trim() ||
+    `${wilayaLabel}${communeLabel && communeLabel !== wilayaLabel ? ' - ' + communeLabel : ''}`;
+  const productLabel = (o.bundleLabel || '').trim() || o.items.map(it => it.title).join(' + ');
+
+  return [
     o.orderNumber,
     o.customerName,
     normalizePhoneCanonical(o.customerPhone) || o.customerPhone,
-    o.wilayaId,
-    o.wilayaName,
-    o.commune || '',
-    o.address || `${o.wilayaName}${o.commune ? ' - ' + o.commune : ''}`,
-    o.bundleLabel || o.items.map(it => it.title).join(' + '),
-    o.deliveryType === 'stop' ? '1' : '0',
+    '',
+    codeWilaya,
+    wilayaLabel,
+    communeLabel,
+    addressLabel,
+    productLabel,
+    1,
     Math.round(o.total || 0),
-    Math.round(o.shippingFee || 0),
-    o.notes || '',
-    ORDER_STAGE_LABELS[o.status] || o.status,
-    o.trackingCode || '',
-    new Date(o.createdAt).toLocaleString('fr-DZ')
-  ]);
+    (o.notes || '').trim(),
+    '',
+    '',
+    '',
+    '',
+    o.deliveryType === 'stop' ? 'OUI' : '',
+    ''
+  ];
+}
 
-  const csvContent =
-    '\uFEFF' +
-    [headers, ...rows].map(row => row.map(escapeCsvCell).join(',')).join('\r\n');
+export function exportOrdersToCourierCsv(orders: Order[], filenamePrefix = 'orders-courier'): void {
+  const headerLine = COURIER_EXPORT_HEADERS.map(h => escapeCsvCell(h, true)).join(',');
+  const dataLines = orders.map(o =>
+    buildCourierExportRow(o)
+      .map(cell => escapeCsvCell(cell, false))
+      .join(',')
+  );
 
+  const csvContent = '\uFEFF' + [headerLine, ...dataLines].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const dateTag = new Date().toISOString().slice(0, 10);
   triggerFileDownload(blob, `${filenamePrefix}-${dateTag}.csv`);
 }
 
-export function exportOrdersToExcel(orders: Order[], storeName = 'Store', filenamePrefix = 'orders-excel'): void {
+export function exportOrdersToExcel(orders: Order[], _storeName = 'Store', filenamePrefix = 'orders-excel'): void {
+  const headersHtml = COURIER_EXPORT_HEADERS.map(h => {
+    const formatted = escapeHtmlCell(h).replace(/\n/g, '<br style="mso-data-placement:same-cell;" />');
+    return `<th>${formatted}</th>`;
+  }).join('');
+
+  const textColIndexes = new Set([0, 2, 3, 4]);
   const rowsHtml = orders
-    .map(
-      o => `<tr>
-        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.orderNumber)}</td>
-        <td>${escapeHtmlCell(o.customerName)}</td>
-        <td style="mso-number-format:'\\@'">${escapeHtmlCell(normalizePhoneCanonical(o.customerPhone) || o.customerPhone)}</td>
-        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.wilayaId)}</td>
-        <td>${escapeHtmlCell(o.wilayaName)}</td>
-        <td>${escapeHtmlCell(o.commune || '')}</td>
-        <td>${escapeHtmlCell(o.deliveryType === 'stop' ? 'Stop Desk' : 'للمنزل')}</td>
-        <td>${escapeHtmlCell(o.bundleLabel || o.items.map(it => it.title).join(' + '))}</td>
-        <td>${Math.round(o.subtotal || 0)}</td>
-        <td>${Math.round(o.shippingFee || 0)}</td>
-        <td>${Math.round(o.total || 0)}</td>
-        <td>${escapeHtmlCell(ORDER_STAGE_LABELS[o.status] || o.status)}</td>
-        <td style="mso-number-format:'\\@'">${escapeHtmlCell(o.trackingCode || '')}</td>
-        <td>${escapeHtmlCell(new Date(o.createdAt).toLocaleString('ar-DZ'))}</td>
-      </tr>`
-    )
+    .map(o => {
+      const cells = buildCourierExportRow(o)
+        .map((val, idx) =>
+          textColIndexes.has(idx)
+            ? `<td style="mso-number-format:'\\@'">${escapeHtmlCell(val)}</td>`
+            : `<td>${escapeHtmlCell(val)}</td>`
+        )
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
     .join('');
 
   const html = `<!DOCTYPE html>
-<html dir="rtl" lang="ar">
+<html dir="ltr" lang="fr">
 <head>
 <meta charset="UTF-8" />
 <style>
   table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 12px; }
-  th { background-color: #059669; color: #ffffff; font-weight: bold; border: 1px solid #cbd5e1; padding: 8px; }
-  td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; }
+  th { background-color: #059669; color: #ffffff; font-weight: bold; border: 1px solid #cbd5e1; padding: 8px; vertical-align: middle; text-align: center; }
+  td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
 </style>
 </head>
 <body>
   <table>
     <thead>
-      <tr>
-        <th>رقم الطلب</th>
-        <th>اسم الزبون</th>
-        <th>الهاتف</th>
-        <th>كود الولاية</th>
-        <th>الولاية</th>
-        <th>البلدية</th>
-        <th>نوع التوصيل</th>
-        <th>المنتج والباقة</th>
-        <th>سعر المنتج</th>
-        <th>التوصيل</th>
-        <th>المجموع الكلي (COD)</th>
-        <th>الحالة</th>
-        <th>رمز التتبع</th>
-        <th>تاريخ الطلب — ${escapeHtmlCell(storeName)}</th>
-      </tr>
+      <tr>${headersHtml}</tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
   </table>

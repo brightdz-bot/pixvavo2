@@ -103,6 +103,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSyncingSheet, setIsSyncingSheet] = useState(false);
   const [lastSheetSyncError, setLastSheetSyncError] = useState<string | null>(null);
+  const [ordersNeedsSql, setOrdersNeedsSql] = useState(false);
 
   const recentSitePushRef = useRef<Record<string, number>>({});
   const sheetRowSigRef = useRef<Record<string, string>>({});
@@ -302,8 +303,12 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           const importRes = await storage.importOrdersFromSheet(store.id, missingRows, currentPages);
           if (importRes.success) {
             importedCount = importRes.importedCount;
+            setOrdersNeedsSql(false);
           } else {
             importError = importRes.error;
+            if (importRes.needsSqlMigration) {
+              setOrdersNeedsSql(true);
+            }
           }
         }
 
@@ -880,9 +885,13 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
     const res = await storage.deleteOrders(store.id, orderIds);
     if (!res.success) {
+      if (res.needsSqlMigration) {
+        setOrdersNeedsSql(true);
+      }
       showToast('خطأ: ' + (res.error || 'تعذر حذف الطلبات'));
       return;
     }
+    setOrdersNeedsSql(false);
 
     storage.rememberDeletedSheetOrderNumbers(
       store.id,
@@ -1367,6 +1376,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   isSyncingSheet={isSyncingSheet}
                   lastSheetSyncError={lastSheetSyncError}
                   onDismissSheetSyncError={() => setLastSheetSyncError(null)}
+                  ordersNeedsSql={ordersNeedsSql}
+                  onDismissOrdersSql={() => setOrdersNeedsSql(false)}
                   selectedOrder={selectedOrder}
                   onSelectOrder={setSelectedOrder}
                 />

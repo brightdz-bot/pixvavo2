@@ -472,7 +472,7 @@ async function getOrFetchServerConfig(storeId: string): Promise<ServerStoreApiCo
   if (cached) return cached;
 
   const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '').trim();
   if (!supabaseUrl || !serviceRoleKey) return undefined;
 
   try {
@@ -1901,7 +1901,7 @@ export function createApiApp(): Express {
 
       let dbRecentCount = 0;
       const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '').trim();
       if (supabaseUrl && serviceRoleKey) {
         try {
           const suffix = canonicalPhone.slice(-8);
@@ -2043,7 +2043,7 @@ export function createApiApp(): Express {
     const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
       .trim()
       .replace(/\/+$/, '');
-    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '').trim();
     const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
 
     if (!supabaseUrl || !serviceRoleKey) {

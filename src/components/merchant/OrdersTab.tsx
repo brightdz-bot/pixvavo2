@@ -17,6 +17,7 @@ import {
   normalizePhoneCanonical,
   normalizeWhatsAppNumber
 } from '../../services/integrations';
+import { ORDERS_SQL_MIGRATION_SNIPPET } from '../../services/storage';
 import {
   Search,
   Eye,
@@ -45,6 +46,7 @@ import {
   Square,
   Plus,
   Trash2,
+  Copy,
   X
 } from 'lucide-react';
 
@@ -102,6 +104,8 @@ interface Props {
   isSyncingSheet?: boolean;
   lastSheetSyncError?: string | null;
   onDismissSheetSyncError?: () => void;
+  ordersNeedsSql?: boolean;
+  onDismissOrdersSql?: () => void;
   selectedOrder?: Order | null;
   onSelectOrder: (order: Order | null) => void;
 }
@@ -139,6 +143,8 @@ export const OrdersTab: React.FC<Props> = ({
   isSyncingSheet,
   lastSheetSyncError,
   onDismissSheetSyncError,
+  ordersNeedsSql,
+  onDismissOrdersSql,
   selectedOrder,
   onSelectOrder
 }) => {
@@ -148,6 +154,7 @@ export const OrdersTab: React.FC<Props> = ({
   const [isBulkBusy, setIsBulkBusy] = useState(false);
   const [bulkCancelPendingIds, setBulkCancelPendingIds] = useState<string[] | null>(null);
   const [ordersPendingDelete, setOrdersPendingDelete] = useState<Order[] | null>(null);
+  const [copiedOrdersSql, setCopiedOrdersSql] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const [printSlipOrders, setPrintSlipOrders] = useState<Order[]>([]);
@@ -721,9 +728,9 @@ export const OrdersTab: React.FC<Props> = ({
                 >
                   <FileText className="w-4 h-4 text-blue-600 shrink-0" />
                   <div>
-                    <div>ملف CSV لشركات التوصيل</div>
+                    <div>ملف CSV لشركة التوصيل</div>
                     <div className="text-[10px] font-normal text-slate-400">
-                      جاهز للرفع (Yalidine / Ecotrack / ZR)
+                      18 عمود جاهز للرفع (Ecotrack / 48Hr)
                     </div>
                   </div>
                 </button>
@@ -741,9 +748,9 @@ export const OrdersTab: React.FC<Props> = ({
                 >
                   <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div>
-                    <div>جدول Excel منسق (.xls)</div>
+                    <div>ملف Excel لشركة التوصيل (.xls)</div>
                     <div className="text-[10px] font-normal text-slate-400">
-                      مع الحفاظ على أصفار أرقام الهاتف
+                      نفس الأعمدة الـ 18 مع حفظ أصفار الهاتف
                     </div>
                   </div>
                 </button>
@@ -834,6 +841,54 @@ export const OrdersTab: React.FC<Props> = ({
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* One-Click Supabase SQL Permission Helper (when orders DELETE / Sheet import RPC needs activation) */}
+      {ordersNeedsSql && (
+        <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-indigo-950 dark:text-indigo-100 space-y-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs space-y-0.5">
+              <div className="font-extrabold">
+                تفعيل صلاحية حذف الطلبات واستيرادها من Google Sheet في Supabase (مرة واحدة فقط)
+              </div>
+              <div className="text-[11px] text-indigo-700 dark:text-indigo-300">
+                انسخ الكود التالي والصقه في Supabase ← SQL Editor ثم اضغط Run، وبعدها سيعمل الحذف والمزامنة مباشرة.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                    void navigator.clipboard.writeText(ORDERS_SQL_MIGRATION_SNIPPET);
+                    setCopiedOrdersSql(true);
+                    setTimeout(() => setCopiedOrdersSql(false), 2500);
+                  }
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{copiedOrdersSql ? 'تم النسخ!' : 'نسخ كود SQL'}</span>
+              </button>
+              {onDismissOrdersSql && (
+                <button
+                  type="button"
+                  onClick={onDismissOrdersSql}
+                  className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
+                  title="إغلاق"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+          <pre
+            dir="ltr"
+            className="p-3 rounded-xl bg-slate-950 text-emerald-300 text-[10px] font-mono overflow-x-auto max-h-36 leading-relaxed"
+          >
+            {ORDERS_SQL_MIGRATION_SNIPPET}
+          </pre>
         </div>
       )}
 
