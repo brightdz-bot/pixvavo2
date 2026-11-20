@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { User, Store, UserRole } from '../types';
 import { storage } from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { isValidCustomDomain, normalizeDomainHost } from '../utils/urlRouting';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -25,6 +26,7 @@ interface AuthContextType {
     storeName: string;
     subdomain: string;
     phone: string;
+    customDomain?: string;
   }) => Promise<{ success: boolean; error?: string; store?: Store }>;
   refreshCurrentStore: () => Promise<void>;
 }
@@ -256,19 +258,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     storeName: string;
     subdomain: string;
     phone: string;
+    customDomain?: string;
   }): Promise<{ success: boolean; error?: string; store?: Store }> => {
     if (!currentUser) return { success: false, error: 'يرجى تسجيل الدخول أولاً' };
+    const cleanName = params.storeName.trim();
+    if (!cleanName || cleanName.length < 2) {
+      return { success: false, error: 'يرجى إدخال اسم صحيح للمتجر' };
+    }
     const cleanSubdomain = params.subdomain.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     if (!cleanSubdomain || cleanSubdomain.length < 3) {
       return { success: false, error: 'يجب أن يتكون معرف المتجر من 3 أحرف إنجليزية أو أرقام على الأقل' };
+    }
+    const normalizedDomain = normalizeDomainHost(params.customDomain || '');
+    if (params.customDomain?.trim() && !isValidCustomDomain(normalizedDomain)) {
+      return { success: false, error: 'صيغة النطاق الخاص غير صحيحة (مثال: myshop.com)' };
     }
 
     const res = await storage.saveStore({
       id: '',
       ownerId: currentUser.id,
-      name: params.storeName.trim(),
+      name: cleanName,
       subdomain: cleanSubdomain,
-      description: `مرحباً بكم في متجر ${params.storeName.trim()}`,
+      customDomain: normalizedDomain,
+      description: `مرحباً بكم في متجر ${cleanName}`,
       announcementText: 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
       brandColor: '#754b2d',
       freeShippingThreshold: 0,

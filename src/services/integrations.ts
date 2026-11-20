@@ -14,6 +14,7 @@ import {
   validateAlgerianPhone,
   validateCustomerName
 } from '../utils/orderValidation';
+import { isValidCustomDomain, normalizeDomainHost } from '../utils/urlRouting';
 
 declare global {
   interface Window {
@@ -1506,8 +1507,66 @@ export function triggerAutoOrderWhatsApp(params: {
   }).catch(() => {});
 }
 
-export const GOOGLE_APPS_SCRIPT_TEMPLATE = `var SCRIPT_VERSION = 4;
+export interface StoreAppsScriptOptions {
+  name?: string;
+  phone?: string;
+  defaultWhatsapp?: string;
+  customDomain?: string;
+  subdomain?: string;
+}
+
+function formatSupportPhoneForAppsScript(rawPhone?: string): string {
+  const digits = String(rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  let dzLocal = '';
+  if (digits.startsWith('00213') && digits.length >= 14) dzLocal = digits.slice(5, 14);
+  else if (digits.startsWith('213') && digits.length >= 12) dzLocal = digits.slice(3, 12);
+  else if (digits.startsWith('0') && digits.length === 10 && ['5', '6', '7'].includes(digits[1])) {
+    dzLocal = digits.slice(1);
+  } else if (digits.length === 9 && ['5', '6', '7'].includes(digits[0])) {
+    dzLocal = digits;
+  }
+  if (dzLocal.length === 9) {
+    return `+213 ${dzLocal.slice(0, 3)} ${dzLocal.slice(3, 5)} ${dzLocal.slice(5, 7)} ${dzLocal.slice(7, 9)}`;
+  }
+  if (digits.length >= 8) {
+    return `+${digits}`;
+  }
+  return String(rawPhone || '').trim();
+}
+
+function resolveStoreTrackingUrlForAppsScript(
+  store?: StoreAppsScriptOptions,
+  fallbackOrigin?: string
+): string {
+  const normalizedDomain = normalizeDomainHost(store?.customDomain || '');
+  if (normalizedDomain && isValidCustomDomain(normalizedDomain)) {
+    return `https://${normalizedDomain}/`;
+  }
+  const cleanOrigin = String(fallbackOrigin || '').trim().replace(/\/+$/, '');
+  const cleanSubdomain = String(store?.subdomain || '').trim();
+  if (cleanOrigin) {
+    if (cleanSubdomain && cleanSubdomain !== 'bright-dz') {
+      return `${cleanOrigin}/?store=${encodeURIComponent(cleanSubdomain)}`;
+    }
+    return `${cleanOrigin}/`;
+  }
+  return 'https://brightdz.vercel.app/';
+}
+
+export function buildGoogleAppsScriptForStore(
+  store?: StoreAppsScriptOptions,
+  fallbackOrigin?: string
+): string {
+  const storeName = String(store?.name || '').trim() || 'متجرنا';
+  const supportPhone = formatSupportPhoneForAppsScript(store?.defaultWhatsapp || store?.phone || '');
+  const trackingUrl = resolveStoreTrackingUrlForAppsScript(store, fallbackOrigin);
+
+  return `var SCRIPT_VERSION = 4;
 var ABANDONED_SHEET_NAME = "الطلبات المتروكة";
+var STORE_NAME = ${JSON.stringify(storeName)};
+var STORE_SUPPORT_PHONE = ${JSON.stringify(supportPhone)};
+var STORE_TRACKING_URL = ${JSON.stringify(trackingUrl)};
 
 function normalizeDzPhone(raw) {
   var digits = String(raw || "").replace(/[^0-9]/g, "");
@@ -1548,7 +1607,7 @@ function generateAbandonedWhatsAppFormula(phone, fullName, productText, totalPri
   if (formatted.indexOf("0") === 0) formatted = "213" + formatted.substring(1);
   var greeting = fullName ? ("السلام عليكم " + fullName + "،") : "السلام عليكم،";
   var msg = greeting + "\\n" +
-            "لاحظنا أنك بدأت بتسجيل طلبك من متجر BrightDZ ولم تكمل التأكيد.\\n" +
+            "لاحظنا أنك بدأت بتسجيل طلبك من متجر " + STORE_NAME + " ولم تكمل التأكيد.\\n" +
             (productText ? ("المنتج: " + productText + "\\n") : "") +
             (totalPrice > 0 ? ("المبلغ الإجمالي: " + totalPrice + " دج (الدفع عند الاستلام)\\n") : "") +
             "إذا واجهتك أي مشكلة أو أردت منا تأكيد الطلب لك مباشرة، أجبنا هنا فقط وسنجهز لك الطرد بكل سرور.";
@@ -1873,13 +1932,13 @@ function generateWhatsAppFormulas(phone, fullName, order, wilaya, commune, shipp
   var totalCalculated = (shippingCost + productPrice) - discount;
 
   var confirmMsg = "السلام عليكم " + fullName + "،\\n" +
-                   "وصلتنا طلبيتك من متجر BrightDZ.\\n" +
+                   "وصلتنا طلبيتك من متجر " + STORE_NAME + ".\\n" +
                    "المنتج: " + order + "\\n" +
                    (discount > 0 ? "المبلغ الأصلي: " + (shippingCost + productPrice) + " دج\\nخصم خاص: -" + discount + " دج\\n" : "") +
                    "المبلغ الإجمالي: " + totalCalculated + " دج (الدفع عند الاستلام)\\n" +
                    "التوصيل: " + (shippingType ? shippingType : "توصيل") + (wilaya ? " إلى " + wilaya : "") + (commune ? " (" + commune + ")" : "") + "\\n\\n" +
                    "باش نبعثوها، أكّد الطلب بالرد على هذه الرسالة (اكتب: تأكيد).\\n" +
-                   "لأي سؤال، كلّمنا على WhatsApp في الرقم +213 798 35 31 65.\\n" +
+                   (STORE_SUPPORT_PHONE ? ("لأي سؤال، كلّمنا على WhatsApp في الرقم " + STORE_SUPPORT_PHONE + ".\\n") : "") +
                    "شكراً على ثقتك.";
   var confirmUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(confirmMsg);
   var confirmFormula = '=HYPERLINK("' + confirmUrl + '", "💬 اضغط للتأكيد")';
@@ -1888,16 +1947,16 @@ function generateWhatsAppFormulas(phone, fullName, order, wilaya, commune, shipp
                     "نود إعلامك أن طلبيتك رقم (" + orderId + ") الخاصة بـ (" + order + ") حالتها الآن: *" + (status || "في شركة التوصيل") + "*.\\n\\n" +
                     (trackingCode ? "رمز التوصيل الخاص بك لدى شركة الشحن هو: *" + trackingCode + "*\\n\\n" : "") +
                     "سيتصل بك عامل التوصيل قريباً لتسليمك الطلبية، فضلاً حضّر المبلغ " + totalCalculated + " دج للدفع عند الاستلام.\\n\\n" +
-                    "شكراً لتسوقك معنا في متجر Bright DZ! 🌍";
+                    "شكراً لتسوقك معنا في متجر " + STORE_NAME + "! 🌍";
   var shippingUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(shippingMsg);
   var shippingFormula = '=HYPERLINK("' + shippingUrl + '", "📦 اضغط لإرسال رمز الشحن")';
 
-  var trackingSiteUrl = "https://brightdz.vercel.app/";
+  var trackingSiteUrl = STORE_TRACKING_URL;
   var trackingMsg = "مرحباً " + fullName + " 👋\\n\\n" +
                     "يمكنك متابعة حالة طلبيتك رقم (" + orderId + ") بشكل مباشر عبر زيارة صفحة التتبع في متجرنا:\\n" +
                     trackingSiteUrl + "\\n\\n" +
                     "رقم الطلب الخاص بك: *" + orderId + "*\\n" +
-                    "شكراً لتسوقك مع Bright DZ! 🌍";
+                    "شكراً لتسوقك مع " + STORE_NAME + "! 🌍";
   var trackingUrl = "https://wa.me/" + phone + "?text=" + encodeURIComponent(trackingMsg);
   var trackingFormula = '=HYPERLINK("' + trackingUrl + '", "🔍 رابط تتبع الطلب")';
 
@@ -2045,6 +2104,16 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
 }`;
+}
+
+export const GOOGLE_APPS_SCRIPT_TEMPLATE = buildGoogleAppsScriptForStore(
+  {
+    name: 'Bright DZ',
+    phone: '+213 798 35 31 65',
+    subdomain: 'bright-dz'
+  },
+  'https://brightdz.vercel.app'
+);
 
 export function normalizePhoneCanonical(raw?: string): string {
   const digits = String(raw || '').replace(/[^\d]/g, '');

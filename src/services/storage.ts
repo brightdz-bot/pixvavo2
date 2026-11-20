@@ -1184,17 +1184,26 @@ class StorageService {
 
       const suffix = Math.random().toString(36).substring(2, 6);
       for (const tpl of INITIAL_LANDING_PAGES) {
+        const cleanIntegrations = {
+          ...(tpl.integrations || {}),
+          pixelId: '',
+          tiktokPixelId: '',
+          whatsappNumber: '',
+          googleSheetWebhook: ''
+        };
         const res = await this.saveLandingPage({
           ...tpl,
           id: '',
-          storeId
+          storeId,
+          integrations: cleanIntegrations
         });
         if (!res.success && res.error?.toLowerCase().includes('duplicate')) {
           await this.saveLandingPage({
             ...tpl,
             id: '',
             storeId,
-            slug: `${tpl.slug}-${suffix}`
+            slug: `${tpl.slug}-${suffix}`,
+            integrations: cleanIntegrations
           });
         }
       }

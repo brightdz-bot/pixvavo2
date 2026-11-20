@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Store, WilayaRate, StoreApiConfig, PromoCoupon } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import {
-  GOOGLE_APPS_SCRIPT_TEMPLATE,
+  buildGoogleAppsScriptForStore,
   DEFAULT_WHATSAPP_CONFIRM_TEMPLATE,
   DEFAULT_WHATSAPP_SHIPPING_TEMPLATE
 } from '../../services/integrations';
@@ -194,9 +194,38 @@ export const SettingsTab: React.FC<Props> = ({
     });
   };
 
+  const currentOrigin =
+    typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '';
+
+  const storeAppsScript = useMemo(
+    () =>
+      buildGoogleAppsScriptForStore(
+        {
+          name: name.trim() || store.name,
+          phone: phone.trim() || store.phone,
+          defaultWhatsapp: defaultWhatsapp.trim() || store.defaultWhatsapp,
+          customDomain: customDomain.trim() || store.customDomain,
+          subdomain: store.subdomain
+        },
+        currentOrigin
+      ),
+    [
+      name,
+      phone,
+      defaultWhatsapp,
+      customDomain,
+      store.name,
+      store.phone,
+      store.defaultWhatsapp,
+      store.customDomain,
+      store.subdomain,
+      currentOrigin
+    ]
+  );
+
   const handleCopyAppsScript = async () => {
     try {
-      await navigator.clipboard?.writeText(GOOGLE_APPS_SCRIPT_TEMPLATE);
+      await navigator.clipboard?.writeText(storeAppsScript);
       setCopiedScript(true);
       setTimeout(() => setCopiedScript(false), 2500);
     } catch {
@@ -315,8 +344,6 @@ export const SettingsTab: React.FC<Props> = ({
   };
 
   const normalizedDomainPreview = normalizeDomainHost(customDomain);
-  const currentOrigin =
-    typeof window !== 'undefined' ? window.location.origin.replace(/\/+$/, '') : '';
   const storePreviewUrl = `${currentOrigin}/?store=${encodeURIComponent(store.subdomain)}`;
 
   const handleCopyPreviewUrl = () => {
@@ -618,7 +645,7 @@ export const SettingsTab: React.FC<Props> = ({
                       <Globe className="w-4 h-4 text-slate-400 shrink-0" />
                     )}
                     <span className="text-[10px] font-bold text-slate-700 dark:text-slate-200 truncate">
-                      {name || 'Bright DZ'}
+                      {name || 'متجرك'}
                     </span>
                   </div>
                 </div>
@@ -1090,10 +1117,10 @@ export const SettingsTab: React.FC<Props> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-slate-900 dark:text-white">
-                    كود Google Apps Script المحدّث (مزامنة ثنائية + تتبع)
+                    كود الربط المحدّث الخاص بمتجر {name.trim() || store.name}
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    انسخ الكود كاملاً وضعه في Google Sheet لنقل أو إعداد الربط في أي وقت
+                    مخصّص تلقائياً باسم متجرك ورقم واتسابه ونطاقه، ويشمل الطلبات المؤكدة والطلبات المتروكة
                   </p>
                 </div>
               </div>
@@ -1127,7 +1154,7 @@ export const SettingsTab: React.FC<Props> = ({
                   dir="ltr"
                   className="p-4 rounded-2xl bg-slate-950 text-emerald-300 font-mono text-[11px] leading-relaxed overflow-x-auto max-h-[360px] border border-slate-800"
                 >
-                  <code>{GOOGLE_APPS_SCRIPT_TEMPLATE}</code>
+                  <code>{storeAppsScript}</code>
                 </pre>
               </div>
             </div>

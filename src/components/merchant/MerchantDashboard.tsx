@@ -107,9 +107,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   // First-time private store setup form (in Supabase mode when DB has no store yet)
-  const [setupStoreName, setSetupStoreName] = useState('Bright DZ');
-  const [setupSubdomain, setSetupSubdomain] = useState('bright-dz');
-  const [setupPhone, setSetupPhone] = useState('0798353165');
+  const [setupStoreName, setSetupStoreName] = useState('');
+  const [setupSubdomain, setSetupSubdomain] = useState('');
+  const [setupPhone, setSetupPhone] = useState('');
+  const [setupCustomDomain, setSetupCustomDomain] = useState('');
   const [setupError, setSetupError] = useState<string | null>(null);
   const [isSettingUp, setIsSettingUp] = useState(false);
 
@@ -1259,7 +1260,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     const res = await setupPrivateStore({
       storeName: setupStoreName,
       subdomain: setupSubdomain,
-      phone: setupPhone
+      phone: setupPhone,
+      customDomain: setupCustomDomain
     });
     setIsSettingUp(false);
     if (!res.success) {
@@ -1324,6 +1326,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 required
                 value={setupStoreName}
                 onChange={e => setSetupStoreName(e.target.value)}
+                placeholder="مثال: متجر النخبة"
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
               />
             </div>
@@ -1335,6 +1338,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 required
                 value={setupSubdomain}
                 onChange={e => setSetupSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))}
+                placeholder="my-store"
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
               />
             </div>
@@ -1346,8 +1350,23 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 required
                 value={setupPhone}
                 onChange={e => setSetupPhone(e.target.value)}
+                placeholder="0550123456"
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-bold mb-1">النطاق الخاص المستقل (اختياري)</label>
+              <input
+                type="text"
+                dir="ltr"
+                value={setupCustomDomain}
+                onChange={e => setSetupCustomDomain(e.target.value)}
+                placeholder="myshop.com"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                يمكنك تركه فارغاً الآن وإضافته لاحقاً من إعدادات المتجر.
+              </p>
             </div>
             <button
               type="submit"

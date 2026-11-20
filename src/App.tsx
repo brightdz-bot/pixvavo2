@@ -10,7 +10,8 @@ import { MerchantDashboard } from './components/merchant/MerchantDashboard';
 import { PublicStorefront } from './components/storefront/PublicStorefront';
 import {
   buildLandingPagePath,
-  extractLandingSlugFromLocation
+  extractLandingSlugFromLocation,
+  isPlatformDefaultHost
 } from './utils/urlRouting';
 
 function getInitialSlugFromUrl(): string | null {
@@ -99,6 +100,16 @@ function AppContent() {
       url.searchParams.delete('shop');
       url.searchParams.delete('view');
       url.searchParams.delete('p');
+      if (
+        !slug &&
+        currentStore?.subdomain &&
+        currentStore.subdomain !== 'bright-dz' &&
+        isPlatformDefaultHost(window.location.hostname)
+      ) {
+        url.searchParams.set('store', currentStore.subdomain);
+      } else {
+        url.searchParams.delete('store');
+      }
       url.pathname = slug ? buildLandingPagePath(slug) : '/';
       window.history.pushState({}, '', url.toString());
     } catch {
