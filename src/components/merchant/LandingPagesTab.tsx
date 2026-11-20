@@ -10,6 +10,7 @@ import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS, formatDZD } from '../../data/wi
 import { DEFAULT_ASSETS } from '../../data/defaultAssets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { buildLandingPageUrl } from '../../utils/urlRouting';
+import { resizeImageToDataUrl } from '../../services/branding';
 import {
   Plus,
   Edit3,
@@ -156,23 +157,29 @@ export const LandingPagesTab: React.FC<Props> = ({
     }
   };
 
-  const handleImageFileUpload = (
+  const handleImageFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     onResult: (dataUrl: string) => void
   ) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setEditorError('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 2 ميغابايت.');
+    if (file.size > 6 * 1024 * 1024) {
+      setEditorError('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 6 ميغابايت.');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onResult(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const optimized = await resizeImageToDataUrl(file, 1200, false);
+      onResult(optimized);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          onResult(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleOfferChange = (idx: number, field: keyof LandingPageOffer, value: any) => {

@@ -12,6 +12,7 @@ import { formatDZD } from '../../data/wilayas';
 import { LandingPageView } from './LandingPageView';
 import { applyBrowserBranding } from '../../services/branding';
 import { buildLandingPagePath, normalizeSlug } from '../../utils/urlRouting';
+import { SmartImage } from '../common/SmartImage';
 import {
   Search,
   ShoppingBag,
@@ -257,30 +258,19 @@ export const PublicStorefront: React.FC<Props> = ({
 
   return (
     <MotionConfig reducedMotion="user">
-      <AnimatePresence mode="wait" initial={false}>
         {activePage ? (
-          <motion.div
-            key={`lp-${activePage.id}`}
-            initial={{ opacity: 0, y: 12, filter: 'blur(4px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
-            transition={{ duration: 0.26, ease: EASE_OUT_EXPO }}
-          >
+          <div key={`lp-${activePage.id}`}>
             <LandingPageView
               store={store}
               page={activePage}
               onBackToCatalog={closeLandingPage}
             />
-          </motion.div>
+          </div>
         ) : (
-          <motion.div
+          <div
             key="catalog-view"
             dir="rtl"
-            initial={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, y: 12, filter: 'blur(4px)' }}
-            transition={{ duration: 0.24, ease: EASE_OUT_EXPO }}
-            className="min-h-screen bg-[#fdfbf7] text-[#2c1810] flex flex-col"
+            className="min-h-screen w-full max-w-full overflow-x-clip bg-[#fdfbf7] text-[#2c1810] flex flex-col"
           >
             {/* Top Announcement Bar */}
             <div
@@ -299,11 +289,12 @@ export const PublicStorefront: React.FC<Props> = ({
                     style={{ backgroundColor: store.brandColor || '#754b2d' }}
                   >
                     {store.logoUrl && !logoImgError ? (
-                      <img
+                      <SmartImage
                         src={store.logoUrl}
                         alt={store.name}
-                        referrerPolicy="no-referrer"
-                        onError={() => setLogoImgError(true)}
+                        eager
+                        onFinalError={() => setLogoImgError(true)}
+                        fallback={<span>{store.name.slice(0, 1)}</span>}
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -433,10 +424,15 @@ export const PublicStorefront: React.FC<Props> = ({
                                 </span>
                               )}
                               {lp.mainImage ? (
-                                <img
+                                <SmartImage
                                   src={lp.mainImage}
                                   alt={lp.title}
-                                  referrerPolicy="no-referrer"
+                                  eager
+                                  fallback={
+                                    <div className="w-full h-full flex items-center justify-center text-slate-300">
+                                      <ImageOff className="w-10 h-10" />
+                                    </div>
+                                  }
                                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
                                 />
                               ) : (
@@ -648,9 +644,8 @@ export const PublicStorefront: React.FC<Props> = ({
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.div>
+          </div>
         )}
-      </AnimatePresence>
     </MotionConfig>
   );
 };

@@ -17,6 +17,7 @@ import {
   triggerAutoOrderWhatsApp
 } from '../../services/integrations';
 import { validateAlgerianPhone, validateCustomerName } from '../../utils/orderValidation';
+import { SmartImage } from '../common/SmartImage';
 import {
   Search,
   ShoppingCart,
@@ -194,6 +195,11 @@ export const LandingPageView: React.FC<Props> = ({
     page.integrations?.whatsappNumber?.trim() || store.defaultWhatsapp?.trim() || store.phone?.trim();
   const effectiveWebhook =
     page.integrations?.googleSheetWebhook?.trim() || store.googleSheetWebhook?.trim();
+
+  useEffect(() => {
+    setActiveImage(page.mainImage || allGallery[0] || '');
+    setImgError(false);
+  }, [page.id, page.mainImage, allGallery]);
 
   // Sync on page switch
   useEffect(() => {
@@ -1160,10 +1166,11 @@ export const LandingPageView: React.FC<Props> = ({
               style={{ backgroundColor: theme.primaryColor }}
             >
               {store.logoUrl ? (
-                <img
+                <SmartImage
                   src={store.logoUrl}
                   alt={store.name}
-                  referrerPolicy="no-referrer"
+                  eager
+                  fallback={<span>{store.name.slice(0, 1)}</span>}
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -1240,33 +1247,36 @@ export const LandingPageView: React.FC<Props> = ({
                     <span>{page.badgeText}</span>
                   </span>
                 )}
-                <AnimatePresence mode="wait" initial={false}>
-                  {activeImage && !imgError ? (
-                    <motion.img
-                      key={activeImage}
-                      src={activeImage}
-                      alt={page.title}
-                      referrerPolicy="no-referrer"
-                      onError={() => setImgError(true)}
-                      initial={{ opacity: 0, scale: 1.03 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.985 }}
-                      transition={{ duration: 0.22, ease: EASE_OUT_EXPO }}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <motion.div
-                      key="img-fallback"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="flex flex-col items-center gap-2 text-slate-400"
-                    >
-                      <ImageOff className="w-10 h-10" />
-                      <span className="text-xs">صورة المنتج</span>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {activeImage && !imgError ? (
+                  <SmartImage
+                    src={activeImage}
+                    alt={page.title}
+                    eager
+                    onFinalError={() => setImgError(true)}
+                    fallback={
+                      <div className="flex flex-col items-center gap-2 text-slate-400">
+                        <ImageOff className="w-10 h-10" />
+                        <span className="text-xs">صورة المنتج</span>
+                      </div>
+                    }
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-slate-400">
+                    <ImageOff className="w-10 h-10" />
+                    <span className="text-xs">صورة المنتج</span>
+                    {activeImage && (
+                      <button
+                        type="button"
+                        onClick={() => setImgError(false)}
+                        className="mt-1 px-3 py-1 rounded-lg border text-[11px] font-bold cursor-pointer"
+                        style={{ borderColor: theme.borderColor, color: theme.primaryColor }}
+                      >
+                        إعادة تحميل الصورة
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {allGallery.length > 1 && (
@@ -1274,12 +1284,9 @@ export const LandingPageView: React.FC<Props> = ({
                   {allGallery.map((imgUrl, idx) => {
                     const isSelected = activeImage === imgUrl;
                     return (
-                      <motion.button
+                      <button
                         key={idx}
                         type="button"
-                        whileHover={{ y: -2 }}
-                        whileTap={{ scale: 0.95 }}
-                        transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
                         onClick={() => {
                           setActiveImage(imgUrl);
                           setImgError(false);
@@ -1289,23 +1296,26 @@ export const LandingPageView: React.FC<Props> = ({
                           backgroundColor: theme.surfaceColor
                         }}
                       >
-                        <img
+                        <SmartImage
                           src={imgUrl}
                           alt={`${page.title} ${idx + 1}`}
-                          referrerPolicy="no-referrer"
+                          eager
+                          fallback={
+                            <div className="w-full h-16 flex items-center justify-center text-slate-300">
+                              <ImageOff className="w-4 h-4" />
+                            </div>
+                          }
                           className={`w-full h-16 object-cover transition-opacity duration-200 ${
                             isSelected ? 'opacity-100' : 'opacity-75 hover:opacity-100'
                           }`}
                         />
                         {isSelected && (
-                          <motion.span
-                            layoutId="lp-gallery-active-ring"
-                            transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+                          <span
                             className="absolute inset-0 rounded-xl border-2 pointer-events-none"
                             style={{ borderColor: theme.primaryColor }}
                           />
                         )}
-                      </motion.button>
+                      </button>
                     );
                   })}
                 </div>

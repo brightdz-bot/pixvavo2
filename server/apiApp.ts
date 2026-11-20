@@ -3239,5 +3239,97 @@ export function createApiApp(): Express {
     res.json({ ok: true, matched: false, host: cleanHost });
   });
 
+  // Same-origin image proxy fallback (used automatically when Facebook In-App Browser or external CDNs block direct image requests)
+  app.get('/api/image-proxy', async (req: Request, res: Response) => {
+    const rawUrl = String(req.query?.url || '').trim();
+    if (!rawUrl || rawUrl.length > 2048) {
+      res.status(400).send('Invalid image URL');
+      return;
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      res.status(400).send('Malformed image URL');
+      return;
+    }
+
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      res.status(400).send('Unsupported protocol');
+      return;
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    const isBlockedHost =
+      !host ||
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+      /^f[cd][0-9a-f]{2}:/i.test(host) ||
+      /^fe80:/i.test(host);
+
+    if (isBlockedHost) {
+      res.status(403).send('Blocked host');
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    try {
+      const upstream = await fetch(parsed.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+        }
+      });
+
+      if (!upstream.ok) {
+        res.status(upstream.status === 404 ? 404 : 502).send('Image fetch failed');
+        return;
+      }
+
+      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
+      const looksLikeImagePath = /\.(jpe?g|png|webp|gif|avif|bmp|ico|svg)(\?|$)/i.test(parsed.pathname);
+      if (!contentType.startsWith('image/') && !(looksLikeImagePath && contentType.includes('octet-stream'))) {
+        res.status(415).send('Not an image');
+        return;
+      }
+
+      const contentLength = Number(upstream.headers.get('content-length') || 0);
+      if (contentLength > 8 * 1024 * 1024) {
+        res.status(413).send('Image too large');
+        return;
+      }
+
+      const arrayBuf = await upstream.arrayBuffer();
+      if (arrayBuf.byteLength > 8 * 1024 * 1024) {
+        res.status(413).send('Image too large');
+        return;
+      }
+
+      const finalType = contentType.startsWith('image/') ? contentType : 'image/jpeg';
+      res.setHeader('Content-Type', finalType);
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.status(200).send(Buffer.from(arrayBuf));
+    } catch {
+      res.status(504).send('Image proxy timeout');
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   return app;
 }
