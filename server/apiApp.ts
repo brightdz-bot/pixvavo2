@@ -268,21 +268,32 @@ function hasArabicChars(input?: string): boolean {
 }
 
 function resolveWilayaMeta(wilayaIdRaw?: string, wilayaNameRaw?: string) {
-  const numId = parseInt(String(wilayaIdRaw || ''), 10);
-  if (numId >= 1 && numId <= 58) {
-    const code = String(numId).padStart(2, '0');
-    const found = WILAYA_ENTRIES.find(w => w.code === code);
-    if (found) return found;
-  }
   const cleanName = String(wilayaNameRaw || '').trim();
   const normLatin = stripLatinDiacritics(cleanName);
-  const byMatch = WILAYA_ENTRIES.find(
-    w =>
-      w.nameAr === cleanName ||
-      cleanName.includes(w.nameAr) ||
-      (normLatin && stripLatinDiacritics(w.nameFr) === normLatin)
-  );
-  return byMatch || WILAYA_ENTRIES[15];
+  const byExactName = cleanName
+    ? WILAYA_ENTRIES.find(
+        w =>
+          w.nameAr === cleanName ||
+          (normLatin && stripLatinDiacritics(w.nameFr) === normLatin)
+      )
+    : undefined;
+
+  const numId = parseInt(String(wilayaIdRaw || ''), 10);
+  const byCode =
+    numId >= 1 && numId <= 58
+      ? WILAYA_ENTRIES.find(w => w.code === String(numId).padStart(2, '0'))
+      : undefined;
+
+  // Prefer an exact wilayaName match if wilayaId was defaulted/mismatched
+  if (byExactName && (!byCode || byCode.code !== byExactName.code)) {
+    return byExactName;
+  }
+  if (byCode) return byCode;
+
+  const byPartialName = cleanName
+    ? WILAYA_ENTRIES.find(w => cleanName.includes(w.nameAr))
+    : undefined;
+  return byPartialName || WILAYA_ENTRIES[15];
 }
 
 function transliterateArabicToLatin(raw: string): string {
@@ -360,40 +371,66 @@ function bigramScore(a: string, b: string): number {
   return (2 * matches) / (s1.length - 1 + (s2.length - 1));
 }
 
+function rankCandidateNames(
+  desiredRaw: string,
+  candidates: Array<{ name: string; arName?: string; preferred?: boolean }>,
+  wilayaFallbackFr?: string
+): string[] {
+  if (candidates.length === 0) return [];
+  const desiredTrim = String(desiredRaw || '').trim();
+  const desiredHasAr = hasArabicChars(desiredTrim);
+  const desiredLatin = desiredHasAr
+    ? transliterateArabicToLatin(desiredTrim)
+    : stripLatinDiacritics(desiredTrim);
+  // Algerian Arabic often transliterates ق as g (Timgad, Guelma, Ouargla, Touggourt)
+  const desiredLatinAltG = desiredHasAr
+    ? transliterateArabicToLatin(desiredTrim.replace(/ق/g, 'g'))
+    : desiredLatin;
+  const wilayaNorm = stripLatinDiacritics(wilayaFallbackFr || '');
+
+  const scored = candidates
+    .map(cand => {
+      const candLatin = stripLatinDiacritics(cand.name);
+      if (!candLatin) return { name: cand.name, score: -1 };
+      let score = Math.max(
+        bigramScore(desiredLatin, candLatin),
+        bigramScore(desiredLatinAltG, candLatin)
+      );
+      if (cand.arName && cand.arName.trim() === desiredTrim) score += 2.5;
+      if (candLatin === desiredLatin || candLatin === desiredLatinAltG) score += 1.5;
+      if (
+        desiredLatin.length >= 4 &&
+        (candLatin.includes(desiredLatin) || desiredLatin.includes(candLatin))
+      ) {
+        score += 0.35;
+      }
+      if (cand.preferred) score += 0.05;
+      if (wilayaNorm && (candLatin === wilayaNorm || candLatin === `${wilayaNorm} centre`)) {
+        score += 0.04;
+      }
+      return { name: cand.name, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const item of scored) {
+    const key = item.name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item.name);
+    }
+  }
+  return unique;
+}
+
 function pickBestCandidateName(
   desiredRaw: string,
   candidates: Array<{ name: string; arName?: string; preferred?: boolean }>,
   wilayaFallbackFr?: string
 ): string {
-  if (candidates.length === 0) return desiredRaw;
-  const desiredTrim = String(desiredRaw || '').trim();
-  const desiredArExact = candidates.find(c => c.arName && c.arName.trim() === desiredTrim);
-  if (desiredArExact) return desiredArExact.name;
-
-  const desiredLatin = hasArabicChars(desiredTrim)
-    ? transliterateArabicToLatin(desiredTrim)
-    : stripLatinDiacritics(desiredTrim);
-
-  let best = candidates.find(c => c.preferred) || candidates[0];
-  let bestScore = -1;
-  const wilayaNorm = stripLatinDiacritics(wilayaFallbackFr || '');
-
-  for (const cand of candidates) {
-    const candLatin = stripLatinDiacritics(cand.name);
-    if (!candLatin) continue;
-    let score = bigramScore(desiredLatin, candLatin);
-    if (candLatin === desiredLatin) score += 1;
-    if (cand.preferred) score += 0.05;
-    if (wilayaNorm && (candLatin === wilayaNorm || candLatin === `${wilayaNorm} centre`)) {
-      score += 0.04;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = cand;
-    }
-  }
-
-  return best.name;
+  const ranked = rankCandidateNames(desiredRaw, candidates, wilayaFallbackFr);
+  return ranked[0] || desiredRaw;
 }
 
 const courierMetaCache = new Map<string, { expiresAt: number; data: any }>();
@@ -1106,63 +1143,184 @@ export function createApiApp(): Express {
           Authorization: `Bearer ${apiToken}`,
           Accept: 'application/json'
         };
-        const communesJson = await cachedCourierGet(
-          `ecotrack:${baseUrl}:communes:${toWilayaCode}`,
-          `${baseUrl}/get/communes?wilaya_id=${toWilayaCode}`,
-          ecoHeaders
-        );
-        const flattenCommuneEntries = (raw: any): any[] => {
-          if (Array.isArray(raw)) return raw;
-          if (Array.isArray(raw?.data)) return raw.data;
-          if (raw && typeof raw === 'object') {
-            const vals = Object.values(raw);
-            const items: any[] = [];
-            vals.forEach(v => {
-              if (Array.isArray(v)) items.push(...v);
-              else if (v && typeof v === 'object' && ('nom' in v || 'commune' in v || 'name' in v)) {
-                items.push(v);
+
+        const isTruthFlag = (val: any) =>
+          val === 1 || val === true || val === '1' || String(val).toLowerCase() === 'true';
+        const isFalseFlag = (val: any) =>
+          val === 0 || val === false || val === '0' || String(val).toLowerCase() === 'false';
+
+        const META_OBJECT_KEYS = new Set([
+          'success',
+          'status',
+          'message',
+          'error',
+          'errors',
+          'code',
+          'meta',
+          'links'
+        ]);
+
+        const flattenEcotrackCommunes = (raw: any, inheritedWilayaId?: number): any[] => {
+          if (!raw) return [];
+          if (Array.isArray(raw)) {
+            const out: any[] = [];
+            for (const item of raw) {
+              if (typeof item === 'string' && item.trim()) {
+                out.push({ nom: item.trim(), wilaya_id: inheritedWilayaId });
+              } else if (item && typeof item === 'object') {
+                out.push(
+                  inheritedWilayaId && item.wilaya_id === undefined
+                    ? { ...item, wilaya_id: inheritedWilayaId }
+                    : item
+                );
               }
-            });
+            }
+            return out;
+          }
+          if (typeof raw === 'object') {
+            if (Array.isArray(raw.data)) return flattenEcotrackCommunes(raw.data, inheritedWilayaId);
+            if (raw.data && typeof raw.data === 'object') {
+              return flattenEcotrackCommunes(raw.data, inheritedWilayaId);
+            }
+            if (Array.isArray(raw.communes)) {
+              return flattenEcotrackCommunes(raw.communes, inheritedWilayaId);
+            }
+            if (raw.communes && typeof raw.communes === 'object') {
+              return flattenEcotrackCommunes(raw.communes, inheritedWilayaId);
+            }
+            const items: any[] = [];
+            for (const [k, v] of Object.entries(raw)) {
+              if (META_OBJECT_KEYS.has(k.toLowerCase())) continue;
+              const numericKey = /^\d{1,2}$/.test(k) ? Number(k) : undefined;
+              if (Array.isArray(v)) {
+                items.push(...flattenEcotrackCommunes(v, numericKey ?? inheritedWilayaId));
+              } else if (typeof v === 'string' && v.trim()) {
+                items.push({ nom: v.trim(), wilaya_id: inheritedWilayaId });
+              } else if (v && typeof v === 'object') {
+                const obj = v as Record<string, any>;
+                const hasNameField =
+                  'nom' in obj || 'commune' in obj || 'commune_name' in obj || 'name' in obj;
+                const hasCommuneShape =
+                  hasNameField ||
+                  'wilaya_id' in obj ||
+                  'code_wilaya' in obj ||
+                  'has_stop_desk' in obj ||
+                  'stop_desk' in obj ||
+                  'code_postal' in obj;
+                if (hasCommuneShape) {
+                  items.push({
+                    ...obj,
+                    nom:
+                      obj.nom ||
+                      obj.commune ||
+                      obj.commune_name ||
+                      obj.name ||
+                      (!/^\d+$/.test(k) ? k.trim() : ''),
+                    wilaya_id:
+                      obj.wilaya_id ??
+                      obj.code_wilaya ??
+                      obj.wilaya_code ??
+                      obj.id_wilaya ??
+                      inheritedWilayaId
+                  });
+                } else {
+                  items.push(...flattenEcotrackCommunes(obj, numericKey ?? inheritedWilayaId));
+                }
+              }
+            }
             return items;
           }
           return [];
         };
 
-        const allEntries = flattenCommuneEntries(communesJson);
-        const hasWilayaField = allEntries.some(
-          c => c?.wilaya_id !== undefined && c?.wilaya_id !== null
+        const extractWilayaEntries = (rawJson: any) => {
+          const all = flattenEcotrackCommunes(rawJson);
+          const hasWilayaField = all.some(
+            c =>
+              c?.wilaya_id !== undefined &&
+              c?.wilaya_id !== null &&
+              String(c?.wilaya_id).trim() !== ''
+          );
+          const filtered = hasWilayaField
+            ? all.filter(c => Number(c?.wilaya_id) === toWilayaCode)
+            : all;
+          return filtered;
+        };
+
+        let wilayaEntries: any[] = [];
+        const byWilayaJson = await cachedCourierGet(
+          `ecotrack:${baseUrl}:communes:${toWilayaCode}`,
+          `${baseUrl}/get/communes?wilaya_id=${toWilayaCode}&api_token=${encodeURIComponent(apiToken)}`,
+          ecoHeaders
         );
-        const wilayaEntries = hasWilayaField
-          ? allEntries.filter(c => Number(c?.wilaya_id) === toWilayaCode)
-          : allEntries;
-        const poolEntries = wilayaEntries.length > 0 ? wilayaEntries : allEntries;
+        wilayaEntries = extractWilayaEntries(byWilayaJson);
 
-        const isTruthFlag = (val: any) =>
-          val === 1 || val === true || val === '1' || String(val).toLowerCase() === 'true';
+        // Fallback: fetch full communes catalog if per-wilaya query returned empty
+        if (wilayaEntries.length === 0) {
+          courierMetaCache.delete(`ecotrack:${baseUrl}:communes:${toWilayaCode}`);
+          const allCommunesJson = await cachedCourierGet(
+            `ecotrack:${baseUrl}:communes:all`,
+            `${baseUrl}/get/communes?api_token=${encodeURIComponent(apiToken)}`,
+            ecoHeaders
+          );
+          wilayaEntries = extractWilayaEntries(allCommunesJson);
+        }
 
-        const ecoCandidates = poolEntries
+        const parsedCommunes = wilayaEntries
           .map(c => ({
-            name: String(c?.nom || c?.commune || c?.name || '').trim(),
-            arName: String(c?.ar_name || c?.nom_ar || '').trim(),
-            hasStopDesk: isTruthFlag(c?.has_stop_desk) || isTruthFlag(c?.stop_desk) || isTruthFlag(c?.is_stopdesk)
+            name: String(c?.nom || c?.commune || c?.commune_name || c?.name || '').trim(),
+            arName: String(c?.ar_name || c?.nom_ar || c?.arabic_name || '').trim(),
+            hasStopDesk:
+              isTruthFlag(c?.has_stop_desk) ||
+              isTruthFlag(c?.stop_desk) ||
+              isTruthFlag(c?.is_stopdesk),
+            isDisabled:
+              isFalseFlag(c?.active) ||
+              isFalseFlag(c?.is_active) ||
+              isFalseFlag(c?.deliverable) ||
+              isFalseFlag(c?.is_deliverable) ||
+              isFalseFlag(c?.enabled) ||
+              isTruthFlag(c?.suspend) ||
+              isTruthFlag(c?.suspended) ||
+              isTruthFlag(c?.disabled)
           }))
           .filter(c => Boolean(c.name));
 
+        const activeCommunes = parsedCommunes.filter(c => !c.isDisabled);
+        const ecoCandidates = activeCommunes.length > 0 ? activeCommunes : parsedCommunes;
         const stopDeskCandidates = ecoCandidates.filter(c => c.hasStopDesk);
         const desiredCommune = String(order.commune || toWilayaMeta.nameFr).trim();
 
         const pickPool =
           isStopDesk && stopDeskCandidates.length > 0 ? stopDeskCandidates : ecoCandidates;
 
-        let resolvedCommune = desiredCommune;
-        if (pickPool.length > 0) {
-          resolvedCommune = pickBestCandidateName(
-            desiredCommune,
-            pickPool.map(c => ({ name: c.name, arName: c.arName, preferred: c.hasStopDesk })),
-            toWilayaMeta.nameFr
-          );
-        } else if (hasArabicChars(desiredCommune)) {
-          resolvedCommune = toWilayaMeta.nameFr;
+        const rankedFromPool = rankCandidateNames(
+          desiredCommune,
+          pickPool.map(c => ({ name: c.name, arName: c.arName, preferred: c.hasStopDesk })),
+          toWilayaMeta.nameFr
+        );
+
+        const asciiWilayaFr = toWilayaMeta.nameFr
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
+        const staticWilayaFallbacks = Array.from(
+          new Set(
+            [
+              toWilayaCode === 16 ? 'Alger Centre' : '',
+              toWilayaCode === 16 ? 'Bab El Oued' : '',
+              toWilayaCode === 16 ? 'Hydra' : '',
+              toWilayaCode === 58 ? 'El Meniaa' : '',
+              asciiWilayaFr,
+              toWilayaMeta.nameFr,
+              `${asciiWilayaFr} Centre`
+            ].filter(Boolean)
+          )
+        );
+
+        let resolvedCommune = rankedFromPool[0] || desiredCommune;
+        if (rankedFromPool.length === 0 && hasArabicChars(desiredCommune)) {
+          resolvedCommune = staticWilayaFallbacks[0] || toWilayaMeta.nameFr;
         }
 
         const buildEcoPayload = (communeName: string, extraNote = '') => {
@@ -1194,12 +1352,14 @@ export function createApiApp(): Express {
             body: JSON.stringify(buildEcoPayload(communeName, extraNote))
           });
 
-        let result = await sendEcoOrder(
-          resolvedCommune,
-          isStopDesk && desiredCommune && !desiredCommune.includes(resolvedCommune)
-            ? `Stop Desk - بلدية الزبون: ${desiredCommune}`
-            : ''
-        );
+        const initialNote =
+          desiredCommune &&
+          stripLatinDiacritics(desiredCommune) !== stripLatinDiacritics(resolvedCommune)
+            ? `${isStopDesk ? 'Stop Desk - ' : ''}بلدية الزبون: ${desiredCommune}`
+            : '';
+
+        let finalUsedCommune = resolvedCommune;
+        let result = await sendEcoOrder(resolvedCommune, initialNote);
 
         let trackingCode = String(
           result.json?.tracking ||
@@ -1208,39 +1368,65 @@ export function createApiApp(): Express {
             ''
         ).trim();
 
-        // If Ecotrack rejects Stop Desk on this commune, retry with likely stop-desk hub communes in the same wilaya
-        if ((!result.ok || !trackingCode) && isStopDesk) {
+        // Auto-retry when Ecotrack rejects either stop_desk OR commune spelling/disabled/wilaya mismatch
+        if (!result.ok || !trackingCode) {
           const errFirst = extractCourierApiError(result.json, result.text).toLowerCase();
-          if (errFirst.includes('stop_desk') || errFirst.includes('stop desk')) {
+          const isStopDeskErr =
+            isStopDesk && (errFirst.includes('stop_desk') || errFirst.includes('stop desk'));
+          const isCommuneErr =
+            errFirst.includes('commune') ||
+            errFirst.includes('mal écrite') ||
+            errFirst.includes('mal ecrite') ||
+            errFirst.includes('désactiv') ||
+            errFirst.includes('desactiv') ||
+            errFirst.includes('erron') ||
+            errFirst.includes('appartient pas');
+
+          if (isStopDeskErr || isCommuneErr) {
             const tried = new Set<string>([resolvedCommune.toLowerCase()]);
             const fallbackNames: string[] = [];
+            const pushCandidate = (name: string) => {
+              const clean = String(name || '').trim();
+              if (!clean) return;
+              const key = clean.toLowerCase();
+              if (!tried.has(key) && !fallbackNames.some(f => f.toLowerCase() === key)) {
+                fallbackNames.push(clean);
+              }
+            };
 
-            for (const c of stopDeskCandidates) {
-              if (!tried.has(c.name.toLowerCase())) fallbackNames.push(c.name);
+            // 1. Next-best ranked matches from the active pool
+            for (const name of rankedFromPool.slice(1, 5)) {
+              pushCandidate(name);
             }
+
+            // 2. Stop-desk hubs when stop_desk order
+            if (isStopDesk) {
+              for (const c of stopDeskCandidates) pushCandidate(c.name);
+            }
+
+            // 3. Wilaya chef-lieu / centre hubs from Ecotrack catalog
             const wilayaNorm = stripLatinDiacritics(toWilayaMeta.nameFr);
-            const sortedHubMatches = ecoCandidates
-              .filter(c => {
-                const n = stripLatinDiacritics(c.name);
-                return (
-                  n === wilayaNorm ||
-                  n === `${wilayaNorm} centre` ||
-                  n.includes('centre') ||
-                  n.startsWith(wilayaNorm)
-                );
-              })
-              .map(c => c.name);
-            for (const hub of [...sortedHubMatches, toWilayaMeta.nameFr, ...ecoCandidates.slice(0, 4).map(c => c.name)]) {
-              if (hub && !tried.has(hub.toLowerCase()) && !fallbackNames.includes(hub)) {
-                fallbackNames.push(hub);
+            for (const c of ecoCandidates) {
+              const n = stripLatinDiacritics(c.name);
+              if (
+                n === wilayaNorm ||
+                n === `${wilayaNorm} centre` ||
+                n.includes('centre') ||
+                n.startsWith(wilayaNorm)
+              ) {
+                pushCandidate(c.name);
               }
             }
 
-            for (const altCommune of fallbackNames.slice(0, 4)) {
+            // 4. Static ASCII chef-lieu names + top active communes in this wilaya
+            for (const name of staticWilayaFallbacks) pushCandidate(name);
+            for (const c of ecoCandidates.slice(0, 5)) pushCandidate(c.name);
+
+            for (const altCommune of fallbackNames.slice(0, 6)) {
               tried.add(altCommune.toLowerCase());
               const retryRes = await sendEcoOrder(
                 altCommune,
-                `Stop Desk - بلدية الزبون: ${desiredCommune}`
+                `${isStopDesk ? 'Stop Desk - ' : ''}بلدية الزبون: ${desiredCommune}`
               );
               const retryTrack = String(
                 retryRes.json?.tracking ||
@@ -1251,6 +1437,7 @@ export function createApiApp(): Express {
               if (retryRes.ok && retryTrack) {
                 result = retryRes;
                 trackingCode = retryTrack;
+                finalUsedCommune = altCommune;
                 break;
               }
             }
@@ -1266,13 +1453,17 @@ export function createApiApp(): Express {
         ).trim();
 
         if (result.ok && trackingCode) {
+          const usedFallbackNote =
+            finalUsedCommune.toLowerCase() !== resolvedCommune.toLowerCase()
+              ? ` (تم اعتماد بلدية "${finalUsedCommune}" وإرفاق بلدية الزبون في الملاحظات)`
+              : '';
           res.json({
             ok: true,
             trackingCode,
             labelUrl,
             provider,
             latencyMs: result.latencyMs,
-            message: `تم إنشاء الطرد في ${label} وتوليد رمز التتبع ${trackingCode}`
+            message: `تم إنشاء الطرد في ${label} وتوليد رمز التتبع ${trackingCode}${usedFallbackNote}`
           });
           return;
         }

@@ -29,10 +29,44 @@ const ORDER_COURIER_META_KEY = 'brightdz_order_courier_meta';
 const DELETED_SHEET_ORDERS_KEY = 'brightdz_deleted_sheet_orders';
 
 export const ORDERS_SQL_MIGRATION_SNIPPET = `BEGIN;
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE SET search_path = '' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin');
+$$;
+CREATE OR REPLACE FUNCTION public.owns_store(p_store_id UUID)
+RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER STABLE SET search_path = '' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.stores WHERE id = p_store_id AND owner_id = auth.uid());
+$$;
+
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS store_id UUID,
+  ADD COLUMN IF NOT EXISTS landing_page_id UUID,
+  ADD COLUMN IF NOT EXISTS bundle_label TEXT,
+  ADD COLUMN IF NOT EXISTS commune TEXT,
+  ADD COLUMN IF NOT EXISTS delivery_type TEXT NOT NULL DEFAULT 'home',
+  ADD COLUMN IF NOT EXISTS tracking_code TEXT,
+  ADD COLUMN IF NOT EXISTS courier_provider TEXT,
+  ADD COLUMN IF NOT EXISTS courier_label_url TEXT,
+  ADD COLUMN IF NOT EXISTS status_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'cod',
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'stores') THEN
+    UPDATE public.orders
+    SET store_id = (SELECT id FROM public.stores ORDER BY created_at ASC LIMIT 1)
+    WHERE store_id IS NULL;
+  END IF;
+END $$;
+
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS orders_owner_delete ON public.orders;
 CREATE POLICY orders_owner_delete ON public.orders
   FOR DELETE TO authenticated
-  USING (public.owns_store(store_id) OR public.is_admin());
+  USING (public.owns_store(public.orders.store_id) OR public.is_admin());
 GRANT DELETE ON TABLE public.orders TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.delete_orders(p_store_id UUID, p_order_ids UUID[])
@@ -63,6 +97,9 @@ BEGIN
     RAISE EXCEPTION 'غير مصرح لك باستيراد طلبات لهذا المتجر';
   END IF;
   v_order_num := upper(trim(regexp_replace(COALESCE(p_order_number, ''), '^#', '')));
+  IF v_order_num = '' THEN RAISE EXCEPTION 'رقم الطلب غير صالح'; END IF;
+  SELECT id INTO v_id FROM public.orders WHERE upper(trim(order_number)) = v_order_num LIMIT 1;
+  IF v_id IS NOT NULL THEN RETURN jsonb_build_object('id', v_id, 'orderNumber', v_order_num, 'existing', true); END IF;
   v_wilaya_id := CASE WHEN EXISTS (SELECT 1 FROM public.wilayas WHERE id = p_wilaya_id) THEN p_wilaya_id ELSE '16' END;
   v_status := CASE WHEN p_status IN ('new','confirmed','shipping','delivered','cancelled') THEN p_status ELSE 'new' END;
   v_delivery := CASE WHEN p_delivery_type = 'stop' THEN 'stop' ELSE 'home' END;
@@ -84,7 +121,7 @@ BEGIN
     v_status, NULLIF(left(trim(COALESCE(p_tracking_code, '')), 120), ''),
     jsonb_build_array(jsonb_build_object('status', v_status, 'timestamp', COALESCE(p_created_at, now()), 'note', 'تم استيراد الطلب تلقائياً من Google Sheet')),
     'cod', 'مستورد من Google Sheet', COALESCE(p_created_at, now())
-  ) ON CONFLICT (order_number) DO NOTHING RETURNING id INTO v_id;
+  ) RETURNING id INTO v_id;
   RETURN jsonb_build_object('id', v_id, 'orderNumber', v_order_num);
 END;
 $$;

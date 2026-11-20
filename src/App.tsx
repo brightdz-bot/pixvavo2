@@ -8,14 +8,13 @@ import { AuthProvider, useAuth } from './services/authContext';
 import { RoleSwitcherBanner } from './components/common/RoleSwitcherBanner';
 import { MerchantDashboard } from './components/merchant/MerchantDashboard';
 import { PublicStorefront } from './components/storefront/PublicStorefront';
+import {
+  buildLandingPagePath,
+  extractLandingSlugFromLocation
+} from './utils/urlRouting';
 
 function getInitialSlugFromUrl(): string | null {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('p');
-  } catch {
-    return null;
-  }
+  return extractLandingSlugFromLocation();
 }
 
 function isAdminRouteFromUrl(): boolean {
@@ -99,12 +98,8 @@ function AppContent() {
       url.searchParams.delete('banana');
       url.searchParams.delete('shop');
       url.searchParams.delete('view');
-      url.pathname = '/';
-      if (slug) {
-        url.searchParams.set('p', slug);
-      } else {
-        url.searchParams.delete('p');
-      }
+      url.searchParams.delete('p');
+      url.pathname = slug ? buildLandingPagePath(slug) : '/';
       window.history.pushState({}, '', url.toString());
     } catch {
       // ignore

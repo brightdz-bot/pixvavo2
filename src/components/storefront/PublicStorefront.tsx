@@ -11,6 +11,7 @@ import {
 import { formatDZD } from '../../data/wilayas';
 import { LandingPageView } from './LandingPageView';
 import { applyBrowserBranding } from '../../services/branding';
+import { buildLandingPagePath, normalizeSlug } from '../../utils/urlRouting';
 import {
   Search,
   ShoppingBag,
@@ -54,7 +55,7 @@ export const PublicStorefront: React.FC<Props> = ({
   const [logoImgError, setLogoImgError] = useState(false);
 
   useEffect(() => {
-    if (initialSlug) setActivePageSlug(initialSlug);
+    setActivePageSlug(initialSlug || null);
   }, [initialSlug]);
 
   useEffect(() => {
@@ -123,8 +124,9 @@ export const PublicStorefront: React.FC<Props> = ({
 
   useEffect(() => {
     if (!store) return;
-    const activeLp = activePageSlug
-      ? pages.find(p => p.slug.toLowerCase() === activePageSlug.toLowerCase())
+    const targetSlug = normalizeSlug(activePageSlug);
+    const activeLp = targetSlug
+      ? pages.find(p => normalizeSlug(p.slug) === targetSlug)
       : null;
     applyBrowserBranding({
       title: activeLp ? `${activeLp.title} | ${store.name}` : store.name,
@@ -136,8 +138,9 @@ export const PublicStorefront: React.FC<Props> = ({
     setActivePageSlug(slug);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set('p', slug);
-      window.history.replaceState({}, '', url.toString());
+      url.pathname = buildLandingPagePath(slug);
+      url.searchParams.delete('p');
+      window.history.pushState({}, '', url.toString());
     } catch {
       // ignore history errors inside sandboxed iframes
     }
@@ -148,8 +151,9 @@ export const PublicStorefront: React.FC<Props> = ({
     setActivePageSlug(null);
     try {
       const url = new URL(window.location.href);
+      url.pathname = '/';
       url.searchParams.delete('p');
-      window.history.replaceState({}, '', url.toString());
+      window.history.pushState({}, '', url.toString());
     } catch {
       // ignore
     }
@@ -229,8 +233,9 @@ export const PublicStorefront: React.FC<Props> = ({
   }
 
   // If a landing page slug is active, render the full dedicated LandingPageView!
-  const activePage = activePageSlug
-    ? pages.find(p => p.slug.toLowerCase() === activePageSlug.toLowerCase())
+  const normalizedTargetSlug = normalizeSlug(activePageSlug);
+  const activePage = normalizedTargetSlug
+    ? pages.find(p => normalizeSlug(p.slug) === normalizedTargetSlug)
     : null;
 
   const categories = ['الكل', ...Array.from(new Set(pages.map(p => p.category)))];

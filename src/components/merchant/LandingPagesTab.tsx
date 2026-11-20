@@ -9,6 +9,7 @@ import {
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS, formatDZD } from '../../data/wilayas';
 import { DEFAULT_ASSETS } from '../../data/defaultAssets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { buildLandingPageUrl } from '../../utils/urlRouting';
 import {
   Plus,
   Edit3,
@@ -119,10 +120,28 @@ export const LandingPagesTab: React.FC<Props> = ({
 
   const handleCopyLink = (slug: string) => {
     try {
-      const url = new URL(window.location.origin);
-      url.pathname = '/';
-      url.searchParams.set('p', slug);
-      navigator.clipboard?.writeText(url.toString());
+      const cleanUrl = buildLandingPageUrl(slug);
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(cleanUrl).catch(() => {
+          const ta = document.createElement('textarea');
+          ta.value = cleanUrl;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        });
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = cleanUrl;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setCopiedSlug(slug);
       setTimeout(() => setCopiedSlug(null), 2000);
     } catch {
@@ -306,8 +325,20 @@ export const LandingPagesTab: React.FC<Props> = ({
       }))
       .filter(r => r.comment.length > 0);
 
+    const cleanSlug = editingPage.slug
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (!cleanSlug) {
+      setEditorError('يرجى إدخال رابط الصفحة بالأحرف الإنجليزية والأرقام فقط');
+      setIsSaving(false);
+      return;
+    }
+
     const ok = await onSaveLandingPage({
       ...editingPage,
+      slug: cleanSlug,
       variants: cleanVariants,
       reviews: cleanReviews,
       galleryImages: editingPage.galleryImages.filter(Boolean)
@@ -1242,7 +1273,7 @@ export const LandingPagesTab: React.FC<Props> = ({
                   <div className="flex-1 min-w-0 space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[11px] font-mono text-slate-400 truncate" dir="ltr">
-                        ?p={lp.slug}
+                        /p/{lp.slug}
                       </span>
                       <span
                         className={`text-[11px] font-bold ${
