@@ -1119,7 +1119,7 @@ export const LandingPageView: React.FC<Props> = ({
   return (
     <div
       dir="rtl"
-      className="min-h-screen flex flex-col transition-colors"
+      className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors"
       style={{ backgroundColor: theme.bgColor, color: theme.textColor }}
     >
       {/* Top Announcement Bar */}
@@ -1652,10 +1652,10 @@ export const LandingPageView: React.FC<Props> = ({
                   }}
                   className="space-y-5"
                 >
-                  {/* Invisible anti-bot honeypot field */}
+                  {/* Invisible anti-bot honeypot field (kept inside viewport bounds so RTL mobile never overflows horizontally) */}
                   <div
                     aria-hidden="true"
-                    className="sr-only absolute -left-[9999px] w-px h-px overflow-hidden opacity-0 pointer-events-none"
+                    className="sr-only opacity-0 pointer-events-none"
                   >
                     <label htmlFor="order_company_website">Website</label>
                     <input
