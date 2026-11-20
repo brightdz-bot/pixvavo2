@@ -7,6 +7,11 @@ import {
   ECOTRACK_WILAYA_HUB,
   resolveOfficialEcotrackCommune
 } from '../src/data/ecotrackCommunes.ts';
+import {
+  isRealSheetOrderRow,
+  validateAlgerianPhone,
+  validateCustomerName
+} from '../src/utils/orderValidation.ts';
 
 export type CourierProvider =
   | 'none'
@@ -70,6 +75,7 @@ const RUNTIME_CONFIG_PATH = process.env.VERCEL
 
 const storeConfigMap = new Map<string, ServerStoreApiConfig>();
 const recentPhoneOrdersMap = new Map<string, number[]>();
+const recentIpOrdersMap = new Map<string, number[]>();
 
 function loadPersistedServerConfigs() {
   try {
@@ -2059,28 +2065,77 @@ export function createApiApp(): Express {
     res.json(result);
   });
 
-  // 7. Anti-Fraud COD Pre-Check (Blacklist + Daily Order Limit per Phone)
+  // 7. Anti-Fraud COD Pre-Check (Bot/Format Validation + IP Rate Limit + Blacklist + Daily Order Limit)
   app.post('/api/orders/fraud-check', async (req: Request, res: Response) => {
     const storeId = String(req.body?.storeId || '').trim();
     const rawPhone = String(req.body?.phone || '').trim();
+    const rawName = req.body?.customerName !== undefined ? String(req.body.customerName || '').trim() : undefined;
+    const honeypot = String(req.body?.honeypot || '').trim();
+    const fillTimeMs = Number(req.body?.fillTimeMs);
     const record = req.body?.record !== false;
 
-    if (!storeId || !rawPhone) {
+    // 0a. Bot trap & inhuman fill speed
+    if (honeypot.length > 0) {
+      res.json({
+        ok: true,
+        allowed: false,
+        code: 'bot_detected',
+        message: 'تعذر التحقق من الطلب، يرجى إعادة تحميل الصفحة والمحاولة مجدداً.'
+      });
+      return;
+    }
+    if (Number.isFinite(fillTimeMs) && fillTimeMs > 0 && fillTimeMs < 1200) {
+      res.json({
+        ok: true,
+        allowed: false,
+        code: 'too_fast',
+        message: 'يرجى مراجعة معلوماتك قبل الضغط على تأكيد الطلب.'
+      });
+      return;
+    }
+
+    // 0b. Strict Algerian phone & customer name validation (always enforced to stop empty/fake orders)
+    const phoneValidation = validateAlgerianPhone(rawPhone);
+    if (!phoneValidation.valid) {
+      res.json({
+        ok: true,
+        allowed: false,
+        code: phoneValidation.code || 'invalid_phone',
+        message: phoneValidation.error || 'يرجى إدخال رقم هاتف جزائري حقيقي وصحيح (05 / 06 / 07)'
+      });
+      return;
+    }
+    if (rawName !== undefined) {
+      const nameValidation = validateCustomerName(rawName);
+      if (!nameValidation.valid) {
+        res.json({
+          ok: true,
+          allowed: false,
+          code: nameValidation.code || 'invalid_name',
+          message: nameValidation.error || 'يرجى إدخال الاسم الكامل بشكل صحيح'
+        });
+        return;
+      }
+    }
+
+    if (!storeId) {
       res.json({ ok: true, allowed: true });
       return;
     }
 
     const cfg = await getOrFetchServerConfig(storeId);
-    if (!cfg || cfg.antiFraudEnabled === false) {
+    if (cfg && cfg.antiFraudEnabled === false) {
       res.json({ ok: true, allowed: true });
       return;
     }
 
-    const canonicalPhone = normalizeLocalPhone(rawPhone);
+    const canonicalPhone = normalizeLocalPhone(phoneValidation.normalized);
     const phoneKey = `${storeId}:${canonicalPhone}`;
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
 
     // 1. Check Blacklist
-    const blacklisted = Array.isArray(cfg.blacklistedPhones) ? cfg.blacklistedPhones : [];
+    const blacklisted = Array.isArray(cfg?.blacklistedPhones) ? cfg.blacklistedPhones : [];
     const isBlocked = blacklisted.some(
       entry => normalizeLocalPhone(entry?.phone) === canonicalPhone && canonicalPhone.length >= 9
     );
@@ -2094,11 +2149,39 @@ export function createApiApp(): Express {
       return;
     }
 
-    // 2. Check Daily Order Limit (last 24h)
-    const dailyLimit = Number(cfg.dailyMaxOrdersPerPhone ?? 2);
+    // 2. IP-Based Burst & Daily Rate Limit (blocks rotating fake numbers from the same device/IP)
+    const forwardedFor = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const clientIp = forwardedFor || String(req.ip || req.socket?.remoteAddress || '').trim();
+    const ipKey = clientIp ? `${storeId}:${clientIp}` : '';
+    const dailyLimit = Number(cfg?.dailyMaxOrdersPerPhone ?? 2);
+    if (ipKey) {
+      const ipDailyTs = (recentIpOrdersMap.get(ipKey) || []).filter(ts => ts >= dayAgo);
+      recentIpOrdersMap.set(ipKey, ipDailyTs);
+      const fifteenMinAgo = now - 15 * 60 * 1000;
+      const ipBurstCount = ipDailyTs.filter(ts => ts >= fifteenMinAgo).length;
+      if (ipBurstCount >= 3) {
+        res.json({
+          ok: true,
+          allowed: false,
+          code: 'ip_burst_limit',
+          message: 'تم إرسال عدة طلبات متتالية من نفس الجهاز في وقت قصير. يرجى الانتظار 15 دقيقة أو التواصل معنا عبر واتساب.'
+        });
+        return;
+      }
+      const ipDailyMax = Math.max(5, (dailyLimit > 0 ? dailyLimit : 2) * 3);
+      if (ipDailyTs.length >= ipDailyMax) {
+        res.json({
+          ok: true,
+          allowed: false,
+          code: 'ip_daily_limit',
+          message: 'تم بلوغ الحد الأقصى للطلبات المسموح بها من هذا الجهاز اليوم. يرجى التواصل معنا عبر واتساب للمساعدة.'
+        });
+        return;
+      }
+    }
+
+    // 3. Check Daily Order Limit per Phone (last 24h)
     if (dailyLimit > 0 && canonicalPhone.length >= 9) {
-      const now = Date.now();
-      const dayAgo = now - 24 * 60 * 60 * 1000;
       const prevTs = (recentPhoneOrdersMap.get(phoneKey) || []).filter(ts => ts >= dayAgo);
       recentPhoneOrdersMap.set(phoneKey, prevTs);
 
@@ -2151,6 +2234,12 @@ export function createApiApp(): Express {
         prevTs.push(now);
         recentPhoneOrdersMap.set(phoneKey, prevTs);
       }
+    }
+
+    if (record && ipKey) {
+      const ipDailyTs = (recentIpOrdersMap.get(ipKey) || []).filter(ts => ts >= dayAgo);
+      ipDailyTs.push(now);
+      recentIpOrdersMap.set(ipKey, ipDailyTs);
     }
 
     res.json({ ok: true, allowed: true });
@@ -2346,6 +2435,18 @@ export function createApiApp(): Express {
         const orderNumber = String(item?.orderNumber || '').replace(/^#/, '').trim().toUpperCase();
         if (!orderNumber) return null;
 
+        // Skip phantom/blank sheet rows (e.g. rows containing ONLY date and order number)
+        if (
+          !isRealSheetOrderRow({
+            fullName: item?.customerName,
+            phone: item?.customerPhone,
+            wilaya: item?.wilayaName,
+            orderName: item?.bundleLabel
+          })
+        ) {
+          return null;
+        }
+
         const rawWilayaId = String(item?.wilayaId || '').trim().padStart(2, '0');
         const wilayaEntry =
           WILAYA_ENTRIES.find(w => w.code === rawWilayaId) ||
@@ -2365,8 +2466,8 @@ export function createApiApp(): Express {
         const status = allowedStatuses.has(String(item?.status || ''))
           ? String(item.status)
           : 'new';
-        const customerName = String(item?.customerName || '').trim().slice(0, 100) || 'زبون Google Sheet';
-        const customerPhone = String(item?.customerPhone || '').trim().slice(0, 30) || '0000000000';
+        const customerName = String(item?.customerName || '').trim().slice(0, 100);
+        const customerPhone = String(item?.customerPhone || '').trim().slice(0, 30);
         const bundleLabel = String(item?.bundleLabel || '').trim().slice(0, 200) || 'طلب من Google Sheet';
         const subtotal = Math.max(0, Number(item?.subtotal) || 0);
         const shippingFee = Math.max(0, Number(item?.shippingFee) || 0);

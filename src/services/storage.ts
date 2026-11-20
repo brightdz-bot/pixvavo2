@@ -13,6 +13,11 @@ import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { normalizePhoneCanonical, SheetOrderRow } from './integrations';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
+import {
+  isRealSheetOrderRow,
+  validateAlgerianPhone,
+  validateCustomerName
+} from '../utils/orderValidation';
 
 export function isUuid(val?: string | null): boolean {
   if (!val || typeof val !== 'string') return false;
@@ -971,7 +976,30 @@ class StorageService {
     promoCode?: string;
     discount?: number;
     discountReason?: string;
+    antiBot?: { honeypot?: string; fillTimeMs?: number };
   }): Promise<{ success: boolean; error?: string; order?: Order }> {
+    // Reject obvious bot traps immediately before any network/DB calls
+    if (params.antiBot?.honeypot && params.antiBot.honeypot.trim().length > 0) {
+      return {
+        success: false,
+        error: 'تعذر التحقق من صحة الطلب، يرجى إعادة تحميل الصفحة والمحاولة مجدداً'
+      };
+    }
+
+    const nameCheck = validateCustomerName(params.customerName);
+    if (!nameCheck.valid) {
+      return { success: false, error: nameCheck.error || 'يرجى إدخال الاسم الكامل بشكل صحيح' };
+    }
+    const phoneCheck = validateAlgerianPhone(params.customerPhone);
+    if (!phoneCheck.valid) {
+      return {
+        success: false,
+        error: phoneCheck.error || 'يرجى إدخال رقم هاتف جزائري حقيقي (10 أرقام يبدأ بـ 05 أو 06 أو 07)'
+      };
+    }
+    const cleanCustomerName = nameCheck.cleaned;
+    const cleanCustomerPhone = phoneCheck.normalized;
+
     const deliveryType: DeliveryType = params.deliveryType === 'stop' ? 'stop' : 'home';
     const noteParts = [
       params.notes?.trim() || '',
@@ -983,7 +1011,7 @@ class StorageService {
     const mergedNotes = noteParts.length > 0 ? noteParts.join(' | ').slice(0, 480) : undefined;
 
     // Anti-Fraud COD Check (Local config + Server Endpoint)
-    const canonicalPhone = normalizePhoneCanonical(params.customerPhone);
+    const canonicalPhone = normalizePhoneCanonical(cleanCustomerPhone);
     const localCfg = this.getLocalApiConfigsMap()[params.storeId];
     if (localCfg && localCfg.antiFraudEnabled !== false && canonicalPhone.length >= 9) {
       const blocked = (localCfg.blacklistedPhones || []).some(
@@ -1021,7 +1049,10 @@ class StorageService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           storeId: params.storeId,
-          phone: params.customerPhone,
+          phone: cleanCustomerPhone,
+          customerName: cleanCustomerName,
+          honeypot: params.antiBot?.honeypot || '',
+          fillTimeMs: params.antiBot?.fillTimeMs,
           record: true
         }),
         signal: ctrl.signal
@@ -1045,8 +1076,8 @@ class StorageService {
     if (this.useSupabase() && supabase && isUuid(params.storeId)) {
       const { data, error } = await supabase.rpc('place_order', {
         p_store_id: params.storeId,
-        p_customer_name: params.customerName,
-        p_customer_phone: params.customerPhone,
+        p_customer_name: cleanCustomerName,
+        p_customer_phone: cleanCustomerPhone,
         p_wilaya_id: params.wilayaId,
         p_wilaya_name: params.wilayaName,
         p_address: params.address,
@@ -1072,7 +1103,7 @@ class StorageService {
           landingPageId: data.landingPageId || params.landingPageId,
           bundleLabel: data.bundleLabel,
           customerName: data.customerName,
-          customerPhone: params.customerPhone,
+          customerPhone: cleanCustomerPhone,
           wilayaId: params.wilayaId,
           wilayaName: data.wilayaName,
           commune: data.commune || params.commune,
@@ -1098,10 +1129,7 @@ class StorageService {
     }
 
     // Local fallback
-    const cleanPhone = params.customerPhone.replace(/[\s\-\.]/g, '');
-    if (!/^(\+213|00213|0)[0-9]{8,9}$/.test(cleanPhone)) {
-      return { success: false, error: 'يرجى إدخال رقم هاتف جزائري صحيح (مثال: 0550123456)' };
-    }
+    const cleanPhone = cleanCustomerPhone;
 
     const store = this.getLocalStores().find(s => s.id === params.storeId) || this.getLocalStores()[0];
     const wilaya = ALGERIA_WILAYAS.find(w => w.id === params.wilayaId) || ALGERIA_WILAYAS[15];
@@ -1606,7 +1634,20 @@ class StorageService {
       return { success: true, importedCount: 0 };
     }
 
-    const prepared = rows.map(row => {
+    const validRows = rows.filter(row =>
+      isRealSheetOrderRow({
+        fullName: row.fullName,
+        phone: row.phone,
+        wilaya: row.wilaya,
+        orderName: row.orderName,
+        total: row.total
+      })
+    );
+    if (validRows.length === 0) {
+      return { success: true, importedCount: 0 };
+    }
+
+    const prepared = validRows.map(row => {
       const cleanWilaya = (row.wilaya || '').trim();
       const matchedWilaya =
         (cleanWilaya

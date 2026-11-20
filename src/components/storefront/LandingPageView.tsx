@@ -16,6 +16,7 @@ import {
   buildOrderTrackingWhatsAppUrl,
   triggerAutoOrderWhatsApp
 } from '../../services/integrations';
+import { validateAlgerianPhone, validateCustomerName } from '../../utils/orderValidation';
 import {
   Search,
   ShoppingCart,
@@ -106,6 +107,9 @@ export const LandingPageView: React.FC<Props> = ({
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('home');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [botTrapField, setBotTrapField] = useState('');
+  const formMountedAtRef = useRef<number>(Date.now());
+  const submitLockRef = useRef<boolean>(false);
 
   // Promo Coupon State
   const [promoInput, setPromoInput] = useState('');
@@ -207,6 +211,8 @@ export const LandingPageView: React.FC<Props> = ({
     setTrackedEditSuccess(null);
     trackedPageViewKeyRef.current = '';
     trackedInitiateCheckoutRef.current = false;
+    formMountedAtRef.current = Date.now();
+    setBotTrapField('');
   }, [page.id]);
 
   // Fire PageView + ViewContent once per page/pixel resolution (supports async public-settings fallback)
@@ -491,48 +497,122 @@ export const LandingPageView: React.FC<Props> = ({
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current || isSubmitting) return;
     setFormError(null);
+
+    // 1. Silent bot honeypot check
+    if (botTrapField.trim().length > 0) {
+      setFormError('تعذر تأكيد الطلب، يرجى إعادة تحميل الصفحة والمحاولة مجدداً');
+      return;
+    }
+
+    // 2. Minimum human fill-time guard (blocks instant auto-submit bots)
+    const fillTimeMs = Date.now() - formMountedAtRef.current;
+    if (fillTimeMs < 1800) {
+      setFormError('يرجى مراجعة بياناتك والتأكد منها ثم الضغط على تأكيد الطلب');
+      return;
+    }
 
     if (!selectedOffer) {
       setFormError('لا يوجد عرض متاح لهذه الصفحة حالياً');
       return;
     }
-    if (fullName.trim().length < 2) {
-      setFormError('يرجى إدخال الاسم الكامل بشكل صحيح');
+
+    // 3. Strict customer name & Algerian mobile validation
+    const nameCheck = validateCustomerName(fullName);
+    if (!nameCheck.valid) {
+      setFormError(nameCheck.error || 'يرجى إدخال الاسم الكامل بشكل صحيح');
       return;
     }
-    const cleanPhone = phone.replace(/[\s\-\.]/g, '');
-    if (!/^(\+213|00213|0)[0-9]{8,9}$/.test(cleanPhone)) {
-      setFormError('يرجى إدخال رقم هاتف جزائري صحيح (10 أرقام يبدأ بـ 05 أو 06 أو 07)');
+    const phoneCheck = validateAlgerianPhone(phone);
+    if (!phoneCheck.valid) {
+      setFormError(
+        phoneCheck.error || 'يرجى إدخال رقم هاتف جزائري حقيقي (10 أرقام يبدأ بـ 05 أو 06 أو 07)'
+      );
       return;
     }
+    const cleanName = nameCheck.cleaned;
+    const cleanPhone = phoneCheck.normalized;
+
     if (!selectedCommune) {
       setFormError('يرجى اختيار البلدية');
       return;
     }
 
+    // 4. Browser-side duplicate / rapid-spam cooldown guard (3 min per phone+page, max 4 per 30 min per store)
+    const cooldownKey = `brightdz_order_cd_${store.id}`;
+    const nowTs = Date.now();
+    try {
+      const rawHistory = localStorage.getItem(cooldownKey);
+      const parsedHistory: Array<{ phone: string; pageId: string; ts: number }> = rawHistory
+        ? JSON.parse(rawHistory)
+        : [];
+      const recent30m = Array.isArray(parsedHistory)
+        ? parsedHistory.filter(item => item && nowTs - Number(item.ts || 0) < 30 * 60 * 1000)
+        : [];
+      const duplicateSamePhone = recent30m.find(
+        item => item.phone === cleanPhone && item.pageId === page.id && nowTs - item.ts < 3 * 60 * 1000
+      );
+      if (duplicateSamePhone) {
+        setFormError(
+          'تم تسجيل طلبك بالفعل بهذا الرقم قبل قليل! لا حاجة لإعادة الإرسال، ويمكنك متابعة طلبك من خانة التتبع أعلاه.'
+        );
+        return;
+      }
+      if (recent30m.length >= 4) {
+        setFormError(
+          'تم إرسال عدة طلبات متتالية من هذا الجهاز خلال فترة قصيرة. يرجى الانتظار قليلاً أو التواصل معنا عبر واتساب.'
+        );
+        return;
+      }
+    } catch {
+      // ignore storage errors
+    }
+
+    submitLockRef.current = true;
     setIsSubmitting(true);
-    const res = await storage.placeOrder({
-      storeId: store.id,
-      landingPageId: page.id,
-      offerId: selectedOffer.id,
-      customerName: fullName.trim(),
-      customerPhone: cleanPhone,
-      wilayaId: selectedWilaya.id,
-      wilayaName: selectedWilaya.nameAr,
-      commune: selectedCommune,
-      deliveryType,
-      address: `${selectedWilaya.nameAr} - ${selectedCommune}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`,
-      variantLabel: variantSummary || undefined,
-      promoCode: appliedPromo?.code,
-      discount: activeDiscountAmount,
-      discountReason: appliedPromo?.reason
-    });
-    setIsSubmitting(false);
+    let res: Awaited<ReturnType<typeof storage.placeOrder>>;
+    try {
+      res = await storage.placeOrder({
+        storeId: store.id,
+        landingPageId: page.id,
+        offerId: selectedOffer.id,
+        customerName: cleanName,
+        customerPhone: cleanPhone,
+        wilayaId: selectedWilaya.id,
+        wilayaName: selectedWilaya.nameAr,
+        commune: selectedCommune,
+        deliveryType,
+        address: `${selectedWilaya.nameAr} - ${selectedCommune}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`,
+        variantLabel: variantSummary || undefined,
+        promoCode: appliedPromo?.code,
+        discount: activeDiscountAmount,
+        discountReason: appliedPromo?.reason,
+        antiBot: { honeypot: botTrapField, fillTimeMs }
+      });
+    } finally {
+      setIsSubmitting(false);
+      submitLockRef.current = false;
+    }
 
     if (!res.success || !res.order) {
       setFormError(res.error || 'تعذر تسجيل الطلب، يرجى التحقق من البيانات والمحاولة مجدداً');
       return;
+    }
+
+    // Record successful submission in browser cooldown cache
+    try {
+      const rawHistory = localStorage.getItem(cooldownKey);
+      const parsedHistory: Array<{ phone: string; pageId: string; ts: number }> = rawHistory
+        ? JSON.parse(rawHistory)
+        : [];
+      const recent = (Array.isArray(parsedHistory) ? parsedHistory : []).filter(
+        item => item && nowTs - Number(item.ts || 0) < 30 * 60 * 1000
+      );
+      recent.push({ phone: cleanPhone, pageId: page.id, ts: nowTs });
+      localStorage.setItem(cooldownKey, JSON.stringify(recent.slice(-10)));
+    } catch {
+      // ignore storage errors
     }
 
     const orderNum = res.order.orderNumber;
@@ -545,7 +625,7 @@ export const LandingPageView: React.FC<Props> = ({
       numItems: selectedOffer.quantity || 1,
       tiktokPixelId: effectiveTiktokPixelId,
       customerPhone: cleanPhone,
-      customerName: fullName.trim(),
+      customerName: cleanName,
       wilayaName: selectedWilaya.nameAr
     });
 
@@ -554,7 +634,7 @@ export const LandingPageView: React.FC<Props> = ({
       storeName: store.name,
       phone: cleanPhone,
       orderNumber: orderNum,
-      customerName: fullName.trim(),
+      customerName: cleanName,
       bundleDetails,
       total: finalTotalDisplay,
       wilayaName: selectedWilaya.nameAr,
@@ -563,7 +643,7 @@ export const LandingPageView: React.FC<Props> = ({
 
     sendOrderToGoogleSheet(effectiveWebhook, {
       orderId: orderNum,
-      fullName: fullName.trim(),
+      fullName: cleanName,
       phone: cleanPhone,
       wilaya: selectedWilaya.nameAr,
       commune: selectedCommune,
@@ -1432,6 +1512,23 @@ export const LandingPageView: React.FC<Props> = ({
                   }}
                   className="space-y-5"
                 >
+                  {/* Invisible anti-bot honeypot field */}
+                  <div
+                    aria-hidden="true"
+                    className="sr-only absolute -left-[9999px] w-px h-px overflow-hidden opacity-0 pointer-events-none"
+                  >
+                    <label htmlFor="order_company_website">Website</label>
+                    <input
+                      id="order_company_website"
+                      name="company_website"
+                      type="text"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={botTrapField}
+                      onChange={e => setBotTrapField(e.target.value)}
+                    />
+                  </div>
+
                   {/* Synced Offer Dropdown */}
                   <div>
                     <label className="block text-xs font-bold mb-2">العرض المختار:</label>

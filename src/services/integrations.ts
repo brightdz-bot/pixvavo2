@@ -1,6 +1,11 @@
 import { CourierProvider, DeliveryType, Order, OrderStatus, StoreApiConfig } from '../types';
 import { formatPlainDZD, getWilayaById } from '../data/wilayas';
 import { ECOTRACK_WILAYA_HUB, resolveOfficialEcotrackCommune } from '../data/ecotrackCommunes';
+import {
+  isRealSheetOrderRow,
+  validateAlgerianPhone,
+  validateCustomerName
+} from '../utils/orderValidation';
 
 declare global {
   interface Window {
@@ -384,6 +389,75 @@ export function trackMetaPixelPurchase(
   }
 }
 
+const sheetScriptVersionByUrl = new Map<string, number>();
+const knownSheetOrderIdsByUrl = new Map<string, Set<string>>();
+
+function rememberKnownSheetOrderId(webhookUrl: string, orderId: string): void {
+  const cleanUrl = webhookUrl.trim();
+  const cleanId = orderId.replace(/^#/, '').trim().toUpperCase();
+  if (!cleanUrl || !cleanId) return;
+  let set = knownSheetOrderIdsByUrl.get(cleanUrl);
+  if (!set) {
+    set = new Set<string>();
+    knownSheetOrderIdsByUrl.set(cleanUrl, set);
+  }
+  set.add(cleanId);
+}
+
+async function ensureSheetScriptCapabilities(webhookUrl: string): Promise<{
+  scriptVersion: number;
+  knownIds: Set<string>;
+}> {
+  const cleanUrl = webhookUrl.trim();
+  const cachedVer = sheetScriptVersionByUrl.get(cleanUrl);
+  if (cachedVer !== undefined) {
+    return {
+      scriptVersion: cachedVer,
+      knownIds: knownSheetOrderIdsByUrl.get(cleanUrl) || new Set<string>()
+    };
+  }
+
+  if (typeof fetch === 'undefined') {
+    return { scriptVersion: 0, knownIds: new Set<string>() };
+  }
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const res = await fetch('/api/integrations/google-sheet-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl: cleanUrl, action: 'list' }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const payload = await res.json();
+      const data = payload?.data;
+      const ver = Number(data?.scriptVersion || 0);
+      sheetScriptVersionByUrl.set(cleanUrl, Number.isFinite(ver) ? ver : 0);
+      const list = Array.isArray(data?.orders) ? data.orders : [];
+      const set = knownSheetOrderIdsByUrl.get(cleanUrl) || new Set<string>();
+      list.forEach((r: any) => {
+        const id = String(r?.orderId ?? r?.order_id ?? r?.orderNumber ?? '')
+          .replace(/^#/, '')
+          .trim()
+          .toUpperCase();
+        if (id) set.add(id);
+      });
+      knownSheetOrderIdsByUrl.set(cleanUrl, set);
+      return { scriptVersion: Number.isFinite(ver) ? ver : 0, knownIds: set };
+    }
+  } catch {
+    // non-fatal probe
+  }
+
+  return {
+    scriptVersion: 0,
+    knownIds: knownSheetOrderIdsByUrl.get(cleanUrl) || new Set<string>()
+  };
+}
+
 export async function sendOrderToGoogleSheet(
   webhookUrl: string | undefined,
   payload: {
@@ -404,13 +478,17 @@ export async function sendOrderToGoogleSheet(
   }
 ): Promise<void> {
   const cleanUrl = webhookUrl?.trim();
-  if (!cleanUrl) return;
+  const cleanOrderId = String(payload.orderId || '').replace(/^#/, '').trim();
+  const nameCheck = validateCustomerName(payload.fullName);
+  const phoneCheck = validateAlgerianPhone(payload.phone);
+  if (!cleanUrl || !cleanOrderId || !nameCheck.valid || !phoneCheck.valid) return;
 
   try {
     const formData = new URLSearchParams();
-    formData.append('orderId', payload.orderId);
-    formData.append('fullName', payload.fullName);
-    formData.append('phone', payload.phone);
+    formData.append('action', 'create');
+    formData.append('orderId', cleanOrderId);
+    formData.append('fullName', nameCheck.cleaned);
+    formData.append('phone', phoneCheck.normalized);
     formData.append('wilaya', payload.wilaya);
     formData.append('commune', payload.commune);
     formData.append(
@@ -431,6 +509,7 @@ export async function sendOrderToGoogleSheet(
       mode: 'no-cors',
       body: formData
     });
+    rememberKnownSheetOrderId(cleanUrl, cleanOrderId);
   } catch (err) {
     console.warn('Google Sheet webhook request failed (non-blocking):', err);
   }
@@ -451,12 +530,22 @@ export async function updateOrderInGoogleSheet(
   }
 ): Promise<void> {
   const cleanUrl = webhookUrl?.trim();
-  if (!cleanUrl || !payload.orderId.trim()) return;
+  const cleanOrderId = payload.orderId.replace(/^#/, '').trim();
+  if (!cleanUrl || !cleanOrderId) return;
 
   try {
+    // Safety guard: older Apps Script deployments (< v3) lacked a return after the
+    // update loop and would fall through to appendRow([date, orderId, ""]) if the order
+    // did not exist in the sheet. Only send update to older scripts when the order is
+    // confirmed to exist in that sheet.
+    const { scriptVersion, knownIds } = await ensureSheetScriptCapabilities(cleanUrl);
+    if (scriptVersion < 3 && !knownIds.has(cleanOrderId.toUpperCase())) {
+      return;
+    }
+
     const formData = new URLSearchParams();
     formData.append('action', 'update');
-    formData.append('orderId', payload.orderId.trim());
+    formData.append('orderId', cleanOrderId);
     if (payload.wilaya !== undefined) formData.append('wilaya', payload.wilaya);
     if (payload.commune !== undefined) formData.append('commune', payload.commune);
     if (payload.deliveryType !== undefined) {
@@ -486,10 +575,18 @@ export async function deleteOrderInGoogleSheet(
   orderId: string
 ): Promise<void> {
   const cleanUrl = webhookUrl?.trim();
-  const cleanOrderId = orderId?.trim();
+  const cleanOrderId = orderId?.replace(/^#/, '').trim();
   if (!cleanUrl || !cleanOrderId) return;
 
   try {
+    // Critical guard: older Apps Script deployments (< v3) do not handle action="delete"
+    // and would fall through to appendRow([date, orderId, ""]) — creating phantom rows
+    // with ONLY the date and order number! Only dispatch delete POST to verified v3+ scripts.
+    const { scriptVersion } = await ensureSheetScriptCapabilities(cleanUrl);
+    if (scriptVersion < 3) {
+      return;
+    }
+
     const formData = new URLSearchParams();
     formData.append('action', 'delete');
     formData.append('orderId', cleanOrderId);
@@ -499,6 +596,7 @@ export async function deleteOrderInGoogleSheet(
       mode: 'no-cors',
       body: formData
     });
+    knownSheetOrderIdsByUrl.get(cleanUrl)?.delete(cleanOrderId.toUpperCase());
   } catch (err) {
     console.warn('Google Sheet delete request failed (non-blocking):', err);
   }
@@ -642,6 +740,9 @@ export async function fetchAllOrdersFromGoogleSheetDetailed(
     }
 
     const data = payload.data;
+    const reportedVer = Number(data?.scriptVersion || 0);
+    sheetScriptVersionByUrl.set(cleanUrl, Number.isFinite(reportedVer) ? reportedVer : 0);
+
     const rawList: any[] | null = Array.isArray(data)
       ? data
       : Array.isArray(data.orders)
@@ -667,6 +768,7 @@ export async function fetchAllOrdersFromGoogleSheetDetailed(
     };
 
     const rows: SheetOrderRow[] = [];
+    const seenIds = new Set<string>();
     rawList.forEach((r: any, idx: number) => {
       if (!r || typeof r !== 'object') return;
       const rawId = String(
@@ -678,9 +780,16 @@ export async function fetchAllOrdersFromGoogleSheetDetailed(
         r.fullName ?? r.customerName ?? r.name ?? r['الاسم الكامل'] ?? ''
       ).trim();
       const phone = normalizeSheetPhone(r.phone ?? r.customerPhone ?? r['الهاتف'] ?? '');
-      if (!rawId && !fullName && !phone) return;
+      const wilaya = String(r.wilaya ?? r.wilayaName ?? r['الولاية'] ?? '').trim();
+      const orderName = String(
+        r.orderName ?? r.order ?? r.product ?? r.bundleLabel ?? r['المنتج'] ?? ''
+      ).trim();
+
+      // Skip blank/phantom rows (e.g. rows containing ONLY date and order number)
+      if (!isRealSheetOrderRow({ fullName, phone, wilaya, orderName })) return;
 
       const orderId = rawId || `GS-ROW-${idx + 2}`;
+      seenIds.add(orderId.toUpperCase());
       const rawShippingType = String(
         r.shippingType ?? r.deliveryType ?? r['طريقة التوصيل'] ?? ''
       )
@@ -704,12 +813,10 @@ export async function fetchAllOrdersFromGoogleSheetDetailed(
         orderId,
         fullName,
         phone,
-        wilaya: String(r.wilaya ?? r.wilayaName ?? r['الولاية'] ?? '').trim(),
+        wilaya,
         commune: String(r.commune ?? r['البلدية'] ?? '').trim(),
         deliveryType: parsedDeliveryType,
-        orderName: String(
-          r.orderName ?? r.order ?? r.product ?? r.bundleLabel ?? r['المنتج'] ?? ''
-        ).trim(),
+        orderName,
         orderStatus,
         status: mapSheetStatusToOrderStatus(orderStatus),
         shippingCost,
@@ -724,6 +831,7 @@ export async function fetchAllOrdersFromGoogleSheetDetailed(
       });
     });
 
+    knownSheetOrderIdsByUrl.set(cleanUrl, seenIds);
     return { ok: true, rows };
   } catch (err: any) {
     const isAbort = err?.name === 'AbortError';
@@ -1118,7 +1226,27 @@ export function triggerAutoOrderWhatsApp(params: {
   }).catch(() => {});
 }
 
-export const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
+export const GOOGLE_APPS_SCRIPT_TEMPLATE = `var SCRIPT_VERSION = 3;
+
+function normalizeDzPhone(raw) {
+  var digits = String(raw || "").replace(/[^0-9]/g, "");
+  if (digits.indexOf("00213") === 0 && digits.length >= 13) digits = "0" + digits.slice(5);
+  else if (digits.indexOf("213") === 0 && digits.length >= 11) digits = "0" + digits.slice(3);
+  else if (digits.length === 9 && (digits[0] === "5" || digits[0] === "6" || digits[0] === "7")) digits = "0" + digits;
+  return digits;
+}
+
+function isValidDzPhone(raw) {
+  var p = normalizeDzPhone(raw);
+  if (!/^0[567][0-9]{8}$/.test(p)) return false;
+  var sub = p.slice(2);
+  if (/^([0-9])\\1{7}$/.test(sub)) return false;
+  if (/([0-9])\\1{5,}/.test(sub)) return false;
+  if ("01234567890".indexOf(sub) !== -1 || "98765432109".indexOf(sub) !== -1) return false;
+  return true;
+}
+
+function doPost(e) {
   if (!e || !e.parameter) {
     return ContentService.createTextOutput(JSON.stringify({ "result": "error" })).setMimeType(ContentService.MimeType.JSON);
   }
@@ -1129,21 +1257,28 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
     sheet.appendRow(["التاريخ", "رقم الطلب", "الاسم الكامل", "الهاتف", "الولاية", "البلدية", "طريقة التوصيل", "المنتج", "الحالة", "مبلغ التوصيل", "مبلغ البضاعة", "الخصم", "سبب الخصم", "المجموع الكلي", "رمز التوصيل", "تأكيد عبر واتساب", "شحن عبر واتساب", "رابط التتبع", "آخر تحديث"]);
   }
 
-  var action = String(e.parameter.action || "create").trim();
+  var action = String(e.parameter.action || "create").trim().toLowerCase();
   var orderId = String(e.parameter.orderId || "").replace(/^#/, "").trim();
 
-  if (action === "delete" && orderId) {
+  if (action === "delete") {
+    if (!orderId) {
+      return ContentService.createTextOutput(JSON.stringify({ "result": "invalid_order_id" })).setMimeType(ContentService.MimeType.JSON);
+    }
     var delData = sheet.getDataRange().getValues();
+    var deletedAny = false;
     for (var d = delData.length - 1; d >= 1; d--) {
       if (String(delData[d][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
         sheet.deleteRow(d + 1);
-        return ContentService.createTextOutput(JSON.stringify({ "result": "deleted" })).setMimeType(ContentService.MimeType.JSON);
+        deletedAny = true;
       }
     }
-    return ContentService.createTextOutput(JSON.stringify({ "result": "not_found" })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ "result": deletedAny ? "deleted" : "not_found" })).setMimeType(ContentService.MimeType.JSON);
   }
 
-  if (action === "update" && orderId) {
+  if (action === "update") {
+    if (!orderId) {
+      return ContentService.createTextOutput(JSON.stringify({ "result": "invalid_order_id" })).setMimeType(ContentService.MimeType.JSON);
+    }
     var data = sheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
@@ -1160,6 +1295,31 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
         return ContentService.createTextOutput(JSON.stringify({ "result": "updated" })).setMimeType(ContentService.MimeType.JSON);
       }
     }
+    // IMPORTANT: Never fall through to appendRow on update when order is missing
+    return ContentService.createTextOutput(JSON.stringify({ "result": "not_found" })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action !== "create") {
+    return ContentService.createTextOutput(JSON.stringify({ "result": "ignored" })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // Strict anti-fake / anti-empty order guard before appending any new row
+  var fullName = String(e.parameter.fullName || "").replace(/\\s+/g, " ").trim();
+  var phone = normalizeDzPhone(e.parameter.phone || "");
+  var wilaya = String(e.parameter.wilaya || "").trim();
+  var orderText = String(e.parameter.order || "").trim();
+  var nameLetters = fullName.replace(/[^\\u0621-\\u064A\\u0671-\\u06D3a-zA-Z]/g, "");
+
+  if (!orderId || nameLetters.length < 2 || !isValidDzPhone(phone) || (!wilaya && !orderText)) {
+    return ContentService.createTextOutput(JSON.stringify({ "result": "rejected_invalid_or_empty" })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // Prevent duplicate orderId rows
+  var existingData = sheet.getDataRange().getValues();
+  for (var k = 1; k < existingData.length; k++) {
+    if (String(existingData[k][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId.toUpperCase()) {
+      return ContentService.createTextOutput(JSON.stringify({ "result": "duplicate_ignored" })).setMimeType(ContentService.MimeType.JSON);
+    }
   }
 
   var nextRow = sheet.getLastRow() + 1;
@@ -1171,12 +1331,12 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `function doPost(e) {
   sheet.appendRow([
     new Date(),
     orderId,
-    e.parameter.fullName || "",
-    e.parameter.phone || "",
-    e.parameter.wilaya || "",
+    fullName,
+    phone,
+    wilaya,
     e.parameter.commune || "",
     e.parameter.shippingType || "",
-    e.parameter.order || "",
+    orderText,
     e.parameter.status || "قيد التأكيد",
     shippingCost,
     productPrice,
@@ -1200,7 +1360,7 @@ function doGet(e) {
   var orderId = (e && e.parameter && e.parameter.orderId) ? String(e.parameter.orderId).replace(/^#/, "").trim().toUpperCase() : "";
   var callback = (e && e.parameter && e.parameter.callback) ? String(e.parameter.callback).trim() : "";
   var rows = sheet.getDataRange().getValues();
-  var result = { status: "error" };
+  var result = { status: "error", scriptVersion: SCRIPT_VERSION };
 
   if (action === "list") {
     var list = [];
@@ -1208,16 +1368,19 @@ function doGet(e) {
       var id = String(rows[i][1] || "").replace(/^#/, "").trim();
       var name = String(rows[i][2] || "").trim();
       var phone = String(rows[i][3] || "").trim();
-      if (!id && !name && !phone) continue;
+      var wilayaVal = String(rows[i][4] || "").trim();
+      var orderVal = String(rows[i][7] || "").trim();
+      // Skip blank/phantom rows containing only date & order number
+      if ((!name && !phone) || (!phone && !wilayaVal && !orderVal)) continue;
       list.push({
         createdAt: rows[i][0] instanceof Date ? rows[i][0].toISOString() : String(rows[i][0] || ""),
         orderId: id || ("GS-ROW-" + (i + 1)),
         fullName: name,
         phone: phone,
-        wilaya: rows[i][4] || "",
+        wilaya: wilayaVal,
         commune: rows[i][5] || "",
         shippingType: rows[i][6] || "",
-        orderName: rows[i][7] || "",
+        orderName: orderVal,
         orderStatus: rows[i][8] || "قيد التأكيد",
         shippingCost: Number(rows[i][9]) || 0,
         productPrice: Number(rows[i][10]) || 0,
@@ -1227,7 +1390,7 @@ function doGet(e) {
         sheetUpdatedAt: rows[i][18] || ""
       });
     }
-    result = { status: "success", orders: list };
+    result = { status: "success", scriptVersion: SCRIPT_VERSION, orders: list };
   } else if (orderId) {
     for (var j = 1; j < rows.length; j++) {
       if (String(rows[j][1] || "").replace(/^#/, "").trim().toUpperCase() === orderId) {
