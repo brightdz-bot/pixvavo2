@@ -111,6 +111,7 @@ export const SettingsTab: React.FC<Props> = ({
   const [customRates, setCustomRates] = useState<Record<string, WilayaRate>>(
     store.customWilayaRates || {}
   );
+  const [ratesResetToDefaults, setRatesResetToDefaults] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Apps Script Code Modal
@@ -179,9 +180,10 @@ export const SettingsTab: React.FC<Props> = ({
 
   const handleWilayaRateChange = (wilayaId: string, field: 'home' | 'stop', fee: number) => {
     const base = ALGERIA_WILAYAS.find(w => w.id === wilayaId);
+    setRatesResetToDefaults(false);
     setCustomRates(prev => {
       const existing = prev[wilayaId] || {
-        home: store.customWilayaFees?.[wilayaId] ?? base?.homeFee ?? 600,
+        home: (!ratesResetToDefaults ? store.customWilayaFees?.[wilayaId] : undefined) ?? base?.homeFee ?? 600,
         stop: base?.stopFee ?? 400
       };
       return {
@@ -192,6 +194,11 @@ export const SettingsTab: React.FC<Props> = ({
         }
       };
     });
+  };
+
+  const handleApplyDefaultWilayaTariff = () => {
+    setCustomRates({});
+    setRatesResetToDefaults(true);
   };
 
   const currentOrigin =
@@ -326,6 +333,7 @@ export const SettingsTab: React.FC<Props> = ({
       brandColor,
       freeShippingThreshold: Number(freeShippingThreshold) || 0,
       customWilayaRates: customRates,
+      ...(ratesResetToDefaults ? { customWilayaFees: {} } : {}),
       updatedAt: new Date().toISOString()
     };
     setCustomDomain(normalizedDomain);
@@ -1018,10 +1026,20 @@ export const SettingsTab: React.FC<Props> = ({
 
         {/* Dual Wilaya Delivery Fees (Home + Stop Desk) */}
         <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-          <h3 className="text-sm font-bold flex items-center gap-2">
-            <Truck className="w-4 h-4 text-emerald-600" />
-            <span>أسعار التوصيل للمنزل ومكتب الشحن (58 ولاية)</span>
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <Truck className="w-4 h-4 text-emerald-600" />
+              <span>أسعار التوصيل للمنزل ومكتب الشحن (58 ولاية)</span>
+            </h3>
+            <button
+              type="button"
+              onClick={handleApplyDefaultWilayaTariff}
+              className="px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold flex items-center gap-1.5 hover:opacity-90 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>تطبيق التسعيرة الافتراضية المحدّثة</span>
+            </button>
+          </div>
 
           <div className="max-w-sm">
             <label className="block text-xs font-bold mb-1">
@@ -1045,7 +1063,7 @@ export const SettingsTab: React.FC<Props> = ({
               {ALGERIA_WILAYAS.map(w => {
                 const homeFee =
                   customRates[w.id]?.home ??
-                  store.customWilayaFees?.[w.id] ??
+                  (!ratesResetToDefaults ? store.customWilayaFees?.[w.id] : undefined) ??
                   w.homeFee;
                 const stopFee = customRates[w.id]?.stop ?? w.stopFee;
                 return (
