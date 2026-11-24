@@ -52,8 +52,9 @@
 }
 
 
-/* Storefront: dark luxe */
-.sf-dark { --sf-ink:#0d0f0e; --sf-panel:#151917; --sf-line:#2a2f2b; --sf-ivory:#efe9dc; --sf-mute:#9a9486; --sf-gold:#c8a15b; }
-.sf-dark h1, .sf-dark h2, .sf-dark h3 { font-family: 'Reem Kufi', 'Cairo', sans-serif; letter-spacing: 0; }
-.sf-dark ::selection { background: var(--sf-gold); color: var(--sf-ink); }
-.sf-dark :focus-visible { outline: 2px solid var(--sf-gold); outline-offset: 2px; }
+/* Storefront themes (chosen by the merchant in Settings) */
+.sf-dark { --sf-ink:#0d0f0e; --sf-panel:#151917; --sf-line:#2a2f2b; --sf-ivory:#efe9dc; --sf-mute:#9a9486; --sf-gold:#c8a15b; --sf-on-accent:#0d0f0e; }
+.sf-light { --sf-ink:#fbf8f2; --sf-panel:#ffffff; --sf-line:#e6dccb; --sf-ivory:#2a2118; --sf-mute:#7a7266; --sf-gold:#754b2d; --sf-on-accent:#ffffff; }
+.sf-dark h1, .sf-dark h2, .sf-dark h3, .sf-light h1, .sf-light h2, .sf-light h3 { font-family: 'Reem Kufi', 'Cairo', sans-serif; letter-spacing: 0; }
+.sf-dark ::selection, .sf-light ::selection { background: var(--sf-gold); color: var(--sf-on-accent); }
+.sf-dark :focus-visible, .sf-light :focus-visible { outline: 2px solid var(--sf-gold); outline-offset: 2px; }

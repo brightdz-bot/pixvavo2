@@ -62,6 +62,7 @@ const BRAND_PALETTES = [
   { name: 'زمردي جزائري', hex: '#059669' },
   { name: 'أزرق ملكي', hex: '#1d4ed8' },
   { name: 'ذهبي عنبري', hex: '#d97706' },
+  { name: 'ذهبي هادئ', hex: '#c8a15b' },
   { name: 'قرمزي خاطف', hex: '#be123c' },
   { name: 'أسود كلاسيكي', hex: '#0f172a' }
 ];
@@ -105,6 +106,9 @@ export const SettingsTab: React.FC<Props> = ({
   const [defaultPixelId, setDefaultPixelId] = useState(store.defaultPixelId || '');
   const [googleSheetWebhook, setGoogleSheetWebhook] = useState(store.googleSheetWebhook || '');
   const [brandColor, setBrandColor] = useState(store.brandColor || '#754b2d');
+  const [storefrontTheme, setStorefrontTheme] = useState<'dark' | 'light'>(
+    store.storefrontTheme === 'light' ? 'light' : 'dark'
+  );
   const [freeShippingThreshold, setFreeShippingThreshold] = useState<number>(
     store.freeShippingThreshold || 0
   );
@@ -331,6 +335,7 @@ export const SettingsTab: React.FC<Props> = ({
       defaultPixelId: defaultPixelId.trim(),
       googleSheetWebhook: googleSheetWebhook.trim(),
       brandColor,
+      storefrontTheme,
       freeShippingThreshold: Number(freeShippingThreshold) || 0,
       customWilayaRates: customRates,
       ...(ratesResetToDefaults ? { customWilayaFees: {} } : {}),
@@ -988,6 +993,45 @@ export const SettingsTab: React.FC<Props> = ({
               />
             </div>
           </div>
+        </div>
+
+        {/* Storefront appearance: theme mode */}
+        <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            <Palette className="w-4 h-4 text-emerald-600" />
+            <span>مظهر واجهة المتجر</span>
+          </h3>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              { id: 'dark', label: 'داكن فاخر', bg: '#0d0f0e', fg: '#efe9dc', line: '#2a2f2b' },
+              { id: 'light', label: 'فاتح كلاسيكي', bg: '#fbf8f2', fg: '#2a2118', line: '#e6dccb' }
+            ] as const).map(t => (
+              <button
+                type="button"
+                key={t.id}
+                onClick={() => setStorefrontTheme(t.id)}
+                aria-pressed={storefrontTheme === t.id}
+                className={`rounded-xl border p-3 text-right cursor-pointer transition-colors ${
+                  storefrontTheme === t.id
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/30'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                <div
+                  className="rounded-lg p-3 mb-2 space-y-2"
+                  style={{ backgroundColor: t.bg, border: `1px solid ${t.line}` }}
+                >
+                  <div className="h-2 w-2/3 rounded-full" style={{ backgroundColor: t.fg }} />
+                  <div className="h-2 w-1/3 rounded-full" style={{ backgroundColor: t.line }} />
+                  <div className="h-5 w-16 rounded-full" style={{ backgroundColor: brandColor }} />
+                </div>
+                <span className="text-xs font-bold">{t.label}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-500">
+            يتغير مظهر الصفحة الرئيسية للمتجر بعد حفظ الإعدادات. لون التمييز يؤخذ من لون الهوية في الأسفل.
+          </p>
         </div>
 
         {/* Storefront Catalog Brand Color */}

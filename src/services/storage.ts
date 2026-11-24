@@ -583,6 +583,7 @@ function mapDbStore(row: any): Store {
     announcementText: row.announcement_text || 'توصيل سريع لكافة الـ 58 ولاية | الدفع بعد المعاينة والإستلام',
     logoUrl: row.logo_url,
     brandColor: row.brand_color || '#754b2d',
+    storefrontTheme: row.storefront_theme === 'light' ? 'light' : 'dark',
     freeShippingThreshold: Number(row.free_shipping_threshold || 0),
     planId: row.plan_id || 'plan_pro',
     status: row.status || 'active',
@@ -941,7 +942,8 @@ class StorageService {
 
         const updatePayload: any = {
           ...basePayload,
-          custom_domain: cleanDomain || null
+          custom_domain: cleanDomain || null,
+          storefront_theme: store.storefrontTheme === 'light' ? 'light' : 'dark'
         };
 
         let { data, error } = await supabase
@@ -959,7 +961,7 @@ class StorageService {
               error: 'هذا النطاق مستخدم بالفعل في متجر آخر على المنصة، اختر نطاقاً مختلفاً.'
             };
           }
-          if (error.code === '42703' || msg.includes('custom_domain')) {
+          if (error.code === '42703' || msg.includes('custom_domain') || msg.includes('storefront_theme')) {
             // Self-healing fallback: save all other settings without failing, and prompt merchant to run 4-line SQL
             const retry = await supabase
               .from('stores')

@@ -202,6 +202,7 @@ export interface Store {
   logoUrl?: string;
   faviconUrl?: string;
   brandColor: string; // Hex e.g. #754b2d
+  storefrontTheme?: 'dark' | 'light';
   freeShippingThreshold: number; // DZD (0 = disabled)
   planId: string;
   status: 'active' | 'suspended' | 'trial';
