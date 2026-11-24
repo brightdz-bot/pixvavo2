@@ -150,6 +150,18 @@ export interface LandingPageIntegrations {
   googleSheetWebhook?: string;
   variants?: ProductVariant[];
   reviews?: LandingPageReview[];
+  /** Real-scarcity tools: stock counter and a countdown to a real end date. */
+  urgency?: {
+    showStock?: boolean;
+    stockThreshold?: number; // show the counter when stock <= threshold
+    countdownEndsAt?: string; // ISO date; hidden once passed
+    countdownText?: string;
+  };
+  /** A/B test: a share of visitors sees the page whose slug is `variantSlug`. */
+  ab?: {
+    variantSlug?: string;
+    splitToB?: number; // 0..100, default 50
+  };
 }
 
 export interface LandingPage {

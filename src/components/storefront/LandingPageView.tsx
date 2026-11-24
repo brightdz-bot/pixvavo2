@@ -48,6 +48,48 @@ import {
 
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
+
+const UrgencyCountdown: React.FC<{ endsAt?: string; text?: string; accent: string; onAccent: string }> = ({
+  endsAt,
+  text,
+  accent,
+  onAccent
+}) => {
+  const end = endsAt ? new Date(endsAt).getTime() : NaN;
+  const [left, setLeft] = useState(() => end - Date.now());
+  useEffect(() => {
+    if (!Number.isFinite(end)) return;
+    const id = setInterval(() => setLeft(end - Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [end]);
+  if (!Number.isFinite(end) || left <= 0) return null;
+  const total = Math.floor(left / 1000);
+  const days = Math.floor(total / 86400);
+  const parts = [
+    ...(days > 0 ? [{ v: days, l: 'يوم' }] : []),
+    { v: Math.floor((total % 86400) / 3600), l: 'ساعة' },
+    { v: Math.floor((total % 3600) / 60), l: 'دقيقة' },
+    { v: total % 60, l: 'ثانية' }
+  ];
+  return (
+    <div
+      role="timer"
+      className="rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+      style={{ backgroundColor: accent, color: onAccent }}
+    >
+      <span className="text-xs sm:text-sm font-bold">{text || 'ينتهي العرض خلال'}</span>
+      <div className="flex items-center gap-2 tabular-nums" dir="ltr">
+        {parts.map(pt => (
+          <div key={pt.l} className="text-center min-w-[2.75rem]">
+            <div className="text-lg font-black leading-none">{String(pt.v).padStart(2, '0')}</div>
+            <div className="text-[10px] opacity-80 mt-0.5">{pt.l}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 interface Props {
   store: Store;
   page: LandingPage;
@@ -1119,6 +1161,17 @@ export const LandingPageView: React.FC<Props> = ({
     return -1;
   };
 
+  useEffect(() => {
+    try {
+      const key = `viewed_${page.id}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch {
+      /* private mode: count anyway */
+    }
+    void storage.trackLandingPageView(page.id);
+  }, [page.id]);
+
   const mutedTextClass = theme.isDark ? 'text-slate-300' : 'text-slate-600';
   const subtleInputBg = theme.isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-white text-slate-900 border-slate-300';
 
@@ -1333,15 +1386,23 @@ export const LandingPageView: React.FC<Props> = ({
                     {page.category}
                   </span>
                 </div>
-                {page.stock <= 5 && (
-                  <span
-                    className="text-xs font-bold"
-                    style={{ color: theme.accentColor }}
-                  >
-                    {page.stock === 0 ? 'نفد المخزون مؤقتاً' : `متبقي ${page.stock} قطع فقط`}
-                  </span>
-                )}
+                {page.integrations?.urgency?.showStock !== false &&
+                  page.stock <= (page.integrations?.urgency?.stockThreshold ?? 5) && (
+                    <span
+                      className="text-xs font-bold"
+                      style={{ color: theme.accentColor }}
+                    >
+                      {page.stock === 0 ? 'نفد المخزون مؤقتاً' : `متبقي ${page.stock} قطع فقط`}
+                    </span>
+                  )}
               </div>
+
+              <UrgencyCountdown
+                endsAt={page.integrations?.urgency?.countdownEndsAt}
+                text={page.integrations?.urgency?.countdownText}
+                accent={theme.accentColor}
+                onAccent="#ffffff"
+              />
 
               <h1 className="text-2xl sm:text-3xl font-extrabold leading-tight">
                 {page.title}{' '}

@@ -2510,6 +2510,112 @@ export function createApiApp(): Express {
     }
   };
 
+  // 10b. AI copywriting for landing pages (Gemini, server-side key, store-owner only)
+  const aiRateByStore = new Map<string, { count: number; resetAt: number }>();
+  app.post('/api/ai/generate-copy', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const auth = await verifySupabaseStoreOwner(req, storeId);
+    if (!auth.ok) {
+      res.status(auth.status).json({ ok: false, code: auth.code, message: auth.message });
+      return;
+    }
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      res.status(501).json({
+        ok: false,
+        code: 'missing_gemini_key',
+        message: 'مفتاح GEMINI_API_KEY غير مضبوط في إعدادات Vercel.'
+      });
+      return;
+    }
+
+    const now = Date.now();
+    const rate = aiRateByStore.get(storeId);
+    if (rate && rate.resetAt > now && rate.count >= 20) {
+      res.status(429).json({ ok: false, code: 'rate_limited', message: 'بلغت حد 20 توليدًا في الساعة، حاول لاحقًا.' });
+      return;
+    }
+    aiRateByStore.set(
+      storeId,
+      rate && rate.resetAt > now ? { count: rate.count + 1, resetAt: rate.resetAt } : { count: 1, resetAt: now + 3600_000 }
+    );
+
+    const productName = String(req.body?.productName || '').trim().slice(0, 150);
+    const details = String(req.body?.details || '').trim().slice(0, 800);
+    const tone = String(req.body?.tone || 'مقنع وواضح').trim().slice(0, 60);
+    const dialect = req.body?.dialect === 'darija' ? 'darija' : 'fusha';
+    if (productName.length < 2) {
+      res.status(400).json({ ok: false, code: 'missing_product', message: 'اكتب اسم المنتج أولاً.' });
+      return;
+    }
+
+    const language =
+      dialect === 'darija'
+        ? 'اللهجة الجزائرية (الدارجة) المكتوبة بالحروف العربية، بسيطة ومفهومة'
+        : 'العربية الفصحى المبسطة';
+    const prompt = [
+      'أنت كاتب إعلانات لمتجر إلكتروني جزائري يبيع بالدفع عند الاستلام.',
+      `اكتب نص صفحة هبوط للمنتج: ${productName}.`,
+      details ? `تفاصيل يعرفها التاجر: ${details}` : '',
+      `اللغة: ${language}. النبرة: ${tone}.`,
+      'القواعد: لا تخترع مواصفات أو أرقامًا أو ضمانات أو نتائج طبية غير مذكورة في التفاصيل. لا تذكر أسعارًا. لا مبالغة كاذبة.',
+      'أعد JSON فقط بالحقول: title (عنوان المنتج، حتى 60 حرفًا)، highlightTitle (عبارة مميزة قصيرة تكمل العنوان، حتى 40 حرفًا)، description (وصف من 2 إلى 4 جمل قصيرة، حتى 400 حرف)، badgeText (شارة من كلمتين أو ثلاث).'
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+    try {
+      const r = await fetchJsonWithTimeout(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.8,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: 'OBJECT',
+                properties: {
+                  title: { type: 'STRING' },
+                  highlightTitle: { type: 'STRING' },
+                  description: { type: 'STRING' },
+                  badgeText: { type: 'STRING' }
+                },
+                required: ['title', 'highlightTitle', 'description', 'badgeText']
+              }
+            }
+          })
+        },
+        25000
+      );
+      if (!r.ok) {
+        res.status(502).json({
+          ok: false,
+          code: 'gemini_error',
+          message: 'رفض Gemini الطلب. تأكد من صحة المفتاح واسم النموذج (GEMINI_MODEL).'
+        });
+        return;
+      }
+      const text = String((r.json as any)?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+      const parsed = JSON.parse(text);
+      const clip = (v: unknown, n: number) => String(v || '').trim().slice(0, n);
+      res.json({
+        ok: true,
+        copy: {
+          title: clip(parsed.title, 80),
+          highlightTitle: clip(parsed.highlightTitle, 60),
+          description: clip(parsed.description, 600),
+          badgeText: clip(parsed.badgeText, 30)
+        }
+      });
+    } catch {
+      res.status(502).json({ ok: false, code: 'gemini_parse', message: 'تعذر قراءة رد الذكاء الاصطناعي، حاول مجدداً.' });
+    }
+  });
+
   app.post('/api/orders/import-from-sheet', async (req: Request, res: Response) => {
     const storeId = String(req.body?.storeId || '').trim();
     const rawOrders = Array.isArray(req.body?.orders) ? req.body.orders : [];

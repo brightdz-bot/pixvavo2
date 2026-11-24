@@ -3188,6 +3188,87 @@ class StorageService {
     return imported;
   }
 
+  // ---- A/B test + page views ------------------------------------------------
+  async trackLandingPageView(pageId: string): Promise<void> {
+    try {
+      if (this.useSupabase() && supabase && isUuid(pageId)) {
+        await supabase.rpc('track_page_view', { p_page_id: pageId });
+        return;
+      }
+      const key = 'dokani_page_views';
+      const all = JSON.parse(localStorage.getItem(key) || '{}');
+      all[pageId] = Number(all[pageId] || 0) + 1;
+      localStorage.setItem(key, JSON.stringify(all));
+    } catch {
+      /* analytics must never break the page */
+    }
+  }
+
+  async getPageStats(
+    storeId: string,
+    pageIds: string[]
+  ): Promise<Record<string, { views: number; orders: number }>> {
+    const out: Record<string, { views: number; orders: number }> = {};
+    pageIds.forEach(id => (out[id] = { views: 0, orders: 0 }));
+    try {
+      if (this.useSupabase() && supabase && isUuid(storeId)) {
+        const [viewsRes, ordersRes] = await Promise.all([
+          supabase.from('landing_page_views').select('page_id, views').in('page_id', pageIds),
+          supabase
+            .from('orders')
+            .select('landing_page_id')
+            .eq('store_id', storeId)
+            .in('landing_page_id', pageIds)
+            .limit(10000)
+        ]);
+        (viewsRes.data || []).forEach((r: any) => {
+          if (out[r.page_id]) out[r.page_id].views += Number(r.views || 0);
+        });
+        (ordersRes.data || []).forEach((r: any) => {
+          if (out[r.landing_page_id]) out[r.landing_page_id].orders += 1;
+        });
+        return out;
+      }
+      const views = JSON.parse(localStorage.getItem('dokani_page_views') || '{}');
+      pageIds.forEach(id => (out[id].views = Number(views[id] || 0)));
+      this.getLocalOrders(storeId).forEach(o => {
+        if (o.landingPageId && out[o.landingPageId]) out[o.landingPageId].orders += 1;
+      });
+    } catch {
+      /* return zeros */
+    }
+    return out;
+  }
+
+  // ---- AI copywriting (server-side Gemini) -----------------------------------
+  async generateAiCopy(
+    storeId: string,
+    input: { productName: string; details?: string; dialect: 'fusha' | 'darija'; tone: string }
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    copy?: { title: string; highlightTitle: string; description: string; badgeText: string };
+  }> {
+    if (!(this.useSupabase() && supabase && isUuid(storeId))) {
+      return { ok: false, error: 'مساعد الكتابة يعمل بعد تسجيل الدخول بحساب المالك (وليس في الوضع التجريبي).' };
+    }
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) return { ok: false, error: 'يرجى تسجيل الدخول أولاً.' };
+    try {
+      const res = await fetch('/api/ai/generate-copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ storeId, ...input })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.ok) return { ok: true, copy: data.copy };
+      return { ok: false, error: data?.message || 'تعذر توليد النص، حاول مجدداً.' };
+    } catch {
+      return { ok: false, error: 'تعذر الاتصال بالسيرفر.' };
+    }
+  }
+
   resetDemoData(): void {
     localStorage.setItem(STORES_KEY, JSON.stringify(INITIAL_STORES));
     localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));

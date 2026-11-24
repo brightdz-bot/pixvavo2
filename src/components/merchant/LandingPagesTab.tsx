@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LandingPage,
   LandingPageOffer,
@@ -11,6 +11,7 @@ import { DEFAULT_ASSETS } from '../../data/defaultAssets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { buildLandingPageUrl } from '../../utils/urlRouting';
 import { resizeImageToDataUrl } from '../../services/branding';
+import { storage } from '../../services/storage';
 import {
   Plus,
   Edit3,
@@ -31,6 +32,8 @@ import {
   Globe,
   Tag,
   MessageSquare,
+  Sparkles,
+  Timer,
   X
 } from 'lucide-react';
 
@@ -122,6 +125,55 @@ export const LandingPagesTab: React.FC<Props> = ({
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [variantOptionDrafts, setVariantOptionDrafts] = useState<Record<string, string>>({});
+
+  // AI copywriting assistant
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiDetails, setAiDetails] = useState('');
+  const [aiDialect, setAiDialect] = useState<'fusha' | 'darija'>('darija');
+  const [aiTone, setAiTone] = useState('مقنع وواضح');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<{
+    title: string;
+    highlightTitle: string;
+    description: string;
+    badgeText: string;
+  } | null>(null);
+
+  // A/B test stats
+  const [abStats, setAbStats] = useState<Record<string, { views: number; orders: number }>>({});
+  const abVariantSlug = editingPage?.integrations?.ab?.variantSlug || '';
+  const abVariantPage = abVariantSlug ? landingPages.find(p => p.slug === abVariantSlug) : undefined;
+  useEffect(() => {
+    if (!editingPage || !abVariantPage) return;
+    let alive = true;
+    storage.getPageStats(storeId, [editingPage.id, abVariantPage.id]).then(r => {
+      if (alive) setAbStats(r);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [editingPage?.id, abVariantPage?.id, storeId]);
+
+  const handleGenerateAi = async () => {
+    if (!editingPage) return;
+    setAiError(null);
+    setAiResult(null);
+    if (editingPage.title.trim().length < 2) {
+      setAiError('اكتب اسم المنتج في خانة "اسم المنتج الرئيسي" أولاً.');
+      return;
+    }
+    setAiLoading(true);
+    const res = await storage.generateAiCopy(storeId, {
+      productName: editingPage.title.trim(),
+      details: aiDetails,
+      dialect: aiDialect,
+      tone: aiTone
+    });
+    setAiLoading(false);
+    if (res.ok && res.copy) setAiResult(res.copy);
+    else setAiError(res.error || 'تعذر توليد النص.');
+  };
 
   const handleCopyLink = (slug: string) => {
     try {
@@ -498,6 +550,92 @@ export const LandingPagesTab: React.FC<Props> = ({
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
                   />
                 </div>
+              </div>
+              <div className="rounded-xl border border-dashed border-emerald-300 dark:border-emerald-800 p-3.5 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setAiOpen(o => !o)}
+                  className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>اكتب لي النص بالذكاء الاصطناعي</span>
+                </button>
+                {aiOpen && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold mb-1">ماذا تعرف عن المنتج؟ (اختياري، لتجنب معلومات غير صحيحة)</label>
+                      <textarea
+                        rows={2}
+                        value={aiDetails}
+                        onChange={e => setAiDetails(e.target.value)}
+                        placeholder="مثال: خشب طبيعي، يُثبَّت بدون ثقب، مقاس 40 سم، ثلاثة ألوان"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-xs font-bold block space-y-1">
+                        <span>اللغة</span>
+                        <select
+                          value={aiDialect}
+                          onChange={e => setAiDialect(e.target.value as 'fusha' | 'darija')}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                        >
+                          <option value="darija">دارجة جزائرية</option>
+                          <option value="fusha">فصحى مبسطة</option>
+                        </select>
+                      </label>
+                      <label className="text-xs font-bold block space-y-1">
+                        <span>النبرة</span>
+                        <select
+                          value={aiTone}
+                          onChange={e => setAiTone(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                        >
+                          <option>مقنع وواضح</option>
+                          <option>فاخر وهادئ</option>
+                          <option>حماسي</option>
+                          <option>عائلي ودافئ</option>
+                        </select>
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGenerateAi}
+                      disabled={aiLoading}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-60"
+                    >
+                      {aiLoading ? 'جارٍ الكتابة...' : 'اكتب النص'}
+                    </button>
+                    {aiError && <p className="text-xs font-bold text-rose-600">{aiError}</p>}
+                    {aiResult && (
+                      <div className="rounded-xl bg-slate-50 dark:bg-slate-800 p-3 space-y-2 text-xs">
+                        <p className="font-bold">
+                          {aiResult.title} <span className="text-emerald-600">{aiResult.highlightTitle}</span>
+                        </p>
+                        <p className="leading-relaxed">{aiResult.description}</p>
+                        <p className="text-slate-500">الشارة: {aiResult.badgeText}</p>
+                        <p className="text-[11px] text-slate-500">راجع النص قبل الاعتماد، فقد يخطئ الذكاء الاصطناعي.</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPage({
+                              ...editingPage,
+                              title: aiResult.title || editingPage.title,
+                              highlightTitle: aiResult.highlightTitle,
+                              description: aiResult.description,
+                              badgeText: aiResult.badgeText
+                            });
+                            setAiResult(null);
+                            setAiOpen(false);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold cursor-pointer"
+                        >
+                          استخدم هذا النص
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1003,6 +1141,185 @@ export const LandingPagesTab: React.FC<Props> = ({
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Urgency + A/B test */}
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-5">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Timer className="w-4 h-4 text-emerald-600" />
+                <span>الإلحاح واختبار A/B</span>
+              </h3>
+
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editingPage.integrations.urgency?.showStock !== false}
+                    onChange={e =>
+                      setEditingPage({
+                        ...editingPage,
+                        integrations: {
+                          ...editingPage.integrations,
+                          urgency: { ...editingPage.integrations.urgency, showStock: e.target.checked }
+                        }
+                      })
+                    }
+                    className="rounded accent-emerald-600"
+                  />
+                  <span>إظهار عداد المخزون ("متبقي X قطع فقط")</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="text-xs font-bold block space-y-1">
+                    <span>يظهر عندما يبقى</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={editingPage.integrations.urgency?.stockThreshold ?? 5}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          integrations: {
+                            ...editingPage.integrations,
+                            urgency: {
+                              ...editingPage.integrations.urgency,
+                              stockThreshold: Math.max(1, Number(e.target.value) || 1)
+                            }
+                          }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    />
+                  </label>
+                  <label className="text-xs font-bold block space-y-1 sm:col-span-2">
+                    <span>العد التنازلي: ينتهي العرض في (اتركه فارغًا لإلغائه)</span>
+                    <input
+                      type="datetime-local"
+                      value={(editingPage.integrations.urgency?.countdownEndsAt || '').slice(0, 16)}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          integrations: {
+                            ...editingPage.integrations,
+                            urgency: {
+                              ...editingPage.integrations.urgency,
+                              countdownEndsAt: e.target.value ? new Date(e.target.value).toISOString() : ''
+                            }
+                          }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    />
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={editingPage.integrations.urgency?.countdownText || ''}
+                  onChange={e =>
+                    setEditingPage({
+                      ...editingPage,
+                      integrations: {
+                        ...editingPage.integrations,
+                        urgency: { ...editingPage.integrations.urgency, countdownText: e.target.value }
+                      }
+                    })
+                  }
+                  placeholder="نص العداد: ينتهي العرض خلال"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                />
+                <p className="text-[11px] text-slate-500">
+                  العداد يعتمد على تاريخ حقيقي تحدده، ويختفي تلقائيًا عند انتهائه. المخزون يؤخذ من خانة "المخزون المتوفر".
+                </p>
+              </div>
+
+              <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <h4 className="text-xs font-bold">اختبار A/B: صفحتان لنفس الرابط</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="text-xs font-bold block space-y-1 sm:col-span-2">
+                    <span>الصفحة البديلة (B)</span>
+                    <select
+                      value={abVariantSlug}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          integrations: {
+                            ...editingPage.integrations,
+                            ab: { ...editingPage.integrations.ab, variantSlug: e.target.value }
+                          }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    >
+                      <option value="">بدون اختبار</option>
+                      {landingPages
+                        .filter(p => p.id !== editingPage.id)
+                        .map(p => (
+                          <option key={p.id} value={p.slug}>
+                            {p.title} ({p.slug})
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-bold block space-y-1">
+                    <span>نسبة الزوار لـ B (%)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={editingPage.integrations.ab?.splitToB ?? 50}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          integrations: {
+                            ...editingPage.integrations,
+                            ab: {
+                              ...editingPage.integrations.ab,
+                              splitToB: Math.min(100, Math.max(0, Number(e.target.value) || 0))
+                            }
+                          }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    />
+                  </label>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  أنشئ الصفحة البديلة كصفحة عادية ومنشورة (عنوان أو صورة أو عرض مختلف)، ثم اخترها هنا. الزائر يرى دائمًا نفس النسخة في كل زيارة. أنت تشارك رابط الصفحة A فقط.
+                </p>
+                {abVariantPage && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-right">
+                      <thead className="text-slate-500">
+                        <tr>
+                          <th className="py-1.5 font-semibold">النسخة</th>
+                          <th className="py-1.5 font-semibold">الزيارات</th>
+                          <th className="py-1.5 font-semibold">الطلبات</th>
+                          <th className="py-1.5 font-semibold">نسبة التحويل</th>
+                        </tr>
+                      </thead>
+                      <tbody className="tabular-nums">
+                        {[
+                          { label: 'A', page: editingPage },
+                          { label: 'B', page: abVariantPage }
+                        ].map(row => {
+                          const st = abStats[row.page.id] || { views: 0, orders: 0 };
+                          const rate = st.views > 0 ? ((st.orders / st.views) * 100).toFixed(1) : '0.0';
+                          return (
+                            <tr key={row.label} className="border-t border-slate-100 dark:border-slate-800">
+                              <td className="py-2 font-bold">{row.label} ({row.page.slug})</td>
+                              <td className="py-2">{st.views}</td>
+                              <td className="py-2">{st.orders}</td>
+                              <td className="py-2 font-bold">{rate}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <p className="text-[11px] text-slate-500 mt-2">
+                      انتظر عشرات الطلبات على الأقل قبل أن تعتمد النتيجة، فالأرقام الصغيرة تخدع.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

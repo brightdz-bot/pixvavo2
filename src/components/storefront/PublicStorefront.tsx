@@ -254,9 +254,30 @@ export const PublicStorefront: React.FC<Props> = ({
 
   // If a landing page slug is active, render the full dedicated LandingPageView!
   const normalizedTargetSlug = normalizeSlug(activePageSlug);
-  const activePage = normalizedTargetSlug
+  const basePage = normalizedTargetSlug
     ? pages.find(p => normalizeSlug(p.slug) === normalizedTargetSlug)
     : null;
+  // A/B test: a stable random share of visitors (per browser) sees the variant page.
+  let activePage = basePage;
+  const abCfg = basePage?.integrations?.ab;
+  const abVariant = abCfg?.variantSlug
+    ? pages.find(p => normalizeSlug(p.slug) === normalizeSlug(abCfg.variantSlug) && p.id !== basePage?.id)
+    : null;
+  if (basePage && abVariant) {
+    const abKey = `ab_${basePage.id}`;
+    let side: string | null = null;
+    try {
+      side = localStorage.getItem(abKey);
+      if (side !== 'A' && side !== 'B') {
+        const share = Math.min(100, Math.max(0, Number(abCfg?.splitToB ?? 50)));
+        side = Math.random() * 100 < share ? 'B' : 'A';
+        localStorage.setItem(abKey, side);
+      }
+    } catch {
+      side = 'A';
+    }
+    if (side === 'B') activePage = abVariant;
+  }
 
   const sfHeadFont = findFont(HEADING_FONTS, store.storefrontHeadingFont, DEFAULT_HEADING_FONT);
   const sfBodyFont = findFont(BODY_FONTS, store.storefrontBodyFont, DEFAULT_BODY_FONT);
