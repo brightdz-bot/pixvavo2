@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { Store, LandingPage, OrderStatus } from '../../types';
+import {
+  HEADING_FONTS,
+  BODY_FONTS,
+  DEFAULT_HEADING_FONT,
+  DEFAULT_BODY_FONT,
+  findFont,
+  loadFonts
+} from '../../data/fonts';
 import { storage } from '../../services/storage';
 import { useAuth } from '../../services/authContext';
 import {
@@ -206,6 +214,17 @@ export const PublicStorefront: React.FC<Props> = ({
     }
   };
 
+  const headFontId = store?.storefrontHeadingFont;
+  const bodyFontId = store?.storefrontBodyFont;
+  const hasStore = Boolean(store);
+  useEffect(() => {
+    if (!hasStore) return;
+    loadFonts([
+      findFont(HEADING_FONTS, headFontId, DEFAULT_HEADING_FONT),
+      findFont(BODY_FONTS, bodyFontId, DEFAULT_BODY_FONT)
+    ]);
+  }, [hasStore, headFontId, bodyFontId]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--sf-ink)] text-[color:var(--sf-ivory)] sf-dark">
@@ -239,6 +258,8 @@ export const PublicStorefront: React.FC<Props> = ({
     ? pages.find(p => normalizeSlug(p.slug) === normalizedTargetSlug)
     : null;
 
+  const sfHeadFont = findFont(HEADING_FONTS, store.storefrontHeadingFont, DEFAULT_HEADING_FONT);
+  const sfBodyFont = findFont(BODY_FONTS, store.storefrontBodyFont, DEFAULT_BODY_FONT);
   const sfIsDark = store.storefrontTheme !== 'light';
   const sfThemeClass = sfIsDark ? 'sf-dark' : 'sf-light';
   const rawAccent = /^#[0-9a-fA-F]{6}$/.test(store.brandColor || '') ? store.brandColor : '';
@@ -251,7 +272,9 @@ export const PublicStorefront: React.FC<Props> = ({
       0.114 * parseInt(sfAccent.slice(5, 7), 16)) / 255;
   const sfVars = {
     '--sf-gold': sfAccent,
-    '--sf-on-accent': sfLuma > 0.6 ? '#0d0f0e' : '#ffffff'
+    '--sf-on-accent': sfLuma > 0.6 ? '#0d0f0e' : '#ffffff',
+    '--sf-font-head': sfHeadFont.family,
+    '--sf-font-body': sfBodyFont.family
   } as React.CSSProperties;
 
   const categories = ['الكل', ...Array.from(new Set(pages.map(p => p.category)))];

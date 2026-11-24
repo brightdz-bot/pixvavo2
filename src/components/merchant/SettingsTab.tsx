@@ -1,4 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import {
+  HEADING_FONTS,
+  BODY_FONTS,
+  DEFAULT_HEADING_FONT,
+  DEFAULT_BODY_FONT,
+  findFont,
+  loadFonts
+} from '../../data/fonts';
 import { Store, WilayaRate, StoreApiConfig, PromoCoupon } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
 import {
@@ -106,6 +114,11 @@ export const SettingsTab: React.FC<Props> = ({
   const [defaultPixelId, setDefaultPixelId] = useState(store.defaultPixelId || '');
   const [googleSheetWebhook, setGoogleSheetWebhook] = useState(store.googleSheetWebhook || '');
   const [brandColor, setBrandColor] = useState(store.brandColor || '#754b2d');
+  useEffect(() => {
+    loadFonts([...HEADING_FONTS, ...BODY_FONTS]);
+  }, []);
+  const [headingFont, setHeadingFont] = useState(store.storefrontHeadingFont || DEFAULT_HEADING_FONT);
+  const [bodyFont, setBodyFont] = useState(store.storefrontBodyFont || DEFAULT_BODY_FONT);
   const [storefrontTheme, setStorefrontTheme] = useState<'dark' | 'light'>(
     store.storefrontTheme === 'light' ? 'light' : 'dark'
   );
@@ -336,6 +349,8 @@ export const SettingsTab: React.FC<Props> = ({
       googleSheetWebhook: googleSheetWebhook.trim(),
       brandColor,
       storefrontTheme,
+      storefrontHeadingFont: headingFont,
+      storefrontBodyFont: bodyFont,
       freeShippingThreshold: Number(freeShippingThreshold) || 0,
       customWilayaRates: customRates,
       ...(ratesResetToDefaults ? { customWilayaFees: {} } : {}),
@@ -1032,6 +1047,57 @@ export const SettingsTab: React.FC<Props> = ({
           <p className="text-[11px] text-slate-500">
             يتغير مظهر الصفحة الرئيسية للمتجر بعد حفظ الإعدادات. لون التمييز يؤخذ من لون الهوية في الأسفل.
           </p>
+        </div>
+
+        {/* Storefront fonts */}
+        <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            <Palette className="w-4 h-4 text-emerald-600" />
+            <span>خطوط واجهة المتجر</span>
+          </h3>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <label className="space-y-1.5 text-xs font-semibold block">
+              <span>خط العناوين</span>
+              <select
+                value={headingFont}
+                onChange={e => setHeadingFont(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+              >
+                {HEADING_FONTS.map(f => (
+                  <option key={f.id} value={f.id}>{f.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1.5 text-xs font-semibold block">
+              <span>خط النصوص</span>
+              <select
+                value={bodyFont}
+                onChange={e => setBodyFont(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+              >
+                {BODY_FONTS.map(f => (
+                  <option key={f.id} value={f.id}>{f.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div
+            className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-1"
+            dir="rtl"
+          >
+            <p
+              className="text-xl font-bold"
+              style={{ fontFamily: `${findFont(HEADING_FONTS, headingFont, DEFAULT_HEADING_FONT).family}, sans-serif` }}
+            >
+              منتجات مختارة بعناية، توصيل لكل الولايات
+            </p>
+            <p
+              className="text-sm text-slate-500"
+              style={{ fontFamily: `${findFont(BODY_FONTS, bodyFont, DEFAULT_BODY_FONT).family}, sans-serif` }}
+            >
+              الدفع عند الاستلام بعد معاينة المنتج، والتوصيل خلال أيام قليلة.
+            </p>
+          </div>
         </div>
 
         {/* Storefront Catalog Brand Color */}
