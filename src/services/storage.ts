@@ -961,7 +961,7 @@ class StorageService {
               error: 'هذا النطاق مستخدم بالفعل في متجر آخر على المنصة، اختر نطاقاً مختلفاً.'
             };
           }
-          if (error.code === '42703' || msg.includes('custom_domain') || msg.includes('storefront_theme')) {
+          if (error.code === '42703' || error.code === '42501' || msg.includes('custom_domain') || msg.includes('storefront_theme')) {
             // Self-healing fallback: save all other settings without failing, and prompt merchant to run 4-line SQL
             const retry = await supabase
               .from('stores')
