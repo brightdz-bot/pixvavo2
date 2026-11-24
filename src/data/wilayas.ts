@@ -271,6 +271,19 @@ export function formatPlainDZD(amount: number): string {
 
 export const LANDING_THEME_PRESETS: LandingPageTheme[] = [
   {
+    presetId: 'ink-gold',
+    name: 'الأسود الدافئ والذهبي',
+    primaryColor: '#c8a15b',
+    primaryHoverColor: '#b08a46',
+    bgColor: '#0d0f0e',
+    surfaceColor: '#151917',
+    softTintColor: '#1b201d',
+    borderColor: '#2a2f2b',
+    textColor: '#efe9dc',
+    accentColor: '#c8a15b',
+    isDark: true
+  },
+  {
     presetId: 'wood-luxury',
     name: 'الخشبي الفاخر (Bright DZ)',
     primaryColor: '#754b2d',
