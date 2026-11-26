@@ -223,6 +223,7 @@ export const LandingPageView: React.FC<Props> = ({
   const [orderBumpSelected, setOrderBumpSelected] = useState(false);
   const [openFaqId, setOpenFaqId] = useState<string | null>(null);
   const [showMobileStickyBar, setShowMobileStickyBar] = useState(false);
+  const detailImagesSectionRef = useRef<HTMLElement | null>(null);
   const [upsellOfferModalData, setUpsellOfferModalData] = useState<{
     orderNumber: string;
     bundleDetails: string;
@@ -472,14 +473,19 @@ export const LandingPageView: React.FC<Props> = ({
   const shippingCost = deliveryType === 'stop' ? stopFee : homeFee;
   const grandTotal = discountedProductPrice + shippingCost;
 
-  // Slim Mobile Quick-Order Bar visibility via IntersectionObserver on #form-container
+  // Slim Sticky Quick-Order Bar visibility: show ONLY when the bottom detail images section is visible
   useEffect(() => {
-    if (typeof window === 'undefined' || isTrackingMode || Boolean(upsellOfferModalData)) {
+    if (
+      typeof window === 'undefined' ||
+      isTrackingMode ||
+      Boolean(upsellOfferModalData) ||
+      detailImages.length === 0
+    ) {
       setShowMobileStickyBar(false);
       return;
     }
-    const formEl = document.getElementById('form-container');
-    if (!formEl || typeof IntersectionObserver === 'undefined') {
+    const detailEl = detailImagesSectionRef.current;
+    if (!detailEl || typeof IntersectionObserver === 'undefined') {
       setShowMobileStickyBar(false);
       return;
     }
@@ -487,13 +493,13 @@ export const LandingPageView: React.FC<Props> = ({
       entries => {
         const entry = entries[0];
         if (!entry) return;
-        setShowMobileStickyBar(!entry.isIntersecting);
+        setShowMobileStickyBar(entry.isIntersecting);
       },
-      { threshold: 0.12 }
+      { threshold: 0 }
     );
-    observer.observe(formEl);
+    observer.observe(detailEl);
     return () => observer.disconnect();
-  }, [isTrackingMode, upsellOfferModalData, page.id]);
+  }, [isTrackingMode, upsellOfferModalData, page.id, detailImages.length]);
 
   const variantSummary = useMemo(() => {
     const vars = page.variants || [];
@@ -2901,6 +2907,7 @@ export const LandingPageView: React.FC<Props> = ({
       {/* Optional Edge-to-Edge Full-Width Product Detail Showcase Images (Below Order Form) */}
       {!isTrackingMode && detailImages.length > 0 && (
         <section
+          ref={detailImagesSectionRef}
           aria-label={`صور تعريفية لـ ${page.title}`}
           className="w-full max-w-full overflow-x-clip flex flex-col p-0 m-0 leading-none"
           style={{ backgroundColor: theme.bgColor }}
@@ -2936,9 +2943,13 @@ export const LandingPageView: React.FC<Props> = ({
         </div>
       </footer>
 
-      {/* Slim Sticky Quick-Order Bar (Auto-hidden when #form-container is visible or in tracking mode) */}
+      {/* Slim Sticky Quick-Order Bar (Visible only while the bottom detail images section is in view) */}
       <AnimatePresence>
-        {showMobileStickyBar && !isTrackingMode && !upsellOfferModalData && page.stock > 0 && (
+        {showMobileStickyBar &&
+          detailImages.length > 0 &&
+          !isTrackingMode &&
+          !upsellOfferModalData &&
+          page.stock > 0 && (
           <motion.div
             key="mobile-sticky-cta"
             initial={{ y: 72, opacity: 0 }}
