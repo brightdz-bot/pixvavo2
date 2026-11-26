@@ -2577,6 +2577,7 @@ class StorageService {
       dailyMaxOrdersPerPhone: 2,
       autoFlagReturnsThreshold: 2,
       blacklistedPhones: [],
+      promoCodesEnabled: true,
       promoCoupons: [],
       whatsappConfirmTemplate: '',
       whatsappShippingTemplate: '',

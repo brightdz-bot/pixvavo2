@@ -56,6 +56,7 @@ export interface ServerStoreApiConfig {
   dailyMaxOrdersPerPhone?: number;
   autoFlagReturnsThreshold?: number;
   blacklistedPhones?: Array<{ phone: string; reason?: string; addedAt?: string }>;
+  promoCodesEnabled?: boolean;
   promoCoupons?: Array<{
     id: string;
     code: string;
@@ -2353,7 +2354,8 @@ export function createApiApp(): Express {
         whatsappShippingTemplate: '',
         faviconUrl: '',
         metaPixelId: '',
-        tiktokPixelId: ''
+        tiktokPixelId: '',
+        promoCodesEnabled: true
       });
       return;
     }
@@ -2364,7 +2366,8 @@ export function createApiApp(): Express {
       whatsappShippingTemplate: cfg?.whatsappShippingTemplate || '',
       faviconUrl: cfg?.faviconUrl || '',
       metaPixelId: cfg?.metaPixelId || '',
-      tiktokPixelId: cfg?.tiktokPixelId || ''
+      tiktokPixelId: cfg?.tiktokPixelId || '',
+      promoCodesEnabled: cfg?.promoCodesEnabled !== false
     });
   });
 
@@ -2380,6 +2383,14 @@ export function createApiApp(): Express {
     }
 
     const cfg = storeId ? await getOrFetchServerConfig(storeId) : undefined;
+    if (cfg && cfg.promoCodesEnabled === false) {
+      res.json({
+        ok: true,
+        valid: false,
+        message: 'كوبونات الخصم غير مفعّلة حالياً في هذا المتجر'
+      });
+      return;
+    }
     const coupons = Array.isArray(cfg?.promoCoupons) ? cfg.promoCoupons : [];
     const found = coupons.find(c => String(c.code || '').trim().toUpperCase() === rawCode);
 

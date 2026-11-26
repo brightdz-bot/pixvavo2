@@ -1010,7 +1010,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     updated: Store,
     apiExtras?: Pick<
       StoreApiConfig,
-      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
+      'promoCodesEnabled' | 'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
     >
   ) => {
     const res = await storage.saveStore(updated);
@@ -1044,6 +1044,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     patch: Partial<
       Pick<
         StoreApiConfig,
+        | 'promoCodesEnabled'
         | 'promoCoupons'
         | 'whatsappConfirmTemplate'
         | 'whatsappShippingTemplate'

@@ -167,6 +167,9 @@ export const LandingPageView: React.FC<Props> = ({
   const abandonedTimerRef = useRef<number | null>(null);
 
   // Promo Coupon State
+  const [promoCodesEnabled, setPromoCodesEnabled] = useState<boolean>(
+    () => storage.getLocalStoreApiConfig(store.id)?.promoCodesEnabled !== false
+  );
   const [promoInput, setPromoInput] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<{
     code: string;
@@ -327,6 +330,7 @@ export const LandingPageView: React.FC<Props> = ({
     let active = true;
     const localCfg = storage.getLocalStoreApiConfig(store.id);
     if (localCfg) {
+      setPromoCodesEnabled(localCfg.promoCodesEnabled !== false);
       setWaTemplates({
         confirm: localCfg.whatsappConfirmTemplate || '',
         shipping: localCfg.whatsappShippingTemplate || ''
@@ -344,6 +348,14 @@ export const LandingPageView: React.FC<Props> = ({
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (!active || !data?.ok) return;
+        if (typeof data.promoCodesEnabled === 'boolean') {
+          setPromoCodesEnabled(data.promoCodesEnabled);
+          if (!data.promoCodesEnabled) {
+            setAppliedPromo(null);
+            setPromoInput('');
+            setPromoError(null);
+          }
+        }
         setWaTemplates(prev => ({
           confirm: data.whatsappConfirmTemplate || prev.confirm,
           shipping: data.whatsappShippingTemplate || prev.shipping
@@ -429,14 +441,14 @@ export const LandingPageView: React.FC<Props> = ({
   const orderBumpPrice = activeOrderBump && orderBumpSelected ? activeOrderBump.price : 0;
   const combinedProductPrice = productPrice + orderBumpPrice;
   const activeDiscountAmount = useMemo(() => {
-    if (!appliedPromo) return 0;
+    if (!promoCodesEnabled || !appliedPromo) return 0;
     if (appliedPromo.minOrder && combinedProductPrice < appliedPromo.minOrder) return 0;
     const raw =
       appliedPromo.type === 'percent'
         ? Math.round((combinedProductPrice * Math.min(100, Math.max(0, appliedPromo.value))) / 100)
         : Math.max(0, appliedPromo.value);
     return Math.min(combinedProductPrice, raw);
-  }, [appliedPromo, combinedProductPrice]);
+  }, [promoCodesEnabled, appliedPromo, combinedProductPrice]);
 
   const discountedProductPrice = Math.max(0, combinedProductPrice - activeDiscountAmount);
   const homeFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'home', discountedProductPrice);
@@ -852,7 +864,7 @@ export const LandingPageView: React.FC<Props> = ({
         deliveryType,
         address: `${selectedWilaya.nameAr} - ${selectedCommune}${deliveryType === 'stop' ? ' (مكتب الشحن Stop Desk)' : ''}`,
         variantLabel: variantSummary || undefined,
-        promoCode: appliedPromo?.code,
+        promoCode: promoCodesEnabled ? appliedPromo?.code : undefined,
         discount: activeDiscountAmount,
         discountReason: appliedPromo?.reason,
         orderBump: chosenBump,
@@ -2134,56 +2146,58 @@ export const LandingPageView: React.FC<Props> = ({
                   </div>
 
                   {/* Promo Code / Coupon Field */}
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold flex items-center gap-1.5">
-                      <TicketPercent className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
-                      <span>هل لديك كوبون خصم؟ (اختياري)</span>
-                    </label>
-                    {appliedPromo ? (
-                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>
-                            تم تطبيق {appliedPromo.reason} — خصم {formatDZD(activeDiscountAmount)}
+                  {promoCodesEnabled && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-bold flex items-center gap-1.5">
+                        <TicketPercent className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
+                        <span>هل لديك كوبون خصم؟ (اختياري)</span>
+                      </label>
+                      {appliedPromo ? (
+                        <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>
+                              تم تطبيق {appliedPromo.reason} — خصم {formatDZD(activeDiscountAmount)}
+                            </span>
                           </span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAppliedPromo(null);
-                            setPromoInput('');
-                            setPromoError(null);
-                          }}
-                          className="text-rose-600 hover:underline text-[11px] font-bold cursor-pointer"
-                        >
-                          إزالة
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          dir="ltr"
-                          value={promoInput}
-                          onChange={e => setPromoInput(e.target.value.toUpperCase())}
-                          placeholder="أدخل رمز الكوبون (مثال: SAVE10)"
-                          className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-mono font-bold uppercase focus:outline-none ${subtleInputBg}`}
-                        />
-                        <button
-                          type="button"
-                          onClick={handleApplyPromo}
-                          disabled={isValidatingPromo}
-                          className="px-4 py-2.5 rounded-xl text-white text-xs font-bold shrink-0 cursor-pointer disabled:opacity-60"
-                          style={{ backgroundColor: theme.primaryColor }}
-                        >
-                          {isValidatingPromo ? 'تحقق...' : 'تطبيق'}
-                        </button>
-                      </div>
-                    )}
-                    {promoError && (
-                      <p className="text-[11px] font-bold text-rose-600">{promoError}</p>
-                    )}
-                  </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAppliedPromo(null);
+                              setPromoInput('');
+                              setPromoError(null);
+                            }}
+                            className="text-rose-600 hover:underline text-[11px] font-bold cursor-pointer"
+                          >
+                            إزالة
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            dir="ltr"
+                            value={promoInput}
+                            onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                            placeholder="أدخل رمز الكوبون (مثال: SAVE10)"
+                            className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-mono font-bold uppercase focus:outline-none ${subtleInputBg}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleApplyPromo}
+                            disabled={isValidatingPromo}
+                            className="px-4 py-2.5 rounded-xl text-white text-xs font-bold shrink-0 cursor-pointer disabled:opacity-60"
+                            style={{ backgroundColor: theme.primaryColor }}
+                          >
+                            {isValidatingPromo ? 'تحقق...' : 'تطبيق'}
+                          </button>
+                        </div>
+                      )}
+                      {promoError && (
+                        <p className="text-[11px] font-bold text-rose-600">{promoError}</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Optional In-Form Order Bump Card */}
                   {activeOrderBump && (

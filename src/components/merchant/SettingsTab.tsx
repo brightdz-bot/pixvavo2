@@ -51,14 +51,14 @@ interface Props {
     updatedStore: Store,
     apiExtras?: Pick<
       StoreApiConfig,
-      'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
+      'promoCodesEnabled' | 'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
     >
   ) => void;
   onSaveStoreExtras?: (
     patch: Partial<
       Pick<
         StoreApiConfig,
-        'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
+        'promoCodesEnabled' | 'promoCoupons' | 'whatsappConfirmTemplate' | 'whatsappShippingTemplate' | 'faviconUrl'
       >
     >,
     successMsg?: string
@@ -136,6 +136,9 @@ export const SettingsTab: React.FC<Props> = ({
   const [copiedScript, setCopiedScript] = useState(false);
 
   // Promo Coupons
+  const [promoCodesEnabled, setPromoCodesEnabled] = useState<boolean>(
+    apiConfig?.promoCodesEnabled !== false
+  );
   const [promoCoupons, setPromoCoupons] = useState<PromoCoupon[]>(
     apiConfig?.promoCoupons || []
   );
@@ -161,6 +164,7 @@ export const SettingsTab: React.FC<Props> = ({
 
   useEffect(() => {
     if (apiConfig) {
+      setPromoCodesEnabled(apiConfig.promoCodesEnabled !== false);
       setPromoCoupons(apiConfig.promoCoupons || []);
       setWhatsappConfirmTemplate(apiConfig.whatsappConfirmTemplate || '');
       setWhatsappShippingTemplate(apiConfig.whatsappShippingTemplate || '');
@@ -315,6 +319,20 @@ export const SettingsTab: React.FC<Props> = ({
     }
   };
 
+  const handleTogglePromoCodesEnabled = async () => {
+    const nextEnabled = !promoCodesEnabled;
+    setPromoCodesEnabled(nextEnabled);
+    setCouponError(null);
+    if (onSaveStoreExtras) {
+      await onSaveStoreExtras(
+        { promoCodesEnabled: nextEnabled },
+        nextEnabled
+          ? 'تم تفعيل وإظهار خانة كوبونات الخصم في صفحات الهبوط'
+          : 'تم إزالة وإخفاء خانة كوبونات الخصم من صفحات الهبوط'
+      );
+    }
+  };
+
   const insertTemplateVar = (token: string) => {
     if (activeTemplateField === 'confirm') {
       const base = whatsappConfirmTemplate || DEFAULT_WHATSAPP_CONFIRM_TEMPLATE;
@@ -358,6 +376,7 @@ export const SettingsTab: React.FC<Props> = ({
     };
     setCustomDomain(normalizedDomain);
     onSaveSettings(updated, {
+      promoCodesEnabled,
       promoCoupons,
       whatsappConfirmTemplate: whatsappConfirmTemplate.trim(),
       whatsappShippingTemplate: whatsappShippingTemplate.trim(),
@@ -778,145 +797,186 @@ export const SettingsTab: React.FC<Props> = ({
 
         {/* Promo Codes / Coupons Manager */}
         <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-bold flex items-center gap-2">
                 <TicketPercent className="w-4 h-4 text-emerald-600" />
                 <span>إدارة كوبونات وأكواد الخصم (Promo Codes)</span>
               </h3>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                فعّل أكواد خصم لزبائنك في صفحات الهبوط بنسبة مئوية أو بمبلغ ثابت بالدينار الجزائري.
+                تحكم في إظهار أو إزالة خانة كوبون الخصم في استمارة الطلب بجميع صفحات الهبوط.
               </p>
             </div>
-            <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              {promoCoupons.filter(c => c.isActive).length} كوبون نشط
-            </span>
-          </div>
-
-          {couponError && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold">
-              {couponError}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/70">
-            <div className="sm:col-span-3">
-              <label className="block text-[11px] font-bold mb-1">رمز الكوبون</label>
-              <input
-                type="text"
-                dir="ltr"
-                value={newCouponCode}
-                onChange={e => setNewCouponCode(e.target.value.toUpperCase())}
-                placeholder="WELCOME10"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold uppercase"
-              />
-            </div>
-
-            <div className="sm:col-span-3">
-              <label className="block text-[11px] font-bold mb-1">نوع الخصم</label>
-              <select
-                value={newCouponType}
-                onChange={e => setNewCouponType(e.target.value as 'fixed' | 'percent')}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
-              >
-                <option value="fixed">مبلغ ثابت (دج)</option>
-                <option value="percent">نسبة مئوية (%)</option>
-              </select>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-bold mb-1">
-                {newCouponType === 'percent' ? 'النسبة (%)' : 'القيمة (دج)'}
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={newCouponValue}
-                onChange={e => setNewCouponValue(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-bold mb-1">حد أدنى (دج)</label>
-              <input
-                type="number"
-                min="0"
-                step="500"
-                value={newCouponMinOrder}
-                onChange={e => setNewCouponMinOrder(e.target.value)}
-                placeholder="0"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
-              />
-            </div>
-
-            <div className="sm:col-span-2 flex items-end">
+            <div className="flex items-center gap-2.5">
+              {promoCodesEnabled && (
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                  {promoCoupons.filter(c => c.isActive).length} كوبون نشط
+                </span>
+              )}
               <button
                 type="button"
-                onClick={handleAddCoupon}
-                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                role="switch"
+                aria-checked={promoCodesEnabled}
+                onClick={handleTogglePromoCodesEnabled}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap ${
+                  promoCodesEnabled
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60'
+                    : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>إضافة</span>
+                <Power className="w-3.5 h-3.5 shrink-0" />
+                <span>{promoCodesEnabled ? 'مفعّلة (إزالة من المتجر)' : 'مخفية (إضافة للمتجر)'}</span>
               </button>
             </div>
           </div>
 
-          {promoCoupons.length === 0 ? (
-            <div className="text-center py-4 text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-              لا توجد كوبونات خصم مضافة بعد. أنشئ أول كوبون أعلاه لتقديم خصومات لزبائنك.
+          {!promoCodesEnabled ? (
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-300 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                  خانة كوبونات الخصم مُزالة ومخفية حالياً من صفحات الهبوط
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  لن تظهر خانة «هل لديك كوبون خصم؟» للزبائن في استمارة الطلب، وتبقى كوبوناتك السابقة محفوظة ({promoCoupons.length}) عند إعادة تفعيلها.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleTogglePromoCodesEnabled}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>إضافة وإظهار الكوبونات</span>
+              </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {promoCoupons.map(c => (
-                <div
-                  key={c.id}
-                  className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
-                    c.isActive
-                      ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/70'
-                      : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 opacity-70'
-                  }`}
-                >
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-black text-xs px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                        {c.code}
-                      </span>
-                      <span className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300">
-                        {c.type === 'percent' ? `خصم ${c.value}%` : `خصم ${formatDZD(c.value)}`}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {c.minOrder && c.minOrder > 0
-                        ? `الحد الأدنى للطلب: ${formatDZD(c.minOrder)}`
-                        : 'بدون حد أدنى للطلب'}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleCoupon(c.id)}
-                      title={c.isActive ? 'تعطيل الكوبون' : 'تفعيل الكوبون'}
-                      className={`p-1.5 rounded-lg border text-xs font-bold cursor-pointer ${
+            <>
+              {couponError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold">
+                  {couponError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/70">
+                <div className="sm:col-span-3">
+                  <label className="block text-[11px] font-bold mb-1">رمز الكوبون</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={newCouponCode}
+                    onChange={e => setNewCouponCode(e.target.value.toUpperCase())}
+                    placeholder="WELCOME10"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold uppercase"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block text-[11px] font-bold mb-1">نوع الخصم</label>
+                  <select
+                    value={newCouponType}
+                    onChange={e => setNewCouponType(e.target.value as 'fixed' | 'percent')}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+                  >
+                    <option value="fixed">مبلغ ثابت (دج)</option>
+                    <option value="percent">نسبة مئوية (%)</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold mb-1">
+                    {newCouponType === 'percent' ? 'النسبة (%)' : 'القيمة (دج)'}
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newCouponValue}
+                    onChange={e => setNewCouponValue(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold mb-1">حد أدنى (دج)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="500"
+                    value={newCouponMinOrder}
+                    onChange={e => setNewCouponMinOrder(e.target.value)}
+                    placeholder="0"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+
+                <div className="sm:col-span-2 flex items-end">
+                  <button
+                    type="button"
+                    onClick={handleAddCoupon}
+                    className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة</span>
+                  </button>
+                </div>
+              </div>
+
+              {promoCoupons.length === 0 ? (
+                <div className="text-center py-4 text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                  لا توجد كوبونات خصم مضافة بعد. أنشئ أول كوبون أعلاه لتقديم خصومات لزبائنك.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {promoCoupons.map(c => (
+                    <div
+                      key={c.id}
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
                         c.isActive
-                          ? 'border-emerald-300 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200'
-                          : 'border-slate-300 bg-white text-slate-500 dark:bg-slate-800'
+                          ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/70'
+                          : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 opacity-70'
                       }`}
                     >
-                      <Power className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteCoupon(c.id)}
-                      title="حذف الكوبون"
-                      className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/70 dark:hover:bg-rose-950/40 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-black text-xs px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                            {c.code}
+                          </span>
+                          <span className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300">
+                            {c.type === 'percent' ? `خصم ${c.value}%` : `خصم ${formatDZD(c.value)}`}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {c.minOrder && c.minOrder > 0
+                            ? `الحد الأدنى للطلب: ${formatDZD(c.minOrder)}`
+                            : 'بدون حد أدنى للطلب'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCoupon(c.id)}
+                          title={c.isActive ? 'تعطيل الكوبون' : 'تفعيل الكوبون'}
+                          className={`p-1.5 rounded-lg border text-xs font-bold cursor-pointer ${
+                            c.isActive
+                              ? 'border-emerald-300 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200'
+                              : 'border-slate-300 bg-white text-slate-500 dark:bg-slate-800'
+                          }`}
+                        >
+                          <Power className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCoupon(c.id)}
+                          title="حذف الكوبون"
+                          className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/70 dark:hover:bg-rose-950/40 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
 

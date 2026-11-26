@@ -180,6 +180,16 @@ export interface LandingPageIntegrations {
   orderBump?: LandingPageOrderBump;
   postPurchaseUpsell?: LandingPageUpsell;
   faqs?: LandingPageFaq[];
+  urgency?: {
+    showStock?: boolean;
+    stockThreshold?: number;
+    countdownEndsAt?: string;
+    countdownText?: string;
+  };
+  ab?: {
+    variantSlug?: string;
+    splitToB?: number;
+  };
 }
 
 export interface LandingPage {
@@ -235,6 +245,9 @@ export interface Store {
   logoUrl?: string;
   faviconUrl?: string;
   brandColor: string; // Hex e.g. #754b2d
+  storefrontTheme?: 'dark' | 'light';
+  storefrontHeadingFont?: string;
+  storefrontBodyFont?: string;
   freeShippingThreshold: number; // DZD (0 = disabled)
   planId: string;
   status: 'active' | 'suspended' | 'trial';
@@ -304,6 +317,7 @@ export interface StoreApiConfig {
   dailyMaxOrdersPerPhone?: number;
   autoFlagReturnsThreshold?: number;
   blacklistedPhones?: BlacklistEntry[];
+  promoCodesEnabled?: boolean;
   promoCoupons?: PromoCoupon[];
   whatsappConfirmTemplate?: string;
   whatsappShippingTemplate?: string;
