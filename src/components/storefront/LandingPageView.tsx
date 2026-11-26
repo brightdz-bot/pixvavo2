@@ -437,6 +437,16 @@ export const LandingPageView: React.FC<Props> = ({
     return list.filter(f => f && f.question?.trim() && f.answer?.trim());
   }, [page.faqs, page.integrations?.faqs]);
 
+  const detailImages = useMemo(() => {
+    const raw =
+      Array.isArray(page.detailImages) && page.detailImages.length > 0
+        ? page.detailImages
+        : Array.isArray(page.integrations?.detailImages)
+        ? page.integrations.detailImages
+        : [];
+    return raw.map(u => String(u || '').trim()).filter(Boolean);
+  }, [page.detailImages, page.integrations?.detailImages]);
+
   const productPrice = selectedOffer?.price || 0;
   const orderBumpPrice = activeOrderBump && orderBumpSelected ? activeOrderBump.price : 0;
   const combinedProductPrice = productPrice + orderBumpPrice;
@@ -2862,10 +2872,29 @@ export const LandingPageView: React.FC<Props> = ({
         </div>
       </section>
 
+      {/* Optional Edge-to-Edge Full-Width Product Detail Showcase Images (Below Order Form) */}
+      {!isTrackingMode && detailImages.length > 0 && (
+        <section
+          aria-label={`صور تعريفية لـ ${page.title}`}
+          className="w-full max-w-full overflow-x-clip flex flex-col p-0 m-0 leading-none"
+          style={{ backgroundColor: theme.bgColor }}
+        >
+          {detailImages.map((imgUrl, idx) => (
+            <div key={`${idx}-${imgUrl.slice(0, 48)}`} className="w-full p-0 m-0 leading-none">
+              <SmartImage
+                src={imgUrl}
+                alt={`${page.title} - صورة تعريفية ${idx + 1}`}
+                className="block w-full h-auto m-0 p-0 select-none"
+              />
+            </div>
+          ))}
+        </section>
+      )}
+
       {/* Footer */}
       <footer
         className={`py-8 border-t text-center space-y-3 ${
-          showMobileStickyBar ? 'pb-20 lg:pb-8' : ''
+          showMobileStickyBar ? 'pb-24' : ''
         }`}
         style={{
           backgroundColor: theme.primaryHoverColor,
@@ -2881,7 +2910,7 @@ export const LandingPageView: React.FC<Props> = ({
         </div>
       </footer>
 
-      {/* Slim Sticky Mobile Quick-Order Bar (Auto-hidden when #form-container is visible or in tracking mode) */}
+      {/* Slim Sticky Quick-Order Bar (Auto-hidden when #form-container is visible or in tracking mode) */}
       <AnimatePresence>
         {showMobileStickyBar && !isTrackingMode && !upsellOfferModalData && page.stock > 0 && (
           <motion.div
@@ -2890,7 +2919,7 @@ export const LandingPageView: React.FC<Props> = ({
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 72, opacity: 0 }}
             transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
-            className="lg:hidden fixed bottom-0 inset-x-0 z-40 border-t px-4 py-2.5 backdrop-blur-md shadow-[0_-6px_24px_rgba(15,23,42,0.12)]"
+            className="fixed bottom-0 inset-x-0 z-40 border-t px-4 py-2.5 backdrop-blur-md shadow-[0_-6px_24px_rgba(15,23,42,0.12)]"
             style={{
               backgroundColor: theme.isDark
                 ? 'rgba(15, 23, 42, 0.96)'
@@ -2898,7 +2927,7 @@ export const LandingPageView: React.FC<Props> = ({
               borderColor: theme.borderColor
             }}
           >
-            <div className="max-w-lg mx-auto flex items-center justify-between gap-3">
+            <div className="max-w-xl mx-auto flex items-center justify-between gap-3">
               <div className="min-w-0 leading-tight">
                 <div className={`text-[10px] font-bold truncate ${mutedTextClass}`}>
                   {selectedOffer?.title || page.title}

@@ -635,6 +635,9 @@ function mapDbLandingPage(row: any): LandingPage {
     orderBump: integrations.orderBump || undefined,
     postPurchaseUpsell: integrations.postPurchaseUpsell || undefined,
     faqs: Array.isArray(integrations.faqs) ? integrations.faqs : [],
+    detailImages: Array.isArray(integrations.detailImages)
+      ? integrations.detailImages.map((u: unknown) => String(u || '').trim()).filter(Boolean)
+      : [],
     theme,
     integrations,
     isPublished: Boolean(row.is_published),
@@ -1129,13 +1132,24 @@ class StorageService {
       return { success: false, error: 'يجب أن يحتوي رابط الصفحة (Slug) على 3 أحرف إنجليزية أو أرقام على الأقل' };
     }
 
+    const normalizedDetailImages = (
+      Array.isArray(page.detailImages)
+        ? page.detailImages
+        : Array.isArray(page.integrations?.detailImages)
+        ? page.integrations.detailImages
+        : []
+    )
+      .map(u => String(u || '').trim())
+      .filter(Boolean);
+
     const normalizedIntegrations = {
       ...(page.integrations || {}),
       variants: page.variants || [],
       reviews: page.reviews || [],
       orderBump: page.orderBump || undefined,
       postPurchaseUpsell: page.postPurchaseUpsell || undefined,
-      faqs: page.faqs || []
+      faqs: page.faqs || [],
+      detailImages: normalizedDetailImages
     };
 
     if (this.useSupabase() && supabase) {
@@ -1193,6 +1207,7 @@ class StorageService {
     const saved: LandingPage = {
       ...page,
       slug: cleanSlug,
+      detailImages: normalizedDetailImages,
       integrations: normalizedIntegrations,
       updatedAt: new Date().toISOString()
     };

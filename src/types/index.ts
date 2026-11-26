@@ -180,6 +180,7 @@ export interface LandingPageIntegrations {
   orderBump?: LandingPageOrderBump;
   postPurchaseUpsell?: LandingPageUpsell;
   faqs?: LandingPageFaq[];
+  detailImages?: string[];
   urgency?: {
     showStock?: boolean;
     stockThreshold?: number;
@@ -210,6 +211,7 @@ export interface LandingPage {
   orderBump?: LandingPageOrderBump;
   postPurchaseUpsell?: LandingPageUpsell;
   faqs?: LandingPageFaq[];
+  detailImages?: string[];
   theme: LandingPageTheme;
   integrations: LandingPageIntegrations;
   isPublished: boolean;

@@ -80,3 +80,52 @@ export async function resizeImageToDataUrl(
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Resize full-width product showcase / infographic images while preserving sharp horizontal resolution
+ * (up to maxWidth) even for tall vertical Canva/product explanation sheets.
+ */
+export async function resizeDetailImageToDataUrl(
+  file: File,
+  maxWidth = 1440,
+  maxHeight = 3600
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة الملف'));
+    reader.onload = () => {
+      const src = typeof reader.result === 'string' ? reader.result : '';
+      if (!src) {
+        reject(new Error('ملف الصورة غير صالح'));
+        return;
+      }
+      const img = new Image();
+      img.onerror = () => resolve(src);
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(src);
+            return;
+          }
+          const scaleW = img.width > maxWidth ? maxWidth / img.width : 1;
+          const scaleH = img.height * scaleW > maxHeight ? maxHeight / img.height : scaleW;
+          const scale = Math.min(1, scaleW, scaleH);
+          const targetW = Math.max(1, Math.round(img.width * scale));
+          const targetH = Math.max(1, Math.round(img.height * scale));
+          canvas.width = targetW;
+          canvas.height = targetH;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, targetW, targetH);
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+          resolve(canvas.toDataURL('image/jpeg', 0.86));
+        } catch {
+          resolve(src);
+        }
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
+}
