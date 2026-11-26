@@ -700,7 +700,13 @@ function mapDbOrder(row: any): Order {
     courierProvider: row.courier_provider || localMeta?.provider || undefined,
     courierLabelUrl: row.courier_label_url || localMeta?.labelUrl || undefined,
     statusHistory: row.status_history || [],
-    paymentMethod: 'cod',
+    paymentMethod:
+      row.payment_method === 'chargily' || row.payment_method === 'baridimob'
+        ? row.payment_method
+        : 'cod',
+    paymentStatus: row.payment_status || 'unpaid',
+    paymentReference: row.payment_reference || undefined,
+    paymentReceiptUrl: row.payment_receipt_url || undefined,
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -1351,6 +1357,9 @@ class StorageService {
       price: number;
       imageUrl?: string;
     };
+    paymentMethod?: 'cod' | 'chargily' | 'baridimob';
+    paymentReference?: string;
+    paymentReceiptUrl?: string;
     antiBot?: { honeypot?: string; fillTimeMs?: number };
   }): Promise<{ success: boolean; error?: string; order?: Order }> {
     // Reject obvious bot traps immediately before any network/DB calls
@@ -1497,7 +1506,13 @@ class StorageService {
         total: Number(data.total),
         status: 'new',
         statusHistory: [{ status: 'new', timestamp: new Date().toISOString() }],
-        paymentMethod: 'cod',
+        paymentMethod: params.paymentMethod || 'cod',
+        paymentStatus:
+          params.paymentMethod === 'chargily' || params.paymentMethod === 'baridimob'
+            ? 'pending_verification'
+            : 'unpaid',
+        paymentReference: params.paymentReference,
+        paymentReceiptUrl: params.paymentReceiptUrl,
         notes: mergedNotes,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1647,9 +1662,24 @@ class StorageService {
       total: subtotal + shippingFee,
       status: 'new',
       statusHistory: [
-        { status: 'new', timestamp: new Date().toISOString(), note: 'تم تسجيل الطلب والدفع عند الاستلام' }
+        {
+          status: 'new',
+          timestamp: new Date().toISOString(),
+          note:
+            params.paymentMethod === 'chargily'
+              ? 'تم تسجيل الطلب — بانتظار إتمام الدفع عبر البطاقة الذهبية / CIB'
+              : params.paymentMethod === 'baridimob'
+              ? 'تم تسجيل الطلب — تحويل بريدي موب بانتظار التحقق'
+              : 'تم تسجيل الطلب والدفع عند الاستلام'
+        }
       ],
-      paymentMethod: 'cod',
+      paymentMethod: params.paymentMethod || 'cod',
+      paymentStatus:
+        params.paymentMethod === 'chargily' || params.paymentMethod === 'baridimob'
+          ? 'pending_verification'
+          : 'unpaid',
+      paymentReference: params.paymentReference,
+      paymentReceiptUrl: params.paymentReceiptUrl,
       notes: mergedNotes,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -2598,6 +2628,13 @@ class StorageService {
       whatsappShippingTemplate: '',
       whatsappAbandonedTemplate: '',
       faviconUrl: '',
+      chargilyEnabled: false,
+      chargilyMode: 'test',
+      chargilyApiKey: '',
+      baridimobEnabled: false,
+      baridimobRip: '',
+      baridimobAccountName: '',
+      baridimobInstructions: '',
       diagnosticLogs: []
     };
   }

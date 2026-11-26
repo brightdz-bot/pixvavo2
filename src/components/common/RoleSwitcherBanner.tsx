@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { useAuth } from '../../services/authContext';
 import { storage } from '../../services/storage';
 import { ConfirmDialog } from './ConfirmDialog';
-import { Store as StoreIcon, LayoutDashboard, RotateCcw, Layers } from 'lucide-react';
+import { Store as StoreIcon, LayoutDashboard, RotateCcw, Layers, ShieldCheck } from 'lucide-react';
 
 interface Props {
-  currentView: 'merchant' | 'storefront';
-  setCurrentView: (view: 'merchant' | 'storefront') => void;
+  currentView: 'merchant' | 'storefront' | 'owner';
+  setCurrentView: (view: 'merchant' | 'storefront' | 'owner') => void;
 }
 
 export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentView }) => {
@@ -64,6 +64,14 @@ export const RoleSwitcherBanner: React.FC<Props> = ({ currentView, setCurrentVie
           >
             <StoreIcon className="w-3.5 h-3.5" />
             <span>واجهة الزبائن وصفحات الهبوط</span>
+          </button>
+
+          <button
+            onClick={() => setCurrentView('owner')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-amber-300 hover:bg-slate-800 border border-slate-700 transition-all cursor-pointer"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>لوحة مالك المنصة</span>
           </button>
 
           {hasSupabaseEnv && !isSupabaseMode && (

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { User, Store, UserRole } from '../types';
+import { User, Store, UserRole, StaffRole, TeamMember } from '../types';
 import { storage } from './storage';
+import { platformApi } from './platformApi';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { isValidCustomDomain, normalizeDomainHost } from '../utils/urlRouting';
 
@@ -8,6 +9,8 @@ interface AuthContextType {
   currentUser: User | null;
   currentStore: Store | null;
   activeRole: UserRole;
+  staffRole: StaffRole;
+  activeStaffMember: TeamMember | null;
   isSupabaseMode: boolean;
   hasSupabaseEnv: boolean;
   isLoading: boolean;
@@ -15,6 +18,8 @@ interface AuthContextType {
   setCurrentSubdomain: (subdomain: string) => void;
   enableDemoPreview: (enabled: boolean) => Promise<void>;
   login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
+  loginAsStaff: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  clearStaffSession: () => Promise<void>;
   registerOwner: (params: {
     name: string;
     email: string;
@@ -37,9 +42,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentStore, setCurrentStore] = useState<Store | null>(null);
   const [activeRole, setActiveRole] = useState<UserRole>('merchant');
+  const [activeStaffMember, setActiveStaffMember] = useState<TeamMember | null>(null);
   const [demoOverride, setDemoOverride] = useState<boolean>(() => storage.isDemoOverride());
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [currentSubdomain, setCurrentSubdomain] = useState<string>('bright-dz');
+
+  const staffRole: StaffRole = activeStaffMember ? activeStaffMember.role : 'owner';
 
   const effectiveSupabaseMode = isSupabaseConfigured && !demoOverride;
 
@@ -246,7 +254,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
+  const loginAsStaff = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await platformApi.loginStaff(email, password, currentStore?.id);
+      if (!res.ok || !res.member) {
+        return { success: false, error: res.message || 'بيانات دخول الموظف غير صحيحة' };
+      }
+      setActiveStaffMember(res.member);
+      setCurrentUser({
+        id: res.member.id,
+        name: res.member.name,
+        email: res.member.email,
+        role: 'merchant',
+        storeId: res.member.storeId
+      });
+      setActiveRole('merchant');
+      const matchedStore = await storage.getStoreById(res.member.storeId);
+      if (matchedStore) {
+        setCurrentStore(matchedStore);
+        setCurrentSubdomain(matchedStore.subdomain);
+      }
+      return { success: true };
+    } catch {
+      return { success: false, error: 'تعذر الاتصال بالخادم لتسجيل دخول الموظف' };
+    }
+  };
+
+  const clearStaffSession = async () => {
+    await platformApi.logoutStaff();
+    setActiveStaffMember(null);
+    if (!effectiveSupabaseMode) {
+      loadLocalDemo();
+    }
+  };
+
   const logout = async () => {
+    if (activeStaffMember) {
+      await platformApi.logoutStaff();
+      setActiveStaffMember(null);
+    }
     if (effectiveSupabaseMode && supabase) {
       await supabase.auth.signOut();
     }
@@ -306,6 +355,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         currentStore,
         activeRole,
+        staffRole,
+        activeStaffMember,
         isSupabaseMode: effectiveSupabaseMode,
         hasSupabaseEnv: isSupabaseConfigured,
         isLoading,
@@ -313,6 +364,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentSubdomain,
         enableDemoPreview,
         login,
+        loginAsStaff,
+        clearStaffSession,
         registerOwner,
         logout,
         setupPrivateStore,

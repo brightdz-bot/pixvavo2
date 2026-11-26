@@ -12,6 +12,12 @@ import {
   validateAlgerianPhone,
   validateCustomerName
 } from '../src/utils/orderValidation.ts';
+import {
+  createGlobalApiRateLimiter,
+  getAuthoritativeStoreSuspension,
+  mountChargilyRawWebhookRoute,
+  mountPlatformRoutes
+} from './platformRoutes.ts';
 
 export type CourierProvider =
   | 'none'
@@ -68,6 +74,13 @@ export interface ServerStoreApiConfig {
   whatsappConfirmTemplate?: string;
   whatsappShippingTemplate?: string;
   faviconUrl?: string;
+  chargilyEnabled?: boolean;
+  chargilyMode?: 'test' | 'live';
+  chargilyApiKey?: string;
+  baridimobEnabled?: boolean;
+  baridimobRip?: string;
+  baridimobAccountName?: string;
+  baridimobInstructions?: string;
 }
 
 const RUNTIME_CONFIG_PATH = process.env.VERCEL
@@ -875,6 +888,9 @@ async function dispatchWhatsAppMessage(
 
 export function createApiApp(): Express {
   const app = express();
+  app.use(createGlobalApiRateLimiter());
+  // Mount Chargily webhook BEFORE express.json() so HMAC-SHA256 verifies the exact raw body bytes
+  mountChargilyRawWebhookRoute(app, { getConfig: getOrFetchServerConfig });
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
@@ -2344,7 +2360,7 @@ export function createApiApp(): Express {
     res.json({ ok: true, allowed: true });
   });
 
-  // 8. Public Storefront Settings (WhatsApp templates, favicon, and public Pixel IDs - non-secret)
+  // 8. Public Storefront Settings (WhatsApp templates, favicon, public Pixel IDs, payment options & suspension status - non-secret)
   app.get('/api/store/public-settings', async (req: Request, res: Response) => {
     const storeId = String(req.query?.storeId || '').trim();
     if (!storeId) {
@@ -2355,11 +2371,19 @@ export function createApiApp(): Express {
         faviconUrl: '',
         metaPixelId: '',
         tiktokPixelId: '',
-        promoCodesEnabled: true
+        promoCodesEnabled: true,
+        chargilyEnabled: false,
+        baridimobEnabled: false,
+        baridimobRip: '',
+        baridimobAccountName: '',
+        baridimobInstructions: '',
+        storeSuspended: false,
+        suspendedReason: ''
       });
       return;
     }
     const cfg = await getOrFetchServerConfig(storeId);
+    const suspension = getAuthoritativeStoreSuspension(storeId);
     res.json({
       ok: true,
       whatsappConfirmTemplate: cfg?.whatsappConfirmTemplate || '',
@@ -2367,7 +2391,14 @@ export function createApiApp(): Express {
       faviconUrl: cfg?.faviconUrl || '',
       metaPixelId: cfg?.metaPixelId || '',
       tiktokPixelId: cfg?.tiktokPixelId || '',
-      promoCodesEnabled: cfg?.promoCodesEnabled !== false
+      promoCodesEnabled: cfg?.promoCodesEnabled !== false,
+      chargilyEnabled: Boolean(cfg?.chargilyEnabled && (cfg?.chargilyApiKey || '').trim()),
+      baridimobEnabled: Boolean(cfg?.baridimobEnabled && (cfg?.baridimobRip || '').trim()),
+      baridimobRip: cfg?.baridimobRip || '',
+      baridimobAccountName: cfg?.baridimobAccountName || '',
+      baridimobInstructions: cfg?.baridimobInstructions || '',
+      storeSuspended: suspension.suspended,
+      suspendedReason: suspension.reason || ''
     });
   });
 
@@ -3597,6 +3628,8 @@ export function createApiApp(): Express {
       res.status(504).json({ ok: false, message: 'تعذر الاتصال بقاعدة البيانات حالياً' });
     }
   });
+
+  mountPlatformRoutes(app, { getConfig: getOrFetchServerConfig });
 
   return app;
 }

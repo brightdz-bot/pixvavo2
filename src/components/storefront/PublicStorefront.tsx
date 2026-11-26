@@ -62,6 +62,8 @@ export const PublicStorefront: React.FC<Props> = ({
   const [isTrackingLoading, setIsTrackingLoading] = useState(false);
   const [faviconUrl, setFaviconUrl] = useState('');
   const [logoImgError, setLogoImgError] = useState(false);
+  const [storeSuspended, setStoreSuspended] = useState(false);
+  const [suspendedReason, setSuspendedReason] = useState('');
 
   useEffect(() => {
     setActivePageSlug(initialSlug || null);
@@ -93,6 +95,8 @@ export const PublicStorefront: React.FC<Props> = ({
           return;
         }
         setStore(s);
+        setStoreSuspended(s.status === 'suspended');
+        setSuspendedReason(s.suspendedReason || '');
         setLogoImgError(false);
         const localCfg = storage.getLocalStoreApiConfig(s.id);
         if (mounted && localCfg?.faviconUrl) {
@@ -106,6 +110,10 @@ export const PublicStorefront: React.FC<Props> = ({
           .then(r => (r.ok ? r.json() : null))
           .then(data => {
             if (!mounted || !data?.ok) return;
+            if (typeof data.storeSuspended === 'boolean') {
+              setStoreSuspended(data.storeSuspended || s.status === 'suspended');
+              setSuspendedReason(data.suspendedReason || s.suspendedReason || '');
+            }
             if (data.faviconUrl) {
               setFaviconUrl(data.faviconUrl);
             }
@@ -246,6 +254,22 @@ export const PublicStorefront: React.FC<Props> = ({
           </h1>
           <p className="text-xs text-[color:var(--sf-mute)] leading-relaxed">
             {loadError || 'نعمل حالياً على تجهيز المنتجات والعروض، يرجى العودة لاحقاً.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (storeSuspended || store.status === 'suspended') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 text-center" dir="rtl">
+        <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-xl p-8 border border-slate-200 dark:border-slate-800 space-y-3">
+          <AlertCircle className="w-10 h-10 text-rose-600 mx-auto" />
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white">
+            هذا المتجر غير متاح مؤقتاً
+          </h1>
+          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+            {suspendedReason || 'تم إيقاف هذا المتجر مؤقتاً من طرف إدارة المنصة. يرجى المحاولة لاحقاً.'}
           </p>
         </div>
       </div>

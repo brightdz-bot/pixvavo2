@@ -34,13 +34,18 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
-  Send
+  Send,
+  CreditCard,
+  Wallet,
+  Lock
 } from 'lucide-react';
 
 interface Props {
   store: Store;
   initialConfig: StoreApiConfig;
   needsSqlMigration?: boolean;
+  allowOnlinePayment?: boolean;
+  onGoToBilling?: () => void;
   onSaveConfig: (config: StoreApiConfig) => Promise<void>;
   onClearLogs: () => Promise<void>;
 }
@@ -83,6 +88,8 @@ export const ApiConfigTab: React.FC<Props> = ({
   store,
   initialConfig,
   needsSqlMigration,
+  allowOnlinePayment = true,
+  onGoToBilling,
   onSaveConfig,
   onClearLogs
 }) => {
@@ -94,6 +101,7 @@ export const ApiConfigTab: React.FC<Props> = ({
   const [showMetaToken, setShowMetaToken] = useState(false);
   const [showTikTokToken, setShowTikTokToken] = useState(false);
   const [showWaToken, setShowWaToken] = useState(false);
+  const [showChargilyKey, setShowChargilyKey] = useState(false);
 
   // Test states & feedback
   const [testingKey, setTestingKey] = useState<string | null>(null);
@@ -895,6 +903,187 @@ export const ApiConfigTab: React.FC<Props> = ({
               )}
             </div>
           )}
+        </section>
+
+        {/* 6. ONLINE PAYMENTS (CHARGILY PAY V2 + BARIDIMOB MANUAL) */}
+        <section className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+                <CreditCard className="w-4 h-4 text-emerald-600" />
+                <span>6. الدفع الإلكتروني للزبائن (البطاقة الذهبية Chargily + بريدي موب)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                إلى جانب الدفع عند الاستلام، مكّن زبائنك من الدفع بالبطاقة الذهبية أو عبر تحويل بريدي موب وإرفاق الوصل.
+              </p>
+            </div>
+            {!allowOnlinePayment && onGoToBilling && (
+              <button
+                type="button"
+                onClick={onGoToBilling}
+                className="px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>ترقية الباقة لتفعيل الدفع الإلكتروني</span>
+              </button>
+            )}
+          </div>
+
+          {!allowOnlinePayment && (
+            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200">
+              باقتك المجانية تدعم الدفع عند الاستلام فقط. يمكنك تهيئة الإعدادات هنا، وسيتم تفعيل بوابات الدفع الإلكتروني على صفحات الهبوط فور الترقية لباقة الاحترافي أو الأعمال.
+            </div>
+          )}
+
+          {/* Chargily Pay v2 */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 dark:text-white">
+                  بوابة Chargily Pay v2 (البطاقة الذهبية + CIB)
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  المفتاح السري يُخزن على الخادم فقط ولا يُرسل أبداً إلى متصفح الزبون.
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.chargilyEnabled)}
+                  onChange={e => setForm({ ...form, chargilyEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>{form.chargilyEnabled ? 'مفعّل' : 'معطّل'}</span>
+              </label>
+            </div>
+
+            {form.chargilyEnabled && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                <div>
+                  <label className="block text-xs font-bold mb-1">بيئة التشغيل</label>
+                  <select
+                    value={form.chargilyMode || 'test'}
+                    onChange={e =>
+                      setForm({ ...form, chargilyMode: e.target.value as 'test' | 'live' })
+                    }
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                  >
+                    <option value="test">وضع الاختبار (Test Mode)</option>
+                    <option value="live">الوضع الحقيقي (Live Production)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">المفتاح السري (Chargily Secret Key)</label>
+                  <div className="relative">
+                    <input
+                      type={showChargilyKey ? 'text' : 'password'}
+                      dir="ltr"
+                      value={form.chargilyApiKey || ''}
+                      onChange={e => setForm({ ...form, chargilyApiKey: e.target.value })}
+                      placeholder="test_sk_... أو live_sk_..."
+                      className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowChargilyKey(!showChargilyKey)}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
+                    >
+                      {showChargilyKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2 space-y-1">
+                  <label className="block text-xs font-bold">
+                    رابط الإشعار الفوري (Webhook URL) — أضفه في لوحة Chargily
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      dir="ltr"
+                      value={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/payments/chargily/webhook?storeId=${encodeURIComponent(store.id)}`}
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-950 text-[11px] font-mono text-slate-600 dark:text-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = `${window.location.origin}/api/payments/chargily/webhook?storeId=${encodeURIComponent(store.id)}`;
+                        void navigator.clipboard?.writeText(url);
+                        setCopiedKey('chargily_webhook');
+                        setTimeout(() => setCopiedKey(null), 2000);
+                      }}
+                      className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiedKey === 'chargily_webhook' ? 'تم النسخ' : 'نسخ'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* BaridiMob / CCP Manual Transfer */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>التحويل اليدوي عبر بريدي موب / CCP (مع رفع الوصل)</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  يعرض للزبون رقم الـ RIP الخاص بك ويمكنه إرفاق صورة الوصل مباشرة لتراجعها وتؤكدها من تبويب الطلبات.
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.baridimobEnabled)}
+                  onChange={e => setForm({ ...form, baridimobEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>{form.baridimobEnabled ? 'مفعّل' : 'معطّل'}</span>
+              </label>
+            </div>
+
+            {form.baridimobEnabled && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                <div>
+                  <label className="block text-xs font-bold mb-1">رقم الـ RIP (20 رقماً)</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={form.baridimobRip || ''}
+                    onChange={e => setForm({ ...form, baridimobRip: e.target.value })}
+                    placeholder="0079999900XXXXXXXXXX"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1">اسم صاحب الحساب البريدي</label>
+                  <input
+                    type="text"
+                    value={form.baridimobAccountName || ''}
+                    onChange={e => setForm({ ...form, baridimobAccountName: e.target.value })}
+                    placeholder="مثال: محمد أمين بن علي"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold mb-1">تعليمات التحويل للزبون (اختياري)</label>
+                  <textarea
+                    rows={2}
+                    value={form.baridimobInstructions || ''}
+                    onChange={e => setForm({ ...form, baridimobInstructions: e.target.value })}
+                    placeholder="حوّل المبلغ إلى الحساب أعلاه وأرفق صورة وصل بريدي موب لتأكيد طلبك وشحنه فوراً."
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         <div className="flex justify-end">

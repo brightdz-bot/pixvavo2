@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './services/authContext';
 import { RoleSwitcherBanner } from './components/common/RoleSwitcherBanner';
 import { MerchantDashboard } from './components/merchant/MerchantDashboard';
 import { PublicStorefront } from './components/storefront/PublicStorefront';
+import { PlatformOwnerDashboard } from './components/owner/PlatformOwnerDashboard';
 import {
   buildLandingPagePath,
   extractLandingSlugFromLocation,
@@ -31,7 +32,21 @@ function isAdminRouteFromUrl(): boolean {
   }
 }
 
-function resolveInitialView(): 'merchant' | 'storefront' {
+function isOwnerRouteFromUrl(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('owner') === '1' || params.get('owner') === 'true') return true;
+    const pathname = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    if (pathname === '/owner' || pathname.startsWith('/owner/')) return true;
+    const hash = window.location.hash.replace(/\/+$/, '').toLowerCase();
+    return hash === '#/owner' || hash.startsWith('#/owner/');
+  } catch {
+    return false;
+  }
+}
+
+function resolveInitialView(): 'merchant' | 'storefront' | 'owner' {
+  if (isOwnerRouteFromUrl()) return 'owner';
   if (isAdminRouteFromUrl()) return 'merchant';
   return 'storefront';
 }
@@ -39,7 +54,9 @@ function resolveInitialView(): 'merchant' | 'storefront' {
 function AppContent() {
   const { currentStore, isSupabaseMode, isLoading, currentSubdomain } = useAuth();
   const [initialSlug, setInitialSlug] = useState<string | null>(() => getInitialSlugFromUrl());
-  const [currentView, setCurrentView] = useState<'merchant' | 'storefront'>(() => resolveInitialView());
+  const [currentView, setCurrentView] = useState<'merchant' | 'storefront' | 'owner'>(() =>
+    resolveInitialView()
+  );
   const hasInitializedRef = useRef(false);
 
   useEffect(() => {
@@ -121,16 +138,20 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans" dir="rtl">
-      {!isSupabaseMode && (
+      {!isSupabaseMode && currentView !== 'owner' && (
         <RoleSwitcherBanner
           currentView={currentView}
           setCurrentView={view => {
             try {
               const url = new URL(window.location.href);
               url.searchParams.delete('banana');
+              url.searchParams.delete('owner');
               url.searchParams.delete('shop');
               url.searchParams.delete('view');
-              if (view === 'merchant') {
+              if (view === 'owner') {
+                url.searchParams.delete('p');
+                url.pathname = '/owner';
+              } else if (view === 'merchant') {
                 url.searchParams.delete('p');
                 url.pathname = '/banana';
               } else {
@@ -149,7 +170,9 @@ function AppContent() {
       )}
 
       <div className="flex-1">
-        {currentView === 'merchant' ? (
+        {currentView === 'owner' ? (
+          <PlatformOwnerDashboard onExitToStorefront={() => handleGoToStorefront()} />
+        ) : currentView === 'merchant' ? (
           <MerchantDashboard onGoToStorefront={handleGoToStorefront} />
         ) : (
           <PublicStorefront

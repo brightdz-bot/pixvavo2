@@ -9,7 +9,8 @@ interface Props {
 }
 
 export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
-  const { login, isSupabaseMode } = useAuth();
+  const { login, loginAsStaff, isSupabaseMode } = useAuth();
+  const [loginMode, setLoginMode] = useState<'owner' | 'staff'>('owner');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -32,13 +33,16 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
       return;
     }
 
-    if (isSupabaseMode && password.length < 6) {
+    if ((loginMode === 'staff' || isSupabaseMode) && password.length < 6) {
       setError('يجب أن تتكون كلمة المرور من 6 أحرف على الأقل');
       return;
     }
 
     setIsSubmitting(true);
-    const res = await login(email.trim(), password);
+    const res =
+      loginMode === 'staff'
+        ? await loginAsStaff(email.trim(), password)
+        : await login(email.trim(), password);
     setIsSubmitting(false);
 
     if (res.success) {
@@ -54,7 +58,7 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
       <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 md:p-8 text-right">
         <button
           onClick={onClose}
-          className="absolute left-6 top-6 p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+          className="absolute left-6 top-6 p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
@@ -65,12 +69,45 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
           </div>
           <div>
             <h3 className="text-xl font-bold text-slate-900 dark:text-white">
-              تسجيل دخول مالك المتجر
+              {loginMode === 'staff' ? 'دخول عضو الفريق' : 'تسجيل دخول مالك المتجر'}
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              ادخل لإدارة صفحات الهبوط والطلبات
+              {loginMode === 'staff'
+                ? 'دخول بصلاحيات موظف التأكيد أو إدارة المنتجات'
+                : 'ادخل لإدارة صفحات الهبوط والطلبات'}
             </p>
           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg mb-4 text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setLoginMode('owner');
+              setError(null);
+            }}
+            className={`py-2 px-3 rounded-md font-semibold transition-colors cursor-pointer ${
+              loginMode === 'owner'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            مالك المتجر
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setLoginMode('staff');
+              setError(null);
+            }}
+            className={`py-2 px-3 rounded-md font-semibold transition-colors cursor-pointer ${
+              loginMode === 'staff'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            عضو فريق / موظف
+          </button>
         </div>
 
         {error && (
@@ -93,7 +130,7 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
                 dir="ltr"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="owner@brightdz.dz"
+                placeholder={loginMode === 'staff' ? 'agent@myshop.dz' : 'owner@brightdz.dz'}
                 className="w-full pr-10 pl-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
@@ -107,7 +144,7 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
               <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
-                required={isSupabaseMode}
+                required={loginMode === 'staff' || isSupabaseMode}
                 minLength={6}
                 dir="ltr"
                 value={password}
@@ -129,7 +166,7 @@ export const LoginModal: React.FC<Props> = ({ isOpen, onClose, onSuccess }) => {
                 <span>جارٍ التحقق...</span>
               </>
             ) : (
-              <span>دخول إلى لوحة المتجر</span>
+              <span>{loginMode === 'staff' ? 'دخول بحساب الموظف' : 'دخول إلى لوحة المتجر'}</span>
             )}
           </button>
         </form>

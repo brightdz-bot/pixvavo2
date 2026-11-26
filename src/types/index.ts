@@ -39,7 +39,10 @@ export interface Order {
   courierProvider?: string;
   courierLabelUrl?: string;
   statusHistory: StatusHistoryEntry[];
-  paymentMethod: 'cod'; // Cash on Delivery (الدفع عند الاستلام)
+  paymentMethod: 'cod' | 'chargily' | 'baridimob';
+  paymentStatus?: 'unpaid' | 'pending_verification' | 'paid' | 'failed';
+  paymentReference?: string;
+  paymentReceiptUrl?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -255,6 +258,9 @@ export interface Store {
   freeShippingThreshold: number; // DZD (0 = disabled)
   planId: string;
   status: 'active' | 'suspended' | 'trial';
+  trialEndsAt?: string;
+  subscriptionEndsAt?: string;
+  suspendedReason?: string;
   phone?: string;
   defaultWhatsapp?: string;
   defaultPixelId?: string;
@@ -327,6 +333,13 @@ export interface StoreApiConfig {
   whatsappShippingTemplate?: string;
   whatsappAbandonedTemplate?: string;
   faviconUrl?: string;
+  chargilyEnabled?: boolean;
+  chargilyMode?: 'test' | 'live';
+  chargilyApiKey?: string;
+  baridimobEnabled?: boolean;
+  baridimobRip?: string;
+  baridimobAccountName?: string;
+  baridimobInstructions?: string;
   diagnosticLogs: ApiDiagnosticLog[];
   updatedAt?: string;
 }
@@ -335,12 +348,77 @@ export interface Plan {
   id: string;
   name: string;
   nameAr: string;
+  taglineAr?: string;
   priceDZD: number; // Monthly price in DZD
   billingPeriod: string;
+  trialDays?: number;
   features: string[];
   isPopular?: boolean;
   maxProducts: number;
+  maxLandingPages?: number;
+  maxMonthlyOrders?: number;
+  maxTeamMembers?: number;
+  allowOnlinePayment?: boolean;
   commissionRate: number;
+}
+
+export type StaffRole = 'owner' | 'order_confirmer' | 'catalog_manager';
+
+export interface TeamMember {
+  id: string;
+  storeId: string;
+  name: string;
+  email: string;
+  role: Exclude<StaffRole, 'owner'>;
+  isActive: boolean;
+  createdAt: string;
+  lastLoginAt?: string;
+}
+
+export interface SubscriptionRequest {
+  id: string;
+  storeId: string;
+  storeName: string;
+  storeSubdomain: string;
+  planId: string;
+  amountDZD: number;
+  paymentMethod: 'baridimob' | 'chargily' | 'manual';
+  receiptImageUrl?: string;
+  transactionRef?: string;
+  notes?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  rejectionReason?: string;
+  createdAt: string;
+}
+
+export interface PlatformPaymentSettings {
+  baridimobRip: string;
+  baridimobAccountName: string;
+  baridimobInstructions: string;
+  chargilyEnabled: boolean;
+}
+
+export interface PlatformStoreOverview {
+  storeId: string;
+  name: string;
+  subdomain: string;
+  customDomain?: string;
+  ownerEmail?: string;
+  phone?: string;
+  planId: string;
+  status: 'active' | 'suspended' | 'trial';
+  trialEndsAt?: string;
+  subscriptionEndsAt?: string;
+  suspendedReason?: string;
+  landingPagesCount: number;
+  monthlyOrdersCount: number;
+  totalOrdersCount: number;
+  totalRevenueDZD: number;
+  activeTeamCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type UserRole = 'visitor' | 'merchant' | 'admin';

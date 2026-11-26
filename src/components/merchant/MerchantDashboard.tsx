@@ -8,10 +8,14 @@ import {
   LandingPage,
   Order,
   OrderStatus,
+  Plan,
+  PlatformStoreOverview,
   Store,
   StoreApiConfig
 } from '../../types';
 import { ALGERIA_WILAYAS } from '../../data/wilayas';
+import { isUnlimitedLimit, resolvePlanById } from '../../data/plans';
+import { platformApi } from '../../services/platformApi';
 import { OverviewTab } from './OverviewTab';
 import { LandingPagesTab } from './LandingPagesTab';
 import { OrdersTab } from './OrdersTab';
@@ -19,6 +23,8 @@ import { AbandonedOrdersTab, ConvertAbandonedPayload } from './AbandonedOrdersTa
 import { CustomersTab } from './CustomersTab';
 import { ApiConfigTab } from './ApiConfigTab';
 import { SettingsTab } from './SettingsTab';
+import { BillingTab } from './BillingTab';
+import { TeamTab } from './TeamTab';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { LoginModal } from '../visitor/LoginModal';
 import { applyBrowserBranding } from '../../services/branding';
@@ -45,6 +51,9 @@ import {
   Users,
   Settings,
   Plug,
+  CreditCard,
+  UserCog,
+  ShieldAlert,
   ExternalLink,
   Store as StoreIcon,
   CheckCircle2,
@@ -66,15 +75,27 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     currentUser,
     isSupabaseMode,
     isLoading: isAuthLoading,
+    staffRole,
+    activeStaffMember,
+    clearStaffSession,
     refreshCurrentStore,
     setupPrivateStore,
     enableDemoPreview,
     logout
   } = useAuth();
 
-  const [activeTab, setActiveTabState] = useState<
-    'overview' | 'pages' | 'orders' | 'abandoned' | 'customers' | 'api' | 'settings'
-  >(() => {
+  type DashboardTabId =
+    | 'overview'
+    | 'pages'
+    | 'orders'
+    | 'abandoned'
+    | 'customers'
+    | 'api'
+    | 'billing'
+    | 'team'
+    | 'settings';
+
+  const [activeTab, setActiveTabState] = useState<DashboardTabId>(() => {
     try {
       const saved = sessionStorage.getItem('brightdz_active_tab');
       if (
@@ -84,6 +105,8 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         saved === 'abandoned' ||
         saved === 'customers' ||
         saved === 'api' ||
+        saved === 'billing' ||
+        saved === 'team' ||
         saved === 'settings'
       ) {
         return saved;
@@ -94,9 +117,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     return 'pages';
   });
 
-  const setActiveTab = (
-    tab: 'overview' | 'pages' | 'orders' | 'abandoned' | 'customers' | 'api' | 'settings'
-  ) => {
+  const setActiveTab = (tab: DashboardTabId) => {
     setActiveTabState(tab);
     try {
       sessionStorage.setItem('brightdz_active_tab', tab);
@@ -108,6 +129,9 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [livePlatformStore, setLivePlatformStore] = useState<PlatformStoreOverview | null>(null);
+  const [activePlan, setActivePlan] = useState<Plan>(() => resolvePlanById(currentStore?.planId));
+  const [activeTeamCount, setActiveTeamCount] = useState<number>(0);
 
   // First-time private store setup form (in Supabase mode when DB has no store yet)
   const [setupStoreName, setSetupStoreName] = useState('');
@@ -403,14 +427,26 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     setIsDataLoading(true);
     setLoadError(null);
     try {
-      const [loadedPages, loadedOrders, apiRes, abandonedRes] = await Promise.all([
+      const [loadedPages, loadedOrders, apiRes, abandonedRes, paymentLedger] = await Promise.all([
         storage.getLandingPages(store.id),
         storage.getOrders(store.id),
         storage.getStoreApiConfig(store),
-        storage.getAbandonedOrders(store.id)
+        storage.getAbandonedOrders(store.id),
+        platformApi.getStorePaymentsLedger(store.id)
       ]);
+      const mergedOrders = loadedOrders.map(ord => {
+        const rec = paymentLedger[ord.orderNumber.toUpperCase()];
+        if (!rec) return ord;
+        return {
+          ...ord,
+          paymentMethod: rec.paymentMethod || ord.paymentMethod,
+          paymentStatus: rec.paymentStatus || ord.paymentStatus,
+          paymentReference: rec.transactionRef || rec.checkoutId || ord.paymentReference,
+          paymentReceiptUrl: rec.receiptImageUrl || ord.paymentReceiptUrl
+        };
+      });
       setLandingPages(loadedPages);
-      setOrders(loadedOrders);
+      setOrders(mergedOrders);
       setApiConfig(apiRes.config);
       setNeedsSqlMigration(Boolean(apiRes.needsSqlMigration));
       setAbandonedOrders(abandonedRes.items);
@@ -420,15 +456,58 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         iconUrl: apiRes.config.faviconUrl || store.logoUrl
       });
 
-      // Keep server runtime cache warm for storefront CAPI / TikTok / auto-WhatsApp
+      // Keep server runtime cache warm for storefront CAPI / TikTok / auto-WhatsApp / Payments
       void fetch('/api/integrations/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(apiRes.config)
       }).catch(() => {});
 
+      // Sync store usage snapshot + fetch authoritative plan/suspension state & team count
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const monthlyOrdersCount = mergedOrders.filter(
+        o => new Date(o.createdAt).getTime() >= monthStart
+      ).length;
+      const totalRevenueDZD = mergedOrders
+        .filter(o => o.status !== 'cancelled')
+        .reduce((acc, o) => acc + (Number(o.total) || 0), 0);
+
+      void platformApi
+        .syncStoreUsage({
+          storeId: store.id,
+          name: store.name,
+          subdomain: store.subdomain,
+          customDomain: store.customDomain,
+          ownerEmail: currentUser?.email,
+          phone: store.phone,
+          planId: store.planId || 'plan_free',
+          status: store.status || 'trial',
+          landingPagesCount: loadedPages.length,
+          monthlyOrdersCount,
+          totalOrdersCount: mergedOrders.length,
+          totalRevenueDZD,
+          createdAt: store.createdAt
+        })
+        .then(syncRes => {
+          if (syncRes.ok) {
+            if (syncRes.store) setLivePlatformStore(syncRes.store);
+            if (syncRes.plan) setActivePlan(syncRes.plan);
+          }
+        })
+        .catch(() => {});
+
+      void platformApi
+        .getTeamMembers(store.id)
+        .then(teamRes => {
+          if (teamRes.ok && teamRes.members) {
+            setActiveTeamCount(teamRes.members.filter(m => m.isActive).length);
+          }
+        })
+        .catch(() => {});
+
       void syncOrdersWithGoogleSheets(
-        loadedOrders,
+        mergedOrders,
         loadedPages,
         false,
         apiRes.config.googleSheetWebhook
@@ -444,6 +523,19 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Enforce RBAC tab boundaries whenever staffRole changes
+  useEffect(() => {
+    if (staffRole === 'order_confirmer') {
+      if (activeTab !== 'orders' && activeTab !== 'abandoned') {
+        setActiveTab('orders');
+      }
+    } else if (staffRole === 'catalog_manager') {
+      if (activeTab !== 'pages') {
+        setActiveTab('pages');
+      }
+    }
+  }, [staffRole, activeTab]);
 
   useEffect(() => {
     if (!store?.id || isDataLoading || isAuthLoading || (isSupabaseMode && !currentUser?.id)) return;
@@ -464,6 +556,18 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   }, [store?.id, isDataLoading, isAuthLoading, isSupabaseMode, currentUser?.id, orders, landingPages, syncOrdersWithGoogleSheets]);
 
   const handleSaveLandingPage = async (page: LandingPage): Promise<boolean> => {
+    const isNewPage = !landingPages.some(p => p.id === page.id);
+    const maxPages = activePlan.maxLandingPages ?? activePlan.maxProducts ?? 3;
+    if (isNewPage && !isUnlimitedLimit(maxPages) && landingPages.length >= maxPages) {
+      showToast(
+        `وصلت للحد الأقصى في باقتك الحالية (${maxPages} صفحات هبوط). قم بالترقية من قسم «الاشتراك والفوترة».`
+      );
+      if (staffRole === 'owner') {
+        setActiveTab('billing');
+      }
+      return false;
+    }
+
     const res = await storage.saveLandingPage(page);
     if (res.success) {
       await loadData();
@@ -473,6 +577,41 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       showToast('خطأ: ' + (res.error || 'تعذر حفظ صفحة الهبوط'));
       return false;
     }
+  };
+
+  const handleVerifyOrderPayment = async (
+    orderNumber: string,
+    paymentStatus: 'paid' | 'failed' | 'pending_verification'
+  ) => {
+    if (!store?.id) return;
+    const res = await platformApi.verifyOrderPayment({
+      storeId: store.id,
+      orderNumber,
+      paymentStatus
+    });
+    if (!res.ok) {
+      showToast(res.message || 'تعذر تحديث حالة الدفع الإلكتروني');
+      return;
+    }
+    setOrders(prev =>
+      prev.map(o =>
+        o.orderNumber.toUpperCase() === orderNumber.toUpperCase()
+          ? { ...o, paymentStatus }
+          : o
+      )
+    );
+    setSelectedOrder(prev =>
+      prev && prev.orderNumber.toUpperCase() === orderNumber.toUpperCase()
+        ? { ...prev, paymentStatus }
+        : prev
+    );
+    showToast(
+      paymentStatus === 'paid'
+        ? `تم تأكيد استلام الدفع للطلب #${orderNumber}`
+        : paymentStatus === 'failed'
+          ? `تم رفض وصل الدفع للطلب #${orderNumber}`
+          : `تمت إعادة حالة الدفع للمراجعة للطلب #${orderNumber}`
+    );
   };
 
   const handleDeleteLandingPage = async (pageId: string) => {
@@ -1414,10 +1553,20 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
     );
   }
 
-  const navItems = [
+  const allNavItems: Array<{
+    id: DashboardTabId;
+    label: string;
+    icon: any;
+    badge?: number;
+  }> = [
     { id: 'overview', label: 'نظرة عامة', icon: LayoutDashboard },
     { id: 'pages', label: 'صفحات الهبوط', icon: Layers, badge: landingPages.length },
-    { id: 'orders', label: 'الطلبات والشحن', icon: ShoppingBag, badge: orders.filter(o => o.status === 'new').length },
+    {
+      id: 'orders',
+      label: 'الطلبات والشحن',
+      icon: ShoppingBag,
+      badge: orders.filter(o => o.status === 'new').length
+    },
     {
       id: 'abandoned',
       label: 'الطلبات المتروكة',
@@ -1425,12 +1574,52 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       badge: abandonedOrders.filter(a => a.status === 'new').length
     },
     { id: 'customers', label: 'سجل الزبائن', icon: Users },
-    { id: 'api', label: 'إعدادات الـ API', icon: Plug },
+    { id: 'api', label: 'الدفع والربط البرمجي', icon: Plug },
+    { id: 'billing', label: 'الاشتراك والفوترة', icon: CreditCard },
+    { id: 'team', label: 'الفريق والصلاحيات', icon: UserCog, badge: activeTeamCount },
     { id: 'settings', label: 'الإعدادات والتوصيل', icon: Settings }
   ];
 
+  const allowedTabsForRole: Record<typeof staffRole, DashboardTabId[]> = {
+    owner: [
+      'overview',
+      'pages',
+      'orders',
+      'abandoned',
+      'customers',
+      'api',
+      'billing',
+      'team',
+      'settings'
+    ],
+    order_confirmer: ['orders', 'abandoned'],
+    catalog_manager: ['pages']
+  };
+
+  const navItems = allNavItems.filter(item => allowedTabsForRole[staffRole].includes(item.id));
+  const isStoreSuspended =
+    livePlatformStore?.status === 'suspended' || store.status === 'suspended';
+  const suspensionReasonText =
+    livePlatformStore?.suspendedReason ||
+    store.suspendedReason ||
+    'تم إيقاف هذا المتجر مؤقتاً من طرف إدارة المنصة.';
+  const currentMonthStart = new Date(
+    new Date().getFullYear(),
+    new Date().getMonth(),
+    1
+  ).getTime();
+  const currentMonthlyOrdersCount = orders.filter(
+    o => new Date(o.createdAt).getTime() >= currentMonthStart
+  ).length;
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row transition-colors">
+      <LoginModal
+        isOpen={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+        onSuccess={() => setLoginModalOpen(false)}
+      />
+
       {toastMessage && (
         <div className="fixed bottom-5 left-5 z-50 p-4 rounded-xl bg-slate-900 text-white dark:bg-emerald-600 shadow-2xl flex items-center gap-2.5 text-xs font-bold border border-slate-700">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-white shrink-0" />
@@ -1459,7 +1648,13 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
             </div>
             <div className="truncate">
               <h2 className="font-bold text-sm truncate">{store.name}</h2>
-              <div className="text-[11px] text-slate-400 truncate">لوحة المتجر وصفحات الهبوط</div>
+              <div className="text-[11px] text-slate-400 truncate">
+                {staffRole === 'order_confirmer'
+                  ? 'وضع موظف تأكيد الطلبات'
+                  : staffRole === 'catalog_manager'
+                    ? 'وضع مدير صفحات الهبوط'
+                    : activePlan.name}
+              </div>
             </div>
           </div>
 
@@ -1481,7 +1676,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id as any)}
+                  onClick={() => setActiveTab(item.id)}
                   className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     isActive
                       ? 'bg-emerald-600 text-white shadow-md'
@@ -1494,8 +1689,10 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                   </div>
                   {item.badge !== undefined && item.badge > 0 && (
                     <span
-                      className={`px-1.5 rounded-full text-[10px] font-mono ${
-                        isActive ? 'bg-white/20 text-white' : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                      className={`px-1.5 rounded-full text-[10px] font-mono tabular-nums ${
+                        isActive
+                          ? 'bg-white/20 text-white'
+                          : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
                       }`}
                     >
                       {item.badge}
@@ -1507,25 +1704,51 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           </nav>
         </div>
 
-        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
               <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-xs shrink-0">
-                {(currentUser?.name || store.name)[0]}
+                {(activeStaffMember?.name || currentUser?.name || store.name)[0]}
               </div>
               <div className="truncate">
-                <div className="text-xs font-bold truncate">{currentUser?.name || store.name}</div>
+                <div className="text-xs font-bold truncate">
+                  {activeStaffMember?.name || currentUser?.name || store.name}
+                </div>
                 <div className="text-[10px] text-slate-400 truncate">
-                  {isSupabaseMode ? currentUser?.email : 'وضع محلي تجريبي'}
+                  {activeStaffMember
+                    ? activeStaffMember.email
+                    : isSupabaseMode
+                      ? currentUser?.email
+                      : 'وضع محلي تجريبي'}
                 </div>
               </div>
             </div>
             <ThemeToggle />
           </div>
+
+          {staffRole !== 'owner' ? (
+            <button
+              type="button"
+              onClick={() => void clearStaffSession()}
+              className="w-full py-1.5 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              إنهاء جلسة الموظف
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setLoginModalOpen(true)}
+              className="w-full py-1.5 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <UserCog className="w-3.5 h-3.5" />
+              <span>دخول بحساب موظف</span>
+            </button>
+          )}
+
           {isSupabaseMode && (
             <button
               onClick={logout}
-              className="w-full py-1.5 text-center text-xs text-slate-400 hover:text-rose-500 font-semibold flex items-center justify-center gap-1"
+              className="w-full py-1.5 text-center text-xs text-slate-400 hover:text-rose-500 font-semibold flex items-center justify-center gap-1 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>تسجيل الخروج</span>
@@ -1559,6 +1782,27 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           </button>
         </header>
 
+        {isStoreSuspended && (
+          <div className="bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-900 px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5 text-xs text-rose-800 dark:text-rose-200">
+              <ShieldAlert className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-black">تنبيه: متجرك موقوف مؤقتاً حالياً ولا يظهر للزبائن.</span>{' '}
+                <span>السبب: {suspensionReasonText}</span>
+              </div>
+            </div>
+            {staffRole === 'owner' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('billing')}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
+              >
+                مراجعة الاشتراك
+              </button>
+            )}
+          </div>
+        )}
+
         {mobileMenuOpen && (
           <div className="md:hidden p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 space-y-2">
             {navItems.map(item => {
@@ -1568,7 +1812,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 <button
                   key={item.id}
                   onClick={() => {
-                    setActiveTab(item.id as any);
+                    setActiveTab(item.id);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-bold ${
@@ -1607,7 +1851,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
 
           {!isDataLoading && (
             <>
-              {activeTab === 'overview' && (
+              {activeTab === 'overview' && staffRole === 'owner' && (
                 <OverviewTab
                   store={store}
                   orders={orders}
@@ -1623,83 +1867,95 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 />
               )}
 
-              {activeTab === 'pages' && (
-                <LandingPagesTab
-                  storeId={store.id}
-                  storeCustomDomain={store.customDomain}
-                  storeSubdomain={store.subdomain}
-                  landingPages={landingPages}
-                  onSaveLandingPage={handleSaveLandingPage}
-                  onDeleteLandingPage={handleDeleteLandingPage}
-                  onPreviewPage={slug => onGoToStorefront(slug)}
-                />
-              )}
+              {activeTab === 'pages' &&
+                (staffRole === 'owner' || staffRole === 'catalog_manager') && (
+                  <LandingPagesTab
+                    storeId={store.id}
+                    storeCustomDomain={store.customDomain}
+                    storeSubdomain={store.subdomain}
+                    landingPages={landingPages}
+                    onSaveLandingPage={handleSaveLandingPage}
+                    onDeleteLandingPage={handleDeleteLandingPage}
+                    onPreviewPage={slug => onGoToStorefront(slug)}
+                  />
+                )}
 
-              {activeTab === 'orders' && (
-                <OrdersTab
-                  store={store}
-                  orders={orders}
-                  landingPages={landingPages}
-                  apiConfig={apiConfig}
-                  courierBusyOrderId={courierBusyOrderId}
-                  lastCourierError={lastCourierError}
-                  onDismissCourierError={() => setLastCourierError(null)}
-                  onGoToApiConfig={() => setActiveTab('api')}
-                  onUpdateStatus={handleUpdateOrderStatus}
-                  onBulkUpdateStatus={handleBulkUpdateStatus}
-                  onBulkSendToCourier={handleBulkSendToCourier}
-                  onDeleteOrders={handleDeleteOrders}
-                  onSaveAntiFraudConfig={handleSaveAntiFraudConfig}
-                  onUpdateOrderDetails={handleUpdateOrderDetails}
-                  onSendOrderToCourier={handleSendOrderToCourier}
-                  onPullCourierStatus={handlePullCourierStatus}
-                  onSendOrderWhatsAppApi={handleSendOrderWhatsAppApi}
-                  onSyncFromGoogleSheet={() =>
-                    syncOrdersWithGoogleSheets(orders, landingPages, true, apiConfig?.googleSheetWebhook)
-                  }
-                  isSyncingSheet={isSyncingSheet}
-                  lastSheetSyncError={lastSheetSyncError}
-                  onDismissSheetSyncError={() => setLastSheetSyncError(null)}
-                  ordersNeedsSql={ordersNeedsSql}
-                  onDismissOrdersSql={() => setOrdersNeedsSql(false)}
-                  selectedOrder={selectedOrder}
-                  onSelectOrder={setSelectedOrder}
-                />
-              )}
+              {activeTab === 'orders' &&
+                (staffRole === 'owner' || staffRole === 'order_confirmer') && (
+                  <OrdersTab
+                    store={store}
+                    orders={orders}
+                    landingPages={landingPages}
+                    apiConfig={apiConfig}
+                    courierBusyOrderId={courierBusyOrderId}
+                    lastCourierError={lastCourierError}
+                    onDismissCourierError={() => setLastCourierError(null)}
+                    onGoToApiConfig={staffRole === 'owner' ? () => setActiveTab('api') : undefined}
+                    onUpdateStatus={handleUpdateOrderStatus}
+                    onBulkUpdateStatus={handleBulkUpdateStatus}
+                    onBulkSendToCourier={handleBulkSendToCourier}
+                    onDeleteOrders={staffRole === 'owner' ? handleDeleteOrders : undefined}
+                    onSaveAntiFraudConfig={
+                      staffRole === 'owner' ? handleSaveAntiFraudConfig : undefined
+                    }
+                    onUpdateOrderDetails={handleUpdateOrderDetails}
+                    onSendOrderToCourier={handleSendOrderToCourier}
+                    onPullCourierStatus={handlePullCourierStatus}
+                    onSendOrderWhatsAppApi={handleSendOrderWhatsAppApi}
+                    onVerifyOrderPayment={handleVerifyOrderPayment}
+                    hideFinancials={staffRole === 'order_confirmer'}
+                    onSyncFromGoogleSheet={() =>
+                      syncOrdersWithGoogleSheets(
+                        orders,
+                        landingPages,
+                        true,
+                        apiConfig?.googleSheetWebhook
+                      )
+                    }
+                    isSyncingSheet={isSyncingSheet}
+                    lastSheetSyncError={lastSheetSyncError}
+                    onDismissSheetSyncError={() => setLastSheetSyncError(null)}
+                    ordersNeedsSql={ordersNeedsSql}
+                    onDismissOrdersSql={() => setOrdersNeedsSql(false)}
+                    selectedOrder={selectedOrder}
+                    onSelectOrder={setSelectedOrder}
+                  />
+                )}
 
-              {activeTab === 'abandoned' && (
-                <AbandonedOrdersTab
-                  store={store}
-                  abandonedOrders={abandonedOrders}
-                  landingPages={landingPages}
-                  apiConfig={apiConfig}
-                  isLoading={isDataLoading}
-                  isSyncingSheet={isSyncingAbandoned}
-                  lastSyncError={lastAbandonedSyncError}
-                  needsSqlMigration={abandonedNeedsSql}
-                  onDismissSyncError={() => setLastAbandonedSyncError(null)}
-                  onDismissSqlNotice={() => setAbandonedNeedsSql(false)}
-                  onSyncWithSheet={handleSyncAbandonedWithSheet}
-                  onUpdateStatus={handleUpdateAbandonedStatus}
-                  onDeleteItems={handleDeleteAbandonedOrders}
-                  onConvertToOrder={handleConvertAbandonedToOrder}
-                  onSaveReminderTemplate={template =>
-                    handleSaveStoreExtras(
-                      { whatsappAbandonedTemplate: template },
-                      'تم حفظ رسالة تذكير الطلبات المتروكة بنجاح'
-                    )
-                  }
-                  onOpenOrderByNumber={orderNum => {
-                    const found = orders.find(
-                      o => o.orderNumber.toUpperCase() === orderNum.toUpperCase()
-                    );
-                    if (found) setSelectedOrder(found);
-                    setActiveTab('orders');
-                  }}
-                />
-              )}
+              {activeTab === 'abandoned' &&
+                (staffRole === 'owner' || staffRole === 'order_confirmer') && (
+                  <AbandonedOrdersTab
+                    store={store}
+                    abandonedOrders={abandonedOrders}
+                    landingPages={landingPages}
+                    apiConfig={apiConfig}
+                    isLoading={isDataLoading}
+                    isSyncingSheet={isSyncingAbandoned}
+                    lastSyncError={lastAbandonedSyncError}
+                    needsSqlMigration={abandonedNeedsSql}
+                    onDismissSyncError={() => setLastAbandonedSyncError(null)}
+                    onDismissSqlNotice={() => setAbandonedNeedsSql(false)}
+                    onSyncWithSheet={handleSyncAbandonedWithSheet}
+                    onUpdateStatus={handleUpdateAbandonedStatus}
+                    onDeleteItems={handleDeleteAbandonedOrders}
+                    onConvertToOrder={handleConvertAbandonedToOrder}
+                    onSaveReminderTemplate={template =>
+                      handleSaveStoreExtras(
+                        { whatsappAbandonedTemplate: template },
+                        'تم حفظ رسالة تذكير الطلبات المتروكة بنجاح'
+                      )
+                    }
+                    onOpenOrderByNumber={orderNum => {
+                      const found = orders.find(
+                        o => o.orderNumber.toUpperCase() === orderNum.toUpperCase()
+                      );
+                      if (found) setSelectedOrder(found);
+                      setActiveTab('orders');
+                    }}
+                  />
+                )}
 
-              {activeTab === 'customers' && (
+              {activeTab === 'customers' && staffRole === 'owner' && (
                 <CustomersTab
                   store={store}
                   orders={orders}
@@ -1713,17 +1969,39 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                 />
               )}
 
-              {activeTab === 'api' && apiConfig && (
+              {activeTab === 'api' && apiConfig && staffRole === 'owner' && (
                 <ApiConfigTab
                   store={store}
                   initialConfig={apiConfig}
                   needsSqlMigration={needsSqlMigration}
+                  allowOnlinePayment={activePlan.allowOnlinePayment !== false}
+                  onGoToBilling={() => setActiveTab('billing')}
                   onSaveConfig={handleSaveApiConfig}
                   onClearLogs={handleClearDiagnosticLogs}
                 />
               )}
 
-              {activeTab === 'settings' && (
+              {activeTab === 'billing' && staffRole === 'owner' && (
+                <BillingTab
+                  store={store}
+                  landingPagesCount={landingPages.length}
+                  monthlyOrdersCount={currentMonthlyOrdersCount}
+                  activeTeamCount={activeTeamCount}
+                  onNotify={showToast}
+                />
+              )}
+
+              {activeTab === 'team' && staffRole === 'owner' && (
+                <TeamTab
+                  store={store}
+                  maxTeamMembers={activePlan.maxTeamMembers ?? 1}
+                  onGoToBilling={() => setActiveTab('billing')}
+                  onNotify={showToast}
+                  onTeamCountChange={setActiveTeamCount}
+                />
+              )}
+
+              {activeTab === 'settings' && staffRole === 'owner' && (
                 <SettingsTab
                   store={store}
                   apiConfig={apiConfig}

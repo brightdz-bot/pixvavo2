@@ -9,6 +9,7 @@ import {
   loadFonts
 } from '../../data/fonts';
 import { storage } from '../../services/storage';
+import { platformApi } from '../../services/platformApi';
 import { applyBrowserBranding } from '../../services/branding';
 import {
   captureMetaAttributionCookies,
@@ -53,7 +54,10 @@ import {
   ChevronDown,
   Gift,
   Sparkles,
-  Loader2
+  Loader2,
+  CreditCard,
+  Wallet,
+  Upload
 } from 'lucide-react';
 
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
@@ -260,6 +264,52 @@ export const LandingPageView: React.FC<Props> = ({
     total?: number;
   } | null>(null);
 
+  // Customer electronic payment options (Chargily Pay v2 + BaridiMob manual transfer)
+  const [paymentOptions, setPaymentOptions] = useState<{
+    chargilyEnabled: boolean;
+    baridimobEnabled: boolean;
+    baridimobRip: string;
+    baridimobAccountName: string;
+    baridimobInstructions: string;
+  }>({
+    chargilyEnabled: false,
+    baridimobEnabled: false,
+    baridimobRip: '',
+    baridimobAccountName: '',
+    baridimobInstructions: ''
+  });
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'chargily' | 'baridimob'>('cod');
+  const [baridimobReceiptUrl, setBaridimobReceiptUrl] = useState<string>('');
+  const [baridimobTxRef, setBaridimobTxRef] = useState<string>('');
+  const [copiedRip, setCopiedRip] = useState(false);
+  const [paymentReturnBanner, setPaymentReturnBanner] = useState<{
+    kind: 'success' | 'failed';
+    orderNumber: string;
+    message: string;
+  } | null>(null);
+
+  const handleBaridimobReceiptUpload = (file: File | null) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 960;
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          setBaridimobReceiptUrl(canvas.toDataURL('image/jpeg', 0.78));
+        }
+      };
+      if (typeof reader.result === 'string') img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const effectivePixelId =
     page.integrations?.pixelId?.trim() ||
     store.defaultPixelId?.trim() ||
@@ -346,6 +396,13 @@ export const LandingPageView: React.FC<Props> = ({
         meta: localCfg.metaPixelId || prev.meta,
         tiktok: localCfg.tiktokPixelId || prev.tiktok
       }));
+      setPaymentOptions(prev => ({
+        chargilyEnabled: Boolean(localCfg.chargilyEnabled),
+        baridimobEnabled: Boolean(localCfg.baridimobEnabled && localCfg.baridimobRip),
+        baridimobRip: localCfg.baridimobRip || prev.baridimobRip,
+        baridimobAccountName: localCfg.baridimobAccountName || prev.baridimobAccountName,
+        baridimobInstructions: localCfg.baridimobInstructions || prev.baridimobInstructions
+      }));
     }
     applyBrowserBranding({
       title: `${page.title} | ${store.name}`,
@@ -373,6 +430,17 @@ export const LandingPageView: React.FC<Props> = ({
             tiktok: data.tiktokPixelId || prev.tiktok
           }));
         }
+        setPaymentOptions(prev => ({
+          chargilyEnabled:
+            typeof data.chargilyEnabled === 'boolean' ? data.chargilyEnabled : prev.chargilyEnabled,
+          baridimobEnabled:
+            typeof data.baridimobEnabled === 'boolean'
+              ? Boolean(data.baridimobEnabled && (data.baridimobRip || prev.baridimobRip))
+              : prev.baridimobEnabled,
+          baridimobRip: data.baridimobRip || prev.baridimobRip,
+          baridimobAccountName: data.baridimobAccountName || prev.baridimobAccountName,
+          baridimobInstructions: data.baridimobInstructions || prev.baridimobInstructions
+        }));
         if (data.faviconUrl || store.logoUrl) {
           applyBrowserBranding({
             title: `${page.title} | ${store.name}`,
@@ -381,6 +449,26 @@ export const LandingPageView: React.FC<Props> = ({
         }
       })
       .catch(() => {});
+
+    // Check return from Chargily Pay redirect (?payment=success|failed&order=...)
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const payState = sp.get('payment');
+      const payOrder = sp.get('order');
+      if ((payState === 'success' || payState === 'failed') && payOrder) {
+        setPaymentReturnBanner({
+          kind: payState,
+          orderNumber: payOrder,
+          message:
+            payState === 'success'
+              ? `تم استلام عملية الدفع الإلكتروني للطلب #${payOrder} بنجاح! سنتواصل معك قريباً لتأكيد التوصيل.`
+              : `لم تكتمل عملية الدفع الإلكتروني للطلب #${payOrder}. طلبك ما زال مسجلاً ويمكنك تأكيده بالدفع عند الاستلام أو التواصل معنا.`
+        });
+      }
+    } catch {
+      // ignore
+    }
+
     return () => {
       active = false;
     };
@@ -890,6 +978,9 @@ export const LandingPageView: React.FC<Props> = ({
         discount: activeDiscountAmount,
         discountReason: appliedPromo?.reason,
         orderBump: chosenBump,
+        paymentMethod,
+        paymentReference: paymentMethod === 'baridimob' ? baridimobTxRef.trim() || undefined : undefined,
+        paymentReceiptUrl: paymentMethod === 'baridimob' ? baridimobReceiptUrl || undefined : undefined,
         antiBot: { honeypot: botTrapField, fillTimeMs }
       });
     } finally {
@@ -974,6 +1065,41 @@ export const LandingPageView: React.FC<Props> = ({
       discountReason: appliedPromo?.reason || '',
       trackingCode: ''
     });
+
+    // Record BaridiMob receipt or redirect to Chargily Pay v2 hosted checkout
+    if (paymentMethod === 'baridimob') {
+      void platformApi.recordBaridimobOrderPayment({
+        storeId: store.id,
+        orderNumber: orderNum,
+        amountDZD: finalTotalDisplay,
+        receiptImageUrl: baridimobReceiptUrl || undefined,
+        transactionRef: baridimobTxRef.trim() || undefined
+      });
+    } else if (paymentMethod === 'chargily') {
+      try {
+        const baseReturn = `${window.location.origin}${window.location.pathname}`;
+        const checkoutRes = await platformApi.createChargilyCheckout({
+          storeId: store.id,
+          orderNumber: orderNum,
+          amountDZD: finalTotalDisplay,
+          description: `${store.name} - ${bundleDetails}`,
+          successUrl: `${baseReturn}?payment=success&order=${encodeURIComponent(orderNum)}`,
+          failureUrl: `${baseReturn}?payment=failed&order=${encodeURIComponent(orderNum)}`
+        });
+        if (checkoutRes.ok && checkoutRes.checkoutUrl) {
+          window.location.href = checkoutRes.checkoutUrl;
+          return;
+        }
+        setFormError(
+          checkoutRes.message ||
+            `تم تسجيل طلبك رقم #${orderNum} بنجاح، لكن تعذر فتح بوابة الدفع الإلكتروني حالياً. سنتواصل معك لتأكيد التوصيل.`
+        );
+      } catch {
+        setFormError(
+          `تم تسجيل طلبك رقم #${orderNum}، وتعذر الاتصال ببوابة الدفع الإلكتروني حالياً.`
+        );
+      }
+    }
 
     const whatsappUrl = buildOrderConfirmationWhatsAppUrl(
       effectiveWhatsapp,
@@ -2295,6 +2421,237 @@ export const LandingPageView: React.FC<Props> = ({
                     </label>
                   )}
 
+                  {/* Electronic Payment Return Banner (after Chargily redirect) */}
+                  {paymentReturnBanner && (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs font-bold flex items-start justify-between gap-2 ${
+                        paymentReturnBanner.kind === 'success'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-amber-50 border-amber-200 text-amber-800'
+                      }`}
+                    >
+                      <span>{paymentReturnBanner.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentReturnBanner(null)}
+                        className="shrink-0 opacity-70 hover:opacity-100 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Payment Method Selector (shown when merchant enabled Chargily or BaridiMob) */}
+                  {(paymentOptions.chargilyEnabled || paymentOptions.baridimobEnabled) && (
+                    <div className="space-y-2.5">
+                      <label className="block text-xs font-bold flex items-center gap-1.5">
+                        <CreditCard className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
+                        <span>اختر طريقة الدفع المناسبة لك</span>
+                      </label>
+                      <div className="grid grid-cols-1 gap-2">
+                        <label
+                          className="p-3 rounded-xl border-2 flex items-center justify-between gap-3 cursor-pointer transition-colors"
+                          style={{
+                            borderColor:
+                              paymentMethod === 'cod' ? theme.primaryColor : theme.borderColor,
+                            backgroundColor:
+                              paymentMethod === 'cod' ? theme.softTintColor : theme.surfaceColor
+                          }}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <input
+                              type="radio"
+                              name="paymentMethod"
+                              checked={paymentMethod === 'cod'}
+                              onChange={() => setPaymentMethod('cod')}
+                              style={{ accentColor: theme.primaryColor }}
+                            />
+                            <div>
+                              <div className="text-xs font-bold">الدفع نقداً عند الاستلام</div>
+                              <div className={`text-[11px] ${mutedTextClass}`}>
+                                تدفع عند استلام الطلب ومعاينته
+                              </div>
+                            </div>
+                          </div>
+                          <Truck className="w-4 h-4 shrink-0" style={{ color: theme.primaryColor }} />
+                        </label>
+
+                        {paymentOptions.chargilyEnabled && (
+                          <label
+                            className="p-3 rounded-xl border-2 flex items-center justify-between gap-3 cursor-pointer transition-colors"
+                            style={{
+                              borderColor:
+                                paymentMethod === 'chargily'
+                                  ? theme.primaryColor
+                                  : theme.borderColor,
+                              backgroundColor:
+                                paymentMethod === 'chargily'
+                                  ? theme.softTintColor
+                                  : theme.surfaceColor
+                            }}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="radio"
+                                name="paymentMethod"
+                                checked={paymentMethod === 'chargily'}
+                                onChange={() => setPaymentMethod('chargily')}
+                                style={{ accentColor: theme.primaryColor }}
+                              />
+                              <div>
+                                <div className="text-xs font-bold">
+                                  الدفع الإلكتروني بالبطاقة الذهبية أو CIB
+                                </div>
+                                <div className={`text-[11px] ${mutedTextClass}`}>
+                                  تحويل آمن وفوري عبر بوابة Chargily Pay
+                                </div>
+                              </div>
+                            </div>
+                            <CreditCard
+                              className="w-4 h-4 shrink-0"
+                              style={{ color: theme.primaryColor }}
+                            />
+                          </label>
+                        )}
+
+                        {paymentOptions.baridimobEnabled && (
+                          <label
+                            className="p-3 rounded-xl border-2 flex items-center justify-between gap-3 cursor-pointer transition-colors"
+                            style={{
+                              borderColor:
+                                paymentMethod === 'baridimob'
+                                  ? theme.primaryColor
+                                  : theme.borderColor,
+                              backgroundColor:
+                                paymentMethod === 'baridimob'
+                                  ? theme.softTintColor
+                                  : theme.surfaceColor
+                            }}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="radio"
+                                name="paymentMethod"
+                                checked={paymentMethod === 'baridimob'}
+                                onChange={() => setPaymentMethod('baridimob')}
+                                style={{ accentColor: theme.primaryColor }}
+                              />
+                              <div>
+                                <div className="text-xs font-bold">
+                                  التحويل عبر بريدي موب (BaridiMob / CCP)
+                                </div>
+                                <div className={`text-[11px] ${mutedTextClass}`}>
+                                  تحويل مباشر مع إرفاق صورة الوصل
+                                </div>
+                              </div>
+                            </div>
+                            <Wallet
+                              className="w-4 h-4 shrink-0"
+                              style={{ color: theme.primaryColor }}
+                            />
+                          </label>
+                        )}
+                      </div>
+
+                      {paymentMethod === 'baridimob' && paymentOptions.baridimobEnabled && (
+                        <div
+                          className="p-3.5 rounded-xl border space-y-3 text-xs"
+                          style={{
+                            backgroundColor: theme.surfaceColor,
+                            borderColor: theme.borderColor
+                          }}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className={`text-[11px] ${mutedTextClass}`}>رقم الـ RIP للتحويل:</div>
+                              <div className="font-mono font-black text-sm mt-0.5" dir="ltr">
+                                {paymentOptions.baridimobRip}
+                              </div>
+                              {paymentOptions.baridimobAccountName && (
+                                <div className={`text-[11px] mt-0.5 ${mutedTextClass}`}>
+                                  باسم: {paymentOptions.baridimobAccountName}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(paymentOptions.baridimobRip);
+                                setCopiedRip(true);
+                                setTimeout(() => setCopiedRip(false), 2000);
+                              }}
+                              className="px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                              style={{ borderColor: theme.borderColor }}
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>{copiedRip ? 'تم النسخ' : 'نسخ RIP'}</span>
+                            </button>
+                          </div>
+
+                          {paymentOptions.baridimobInstructions && (
+                            <p className={`text-[11px] leading-relaxed ${mutedTextClass}`}>
+                              {paymentOptions.baridimobInstructions}
+                            </p>
+                          )}
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1">
+                                رقم العملية / المرجع (اختياري)
+                              </label>
+                              <input
+                                type="text"
+                                dir="ltr"
+                                value={baridimobTxRef}
+                                onChange={e => setBaridimobTxRef(e.target.value)}
+                                placeholder="مثال: 20261126..."
+                                className={`w-full px-3 py-2 rounded-lg border text-xs font-mono ${subtleInputBg}`}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1">
+                                صورة وصل بريدي موب
+                              </label>
+                              <label
+                                className={`w-full px-3 py-2 rounded-lg border border-dashed text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${subtleInputBg}`}
+                              >
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>
+                                  {baridimobReceiptUrl ? 'تم إرفاق الوصل (تغيير)' : 'رفع صورة الوصل'}
+                                </span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={e =>
+                                    handleBaridimobReceiptUpload(e.target.files?.[0] || null)
+                                  }
+                                />
+                              </label>
+                            </div>
+                          </div>
+
+                          {baridimobReceiptUrl && (
+                            <div className="flex items-center justify-between gap-2 pt-1">
+                              <img
+                                src={baridimobReceiptUrl}
+                                alt="معاينة وصل الدفع"
+                                className="h-16 rounded-lg border object-contain"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setBaridimobReceiptUrl('')}
+                                className="text-[11px] text-rose-600 font-bold hover:underline cursor-pointer"
+                              >
+                                إزالة الصورة
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Summary */}
                   <div
                     className="p-4 rounded-xl border space-y-2 text-xs sm:text-sm tabular-nums"
@@ -2382,6 +2739,10 @@ export const LandingPageView: React.FC<Props> = ({
                         ? 'جاري تأكيد طلبك...'
                         : page.stock <= 0
                         ? 'الكمية غير متوفرة حالياً'
+                        : paymentMethod === 'chargily'
+                        ? 'المتابعة للدفع بالبطاقة الذهبية (Chargily)'
+                        : paymentMethod === 'baridimob'
+                        ? 'تأكيد الطلب وإرسال وصل بريدي موب'
                         : 'تأكيد الطلب الآن (الدفع عند الاستلام)'}
                     </span>
                   </motion.button>

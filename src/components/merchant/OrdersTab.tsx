@@ -48,7 +48,9 @@ import {
   Plus,
   Trash2,
   Copy,
-  X
+  X,
+  CreditCard,
+  Receipt
 } from 'lucide-react';
 
 interface Props {
@@ -101,6 +103,11 @@ interface Props {
   onSendOrderToCourier?: (order: Order) => Promise<void>;
   onPullCourierStatus?: (order: Order) => Promise<void>;
   onSendOrderWhatsAppApi?: (order: Order) => Promise<void>;
+  onVerifyOrderPayment?: (
+    orderNumber: string,
+    paymentStatus: 'paid' | 'failed' | 'pending_verification'
+  ) => Promise<void>;
+  hideFinancials?: boolean;
   onSyncFromGoogleSheet?: () => void;
   isSyncingSheet?: boolean;
   lastSheetSyncError?: string | null;
@@ -140,6 +147,8 @@ export const OrdersTab: React.FC<Props> = ({
   onSendOrderToCourier,
   onPullCourierStatus,
   onSendOrderWhatsAppApi,
+  onVerifyOrderPayment,
+  hideFinancials = false,
   onSyncFromGoogleSheet,
   isSyncingSheet,
   lastSheetSyncError,
@@ -149,6 +158,7 @@ export const OrdersTab: React.FC<Props> = ({
   selectedOrder,
   onSelectOrder
 }) => {
+  const [verifyingPaymentOrder, setVerifyingPaymentOrder] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1167,7 +1177,25 @@ export const OrdersTab: React.FC<Props> = ({
                         {order.deliveryType === 'stop' ? 'مكتب الشحن Stop Desk' : 'توصيل للمنزل'}
                       </td>
                       <td className="py-3.5 px-3 font-bold tabular-nums text-slate-900 dark:text-white">
-                        {formatDZD(order.total)}
+                        <div>{formatDZD(order.total)}</div>
+                        {order.paymentMethod && order.paymentMethod !== 'cod' && (
+                          <div
+                            className={`text-[10px] font-bold mt-0.5 ${
+                              order.paymentStatus === 'paid'
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : order.paymentStatus === 'failed'
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : 'text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {order.paymentMethod === 'chargily' ? 'Chargily' : 'بريدي موب'} •{' '}
+                            {order.paymentStatus === 'paid'
+                              ? 'مدفوع'
+                              : order.paymentStatus === 'failed'
+                                ? 'مرفوض'
+                                : 'قيد المراجعة'}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3.5 px-3">
                         <span
@@ -1574,10 +1602,116 @@ export const OrdersTab: React.FC<Props> = ({
                   </span>
                 </div>
                 <div className="flex justify-between text-sm font-black pt-2 border-t border-slate-200 dark:border-slate-700">
-                  <span>المجموع الكلي (COD):</span>
+                  <span>
+                    المجموع الكلي (
+                    {selectedOrder.paymentMethod === 'chargily'
+                      ? 'Chargily Pay'
+                      : selectedOrder.paymentMethod === 'baridimob'
+                        ? 'بريدي موب'
+                        : 'الدفع عند الاستلام'}
+                    ):
+                  </span>
                   <span className="text-emerald-600">{formatDZD(selectedOrder.total)}</span>
                 </div>
+                {hideFinancials && (
+                  <p className="text-[11px] text-slate-400 pt-1">
+                    صلاحية موظف تأكيد الطلبات: تفاصيل التكاليف والأرباح الصافية مخصصة لصاحب المتجر فقط.
+                  </p>
+                )}
               </div>
+
+              {/* Electronic Payment Verification Card (Chargily / BaridiMob) */}
+              {selectedOrder.paymentMethod && selectedOrder.paymentMethod !== 'cod' && (
+                <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-3 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
+                      {selectedOrder.paymentMethod === 'chargily' ? (
+                        <CreditCard className="w-4 h-4 text-emerald-600" />
+                      ) : (
+                        <Receipt className="w-4 h-4 text-emerald-600" />
+                      )}
+                      <span>
+                        {selectedOrder.paymentMethod === 'chargily'
+                          ? 'دفع إلكتروني — البطاقة الذهبية (Chargily Pay)'
+                          : 'تحويل بريدي موب / CCP'}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-xs font-black ${
+                        selectedOrder.paymentStatus === 'paid'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : selectedOrder.paymentStatus === 'failed'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                      }`}
+                    >
+                      {selectedOrder.paymentStatus === 'paid'
+                        ? 'تم تأكيد الدفع'
+                        : selectedOrder.paymentStatus === 'failed'
+                          ? 'دفع مرفوض / فاشل'
+                          : 'بانتظار مراجعة الوصل'}
+                    </span>
+                  </div>
+
+                  {selectedOrder.paymentReference && (
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      المرجع: {selectedOrder.paymentReference}
+                    </div>
+                  )}
+
+                  {selectedOrder.paymentReceiptUrl && (
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                        وصل التحويل المرفق من الزبون:
+                      </div>
+                      <img
+                        src={selectedOrder.paymentReceiptUrl}
+                        alt="وصل الدفع"
+                        className="max-h-56 rounded-lg border border-slate-200 dark:border-slate-700 object-contain bg-slate-50 dark:bg-slate-950"
+                      />
+                    </div>
+                  )}
+
+                  {onVerifyOrderPayment && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {selectedOrder.paymentStatus !== 'paid' && (
+                        <button
+                          type="button"
+                          disabled={verifyingPaymentOrder === selectedOrder.orderNumber}
+                          onClick={async () => {
+                            setVerifyingPaymentOrder(selectedOrder.orderNumber);
+                            try {
+                              await onVerifyOrderPayment(selectedOrder.orderNumber, 'paid');
+                            } finally {
+                              setVerifyingPaymentOrder(null);
+                            }
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+                        >
+                          تأكيد استلام الدفع
+                        </button>
+                      )}
+                      {selectedOrder.paymentStatus !== 'failed' && (
+                        <button
+                          type="button"
+                          disabled={verifyingPaymentOrder === selectedOrder.orderNumber}
+                          onClick={async () => {
+                            setVerifyingPaymentOrder(selectedOrder.orderNumber);
+                            try {
+                              await onVerifyOrderPayment(selectedOrder.orderNumber, 'failed');
+                            } finally {
+                              setVerifyingPaymentOrder(null);
+                            }
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold text-xs cursor-pointer disabled:opacity-60"
+                        >
+                          رفض الوصل
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Courier API Dispatch + Live Tracking */}
