@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LandingPage,
   LandingPageOffer,
@@ -10,6 +10,14 @@ import {
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS, formatDZD } from '../../data/wilayas';
 import { DEFAULT_ASSETS } from '../../data/defaultAssets';
 import { createLevitatingLampLandingPage, LEVITATING_LAMP_SLUG } from '../../data/starterTemplates';
+import {
+  HEADING_FONTS,
+  BODY_FONTS,
+  DEFAULT_HEADING_FONT,
+  DEFAULT_BODY_FONT,
+  findFont,
+  loadFonts
+} from '../../data/fonts';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { buildLandingPageUrl } from '../../utils/urlRouting';
 import { resizeImageToDataUrl, resizeDetailImageToDataUrl } from '../../services/branding';
@@ -19,6 +27,7 @@ import {
   Trash2,
   ExternalLink,
   Palette,
+  Type,
   Layers,
   Image as ImageIcon,
   Share2,
@@ -158,6 +167,13 @@ export const LandingPagesTab: React.FC<Props> = ({
   const [dismissedLampTemplate, setDismissedLampTemplate] = useState(false);
   const [detailImageUrlDraft, setDetailImageUrlDraft] = useState('');
   const [isUploadingDetailImages, setIsUploadingDetailImages] = useState(false);
+
+  const isEditorOpen = Boolean(editingPage);
+  useEffect(() => {
+    if (isEditorOpen) {
+      loadFonts([...HEADING_FONTS, ...BODY_FONTS]);
+    }
+  }, [isEditorOpen]);
 
   const hasLevitatingLampPage = landingPages.some(
     p =>
@@ -426,7 +442,14 @@ export const LandingPagesTab: React.FC<Props> = ({
 
   const handleThemePreset = (preset: LandingPageTheme) => {
     if (!editingPage) return;
-    setEditingPage({ ...editingPage, theme: { ...preset } });
+    setEditingPage({
+      ...editingPage,
+      theme: {
+        ...preset,
+        headingFont: editingPage.theme.headingFont,
+        bodyFont: editingPage.theme.bodyFont
+      }
+    });
   };
 
   const handleAddVariantPreset = (preset: 'color' | 'size' | 'custom') => {
@@ -1870,6 +1893,106 @@ export const LandingPagesTab: React.FC<Props> = ({
                   </div>
                 ))}
               </div>
+
+              {/* Per-Page Font Selector */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold flex items-center gap-1.5 text-slate-800 dark:text-slate-100">
+                    <Type className="w-4 h-4 text-emerald-600" />
+                    <span>نوع الخط لهذه الصفحة</span>
+                  </span>
+                  {(t.headingFont || t.bodyFont) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingPage({
+                          ...editingPage,
+                          theme: { ...t, headingFont: undefined, bodyFont: undefined }
+                        })
+                      }
+                      className="text-[11px] font-bold text-slate-500 hover:text-emerald-600 cursor-pointer"
+                    >
+                      استعادة افتراضي المتجر
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="space-y-1 text-[11px] font-bold block">
+                    <span className="text-slate-600 dark:text-slate-300">خط العناوين</span>
+                    <select
+                      value={t.headingFont || ''}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          theme: { ...t, headingFont: e.target.value || undefined }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    >
+                      <option value="">افتراضي المتجر</option>
+                      {HEADING_FONTS.map(f => (
+                        <option key={f.id} value={f.id}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="space-y-1 text-[11px] font-bold block">
+                    <span className="text-slate-600 dark:text-slate-300">خط النصوص والاستمارة</span>
+                    <select
+                      value={t.bodyFont || ''}
+                      onChange={e =>
+                        setEditingPage({
+                          ...editingPage,
+                          theme: { ...t, bodyFont: e.target.value || undefined }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    >
+                      <option value="">افتراضي المتجر</option>
+                      {BODY_FONTS.map(f => (
+                        <option key={f.id} value={f.id}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div
+                  className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-1"
+                  dir="rtl"
+                >
+                  <p
+                    className="text-base font-bold text-slate-900 dark:text-white leading-snug"
+                    style={{
+                      fontFamily: `${
+                        t.headingFont
+                          ? findFont(HEADING_FONTS, t.headingFont, DEFAULT_HEADING_FONT).family
+                          : "'Tajawal'"
+                      }, 'Cairo', sans-serif`
+                    }}
+                  >
+                    {editingPage.title || 'معاينة خط العنوان الرئيسي لصفحة الهبوط'}
+                  </p>
+                  <p
+                    className="text-xs text-slate-500 dark:text-slate-300 leading-relaxed"
+                    style={{
+                      fontFamily: `${
+                        t.bodyFont
+                          ? findFont(BODY_FONTS, t.bodyFont, DEFAULT_BODY_FONT).family
+                          : "'Tajawal'"
+                      }, 'Cairo', sans-serif`
+                    }}
+                  >
+                    {editingPage.description
+                      ? editingPage.description.slice(0, 110)
+                      : 'هكذا ستظهر نصوص الوصف، عروض الكمية، وخانات استمارة الطلب للزبون.'}
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* 5. Per-Page Integrations */}
@@ -1978,12 +2101,20 @@ export const LandingPagesTab: React.FC<Props> = ({
             </div>
 
             <div
-              className="rounded-3xl overflow-hidden border shadow-xl"
-              style={{
-                backgroundColor: t.bgColor,
-                color: t.textColor,
-                borderColor: t.borderColor
-              }}
+              className="rounded-3xl overflow-hidden border shadow-xl lp-custom-fonts"
+              style={
+                {
+                  backgroundColor: t.bgColor,
+                  color: t.textColor,
+                  borderColor: t.borderColor,
+                  '--lp-font-head': t.headingFont
+                    ? findFont(HEADING_FONTS, t.headingFont, DEFAULT_HEADING_FONT).family
+                    : "'Tajawal'",
+                  '--lp-font-body': t.bodyFont
+                    ? findFont(BODY_FONTS, t.bodyFont, DEFAULT_BODY_FONT).family
+                    : "'Tajawal'"
+                } as React.CSSProperties
+              }
             >
               <div
                 className="py-1.5 px-3 text-center text-[11px] font-bold text-white"

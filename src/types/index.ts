@@ -122,6 +122,8 @@ export interface LandingPageTheme {
   textColor: string;
   accentColor: string;
   isDark?: boolean;
+  headingFont?: string;
+  bodyFont?: string;
 }
 
 export interface LandingPageReview {

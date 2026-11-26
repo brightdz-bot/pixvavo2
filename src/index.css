@@ -18,6 +18,18 @@
   }
 }
 
+/* Per-landing-page custom Arabic font families */
+.lp-custom-fonts {
+  font-family: var(--lp-font-body, 'Tajawal'), 'Cairo', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.lp-custom-fonts h1,
+.lp-custom-fonts h2,
+.lp-custom-fonts h3,
+.lp-custom-fonts .lp-heading {
+  font-family: var(--lp-font-head, var(--lp-font-body, 'Tajawal')), 'Cairo', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

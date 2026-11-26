@@ -2,6 +2,12 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence, useScroll, useSpring } from 'motion/react';
 import { Store, LandingPage, DeliveryType, OrderStatus } from '../../types';
 import { ALGERIA_WILAYAS, formatDZD } from '../../data/wilayas';
+import {
+  HEADING_FONTS,
+  BODY_FONTS,
+  findFont,
+  loadFonts
+} from '../../data/fonts';
 import { storage } from '../../services/storage';
 import { applyBrowserBranding } from '../../services/branding';
 import {
@@ -1391,14 +1397,34 @@ export const LandingPageView: React.FC<Props> = ({
     void storage.trackLandingPageView(page.id);
   }, [page.id]);
 
+  const lpHeadFont = useMemo(
+    () => findFont(HEADING_FONTS, theme.headingFont || store.storefrontHeadingFont, 'tajawal'),
+    [theme.headingFont, store.storefrontHeadingFont]
+  );
+  const lpBodyFont = useMemo(
+    () => findFont(BODY_FONTS, theme.bodyFont || store.storefrontBodyFont, 'tajawal'),
+    [theme.bodyFont, store.storefrontBodyFont]
+  );
+
+  useEffect(() => {
+    loadFonts([lpHeadFont, lpBodyFont]);
+  }, [lpHeadFont, lpBodyFont]);
+
   const mutedTextClass = theme.isDark ? 'text-slate-300' : 'text-slate-600';
   const subtleInputBg = theme.isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-white text-slate-900 border-slate-300';
 
   return (
     <div
       dir="rtl"
-      className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors"
-      style={{ backgroundColor: theme.bgColor, color: theme.textColor }}
+      className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors lp-custom-fonts"
+      style={
+        {
+          backgroundColor: theme.bgColor,
+          color: theme.textColor,
+          '--lp-font-head': lpHeadFont.family,
+          '--lp-font-body': lpBodyFont.family
+        } as React.CSSProperties
+      }
     >
       {/* Top Announcement Bar */}
       <div
