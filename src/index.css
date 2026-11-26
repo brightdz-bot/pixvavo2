@@ -11,7 +11,7 @@
   }
 
   body {
-    font-family: 'IBM Plex Sans Arabic', 'Tajawal', 'Cairo', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: 'Tajawal', 'Cairo', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-tap-highlight-color: transparent;
     overflow-x: clip;
     max-width: 100%;
@@ -51,11 +51,25 @@
   background: rgba(148, 163, 184, 0.7);
 }
 
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 
-/* Storefront themes (chosen by the merchant in Settings) */
-.sf-dark { --sf-ink:#0d0f0e; --sf-panel:#151917; --sf-line:#2a2f2b; --sf-ivory:#efe9dc; --sf-mute:#9a9486; --sf-gold:#c8a15b; --sf-on-accent:#0d0f0e; }
-.sf-light { --sf-ink:#fbf8f2; --sf-panel:#ffffff; --sf-line:#e6dccb; --sf-ivory:#2a2118; --sf-mute:#7a7266; --sf-gold:#754b2d; --sf-on-accent:#ffffff; }
-.sf-dark, .sf-light { font-family: var(--sf-font-body, 'IBM Plex Sans Arabic'), 'Cairo', sans-serif; }
-.sf-dark h1, .sf-dark h2, .sf-dark h3, .sf-light h1, .sf-light h2, .sf-light h3 { font-family: var(--sf-font-head, 'Reem Kufi'), 'Cairo', sans-serif; letter-spacing: 0; }
-.sf-dark ::selection, .sf-light ::selection { background: var(--sf-gold); color: var(--sf-on-accent); }
-.sf-dark :focus-visible, .sf-light :focus-visible { outline: 2px solid var(--sf-gold); outline-offset: 2px; }
+  .thermal-slip-page {
+    width: 100mm !important;
+    min-height: 146mm !important;
+    max-width: 100mm !important;
+    margin: 0 auto !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .a4-slip-page {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

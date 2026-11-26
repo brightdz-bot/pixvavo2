@@ -16,6 +16,7 @@ import { OverviewTab } from './OverviewTab';
 import { LandingPagesTab } from './LandingPagesTab';
 import { OrdersTab } from './OrdersTab';
 import { AbandonedOrdersTab, ConvertAbandonedPayload } from './AbandonedOrdersTab';
+import { CustomersTab } from './CustomersTab';
 import { ApiConfigTab } from './ApiConfigTab';
 import { SettingsTab } from './SettingsTab';
 import { ThemeToggle } from '../common/ThemeToggle';
@@ -41,6 +42,7 @@ import {
   Layers,
   ShoppingBag,
   UserX,
+  Users,
   Settings,
   Plug,
   ExternalLink,
@@ -71,7 +73,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   } = useAuth();
 
   const [activeTab, setActiveTabState] = useState<
-    'overview' | 'pages' | 'orders' | 'abandoned' | 'api' | 'settings'
+    'overview' | 'pages' | 'orders' | 'abandoned' | 'customers' | 'api' | 'settings'
   >(() => {
     try {
       const saved = sessionStorage.getItem('brightdz_active_tab');
@@ -80,6 +82,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
         saved === 'pages' ||
         saved === 'orders' ||
         saved === 'abandoned' ||
+        saved === 'customers' ||
         saved === 'api' ||
         saved === 'settings'
       ) {
@@ -92,7 +95,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
   });
 
   const setActiveTab = (
-    tab: 'overview' | 'pages' | 'orders' | 'abandoned' | 'api' | 'settings'
+    tab: 'overview' | 'pages' | 'orders' | 'abandoned' | 'customers' | 'api' | 'settings'
   ) => {
     setActiveTabState(tab);
     try {
@@ -523,7 +526,11 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
           trackingCode: updatedOrder.trackingCode || trackingCode || ''
         });
       }
-      showToast('تم تحديث حالة الطلب بنجاح');
+      showToast(
+        newStatus === 'cancelled'
+          ? 'تم إلغاء الطلب وإرجاع الكمية إلى المخزون تلقائياً'
+          : 'تم تحديث حالة الطلب بنجاح'
+      );
 
       // Optional automated WhatsApp dispatch on Shipping upgrade
       if (
@@ -1416,6 +1423,7 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
       icon: UserX,
       badge: abandonedOrders.filter(a => a.status === 'new').length
     },
+    { id: 'customers', label: 'سجل الزبائن', icon: Users },
     { id: 'api', label: 'إعدادات الـ API', icon: Plug },
     { id: 'settings', label: 'الإعدادات والتوصيل', icon: Settings }
   ];
@@ -1685,6 +1693,20 @@ export const MerchantDashboard: React.FC<Props> = ({ onGoToStorefront }) => {
                       o => o.orderNumber.toUpperCase() === orderNum.toUpperCase()
                     );
                     if (found) setSelectedOrder(found);
+                    setActiveTab('orders');
+                  }}
+                />
+              )}
+
+              {activeTab === 'customers' && (
+                <CustomersTab
+                  store={store}
+                  orders={orders}
+                  abandonedOrders={abandonedOrders}
+                  apiConfig={apiConfig}
+                  onSaveAntiFraudConfig={handleSaveAntiFraudConfig}
+                  onOpenOrder={ord => {
+                    setSelectedOrder(ord);
                     setActiveTab('orders');
                   }}
                 />

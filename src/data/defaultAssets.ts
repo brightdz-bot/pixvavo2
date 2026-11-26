@@ -9,5 +9,9 @@ export const DEFAULT_ASSETS = {
   towelHolderBathroom,
   towelHolderKitchen,
   towelHolderDetail,
-  organizerShelfHero
+  organizerShelfHero,
+  levitatingLampMain: '/assets/products/levitating-lamp-main.jpg',
+  levitatingLampDesk: '/assets/products/levitating-lamp-desk.jpg',
+  levitatingLampNight: '/assets/products/levitating-lamp-night.jpg',
+  levitatingLampDetail: '/assets/products/levitating-lamp-detail.jpg'
 };

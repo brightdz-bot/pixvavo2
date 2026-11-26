@@ -43,7 +43,11 @@ import {
   Pencil,
   Tag,
   TicketPercent,
-  MapPin
+  MapPin,
+  ChevronDown,
+  Gift,
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
@@ -206,6 +210,27 @@ export const LandingPageView: React.FC<Props> = ({
   const [orderPromptModalOpen, setOrderPromptModalOpen] = useState(false);
   const [copiedOrderId, setCopiedOrderId] = useState(false);
 
+  // Order Bump, Post-Purchase Upsell, FAQ Accordion & Slim Mobile Sticky Bar
+  const [orderBumpSelected, setOrderBumpSelected] = useState(false);
+  const [openFaqId, setOpenFaqId] = useState<string | null>(null);
+  const [showMobileStickyBar, setShowMobileStickyBar] = useState(false);
+  const [upsellOfferModalData, setUpsellOfferModalData] = useState<{
+    orderNumber: string;
+    bundleDetails: string;
+    subtotal: number;
+    shippingFee: number;
+    total: number;
+    customerName: string;
+    wilayaName: string;
+    commune: string;
+    deliveryType: DeliveryType;
+    whatsappUrl: string;
+    tracked: TrackedOrderState;
+  } | null>(null);
+  const [isApplyingUpsell, setIsApplyingUpsell] = useState(false);
+  const [upsellError, setUpsellError] = useState<string | null>(null);
+  const [upsellAppliedBanner, setUpsellAppliedBanner] = useState<string | null>(null);
+
   // Inline editing of bundle & destination in tracking view (for pending orders)
   const [isEditingTrackedOrder, setIsEditingTrackedOrder] = useState(false);
   const [editOfferChoices, setEditOfferChoices] = useState(offers);
@@ -260,6 +285,11 @@ export const LandingPageView: React.FC<Props> = ({
     setPromoError(null);
     setIsTrackingMode(false);
     setSuccessModalData(null);
+    setUpsellOfferModalData(null);
+    setUpsellError(null);
+    setUpsellAppliedBanner(null);
+    setOrderBumpSelected(false);
+    setOpenFaqId(null);
     setLastOrderWhatsappUrl('');
     setFormError(null);
     setIsEditingTrackedOrder(false);
@@ -370,22 +400,72 @@ export const LandingPageView: React.FC<Props> = ({
     return fee;
   };
 
+  const activeOrderBump = useMemo(() => {
+    const b = page.orderBump || page.integrations?.orderBump;
+    if (!b || !b.enabled || !b.title?.trim() || !(Number(b.price) > 0)) return null;
+    return {
+      ...b,
+      title: b.title.trim(),
+      price: Math.round(Number(b.price))
+    };
+  }, [page.orderBump, page.integrations?.orderBump]);
+
+  const activePostPurchaseUpsell = useMemo(() => {
+    const u = page.postPurchaseUpsell || page.integrations?.postPurchaseUpsell;
+    if (!u || !u.enabled || !u.title?.trim() || !(Number(u.price) > 0)) return null;
+    return {
+      ...u,
+      title: u.title.trim(),
+      price: Math.round(Number(u.price))
+    };
+  }, [page.postPurchaseUpsell, page.integrations?.postPurchaseUpsell]);
+
+  const activeFaqs = useMemo(() => {
+    const list = page.faqs && page.faqs.length > 0 ? page.faqs : page.integrations?.faqs || [];
+    return list.filter(f => f && f.question?.trim() && f.answer?.trim());
+  }, [page.faqs, page.integrations?.faqs]);
+
   const productPrice = selectedOffer?.price || 0;
+  const orderBumpPrice = activeOrderBump && orderBumpSelected ? activeOrderBump.price : 0;
+  const combinedProductPrice = productPrice + orderBumpPrice;
   const activeDiscountAmount = useMemo(() => {
     if (!appliedPromo) return 0;
-    if (appliedPromo.minOrder && productPrice < appliedPromo.minOrder) return 0;
+    if (appliedPromo.minOrder && combinedProductPrice < appliedPromo.minOrder) return 0;
     const raw =
       appliedPromo.type === 'percent'
-        ? Math.round((productPrice * Math.min(100, Math.max(0, appliedPromo.value))) / 100)
+        ? Math.round((combinedProductPrice * Math.min(100, Math.max(0, appliedPromo.value))) / 100)
         : Math.max(0, appliedPromo.value);
-    return Math.min(productPrice, raw);
-  }, [appliedPromo, productPrice]);
+    return Math.min(combinedProductPrice, raw);
+  }, [appliedPromo, combinedProductPrice]);
 
-  const discountedProductPrice = Math.max(0, productPrice - activeDiscountAmount);
+  const discountedProductPrice = Math.max(0, combinedProductPrice - activeDiscountAmount);
   const homeFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'home', discountedProductPrice);
   const stopFee = getDeliveryFeeForWilaya(selectedWilaya.id, 'stop', discountedProductPrice);
   const shippingCost = deliveryType === 'stop' ? stopFee : homeFee;
   const grandTotal = discountedProductPrice + shippingCost;
+
+  // Slim Mobile Quick-Order Bar visibility via IntersectionObserver on #form-container
+  useEffect(() => {
+    if (typeof window === 'undefined' || isTrackingMode || Boolean(upsellOfferModalData)) {
+      setShowMobileStickyBar(false);
+      return;
+    }
+    const formEl = document.getElementById('form-container');
+    if (!formEl || typeof IntersectionObserver === 'undefined') {
+      setShowMobileStickyBar(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      entries => {
+        const entry = entries[0];
+        if (!entry) return;
+        setShowMobileStickyBar(!entry.isIntersecting);
+      },
+      { threshold: 0.12 }
+    );
+    observer.observe(formEl);
+    return () => observer.disconnect();
+  }, [isTrackingMode, upsellOfferModalData, page.id]);
 
   const variantSummary = useMemo(() => {
     const vars = page.variants || [];
@@ -658,6 +738,10 @@ export const LandingPageView: React.FC<Props> = ({
   const resetToNewOrder = (targetSection: 'form-container' | 'offers-section' = 'form-container') => {
     setIsTrackingMode(false);
     setTrackedOrder(null);
+    setUpsellOfferModalData(null);
+    setUpsellError(null);
+    setUpsellAppliedBanner(null);
+    setOrderBumpSelected(false);
     setLastOrderWhatsappUrl('');
     setNewOrderModalOpen(false);
     setOrderPromptModalOpen(false);
@@ -747,6 +831,14 @@ export const LandingPageView: React.FC<Props> = ({
     submitLockRef.current = true;
     setIsSubmitting(true);
     let res: Awaited<ReturnType<typeof storage.placeOrder>>;
+    const chosenBump =
+      activeOrderBump && orderBumpSelected
+        ? {
+            title: activeOrderBump.title,
+            price: activeOrderBump.price,
+            imageUrl: activeOrderBump.imageUrl
+          }
+        : undefined;
     try {
       res = await storage.placeOrder({
         storeId: store.id,
@@ -763,6 +855,7 @@ export const LandingPageView: React.FC<Props> = ({
         promoCode: appliedPromo?.code,
         discount: activeDiscountAmount,
         discountReason: appliedPromo?.reason,
+        orderBump: chosenBump,
         antiBot: { honeypot: botTrapField, fillTimeMs }
       });
     } finally {
@@ -804,13 +897,15 @@ export const LandingPageView: React.FC<Props> = ({
       effectiveWebhook
     );
 
-    const bundleDetails = `${selectedOffer.title}${variantSummary ? ` (${variantSummary})` : ''} (الكمية: ${selectedOffer.quantity})`;
-    const finalTotalDisplay = activeDiscountAmount > 0 ? grandTotal : res.order.total;
+    const bumpSuffix = chosenBump ? ` + ${chosenBump.title}` : '';
+    const bundleDetails = `${selectedOffer.title}${variantSummary ? ` (${variantSummary})` : ''} (الكمية: ${selectedOffer.quantity})${bumpSuffix}`;
+    const finalTotalDisplay =
+      activeDiscountAmount > 0 || chosenBump ? grandTotal : res.order.total;
 
     trackMetaPixelPurchase(effectivePixelId, bundleDetails, finalTotalDisplay, orderNum, {
       storeId: store.id,
       contentId: page.id,
-      numItems: selectedOffer.quantity || 1,
+      numItems: (selectedOffer.quantity || 1) + (chosenBump ? 1 : 0),
       tiktokPixelId: effectiveTiktokPixelId,
       customerPhone: cleanPhone,
       customerName: cleanName,
@@ -839,7 +934,7 @@ export const LandingPageView: React.FC<Props> = ({
       orderDetails: bundleDetails,
       statusLabel: 'قيد التأكيد',
       shippingCost: res.order.shippingFee,
-      productPrice,
+      productPrice: combinedProductPrice,
       totalPrice: finalTotalDisplay,
       discount: activeDiscountAmount,
       discountReason: appliedPromo?.reason || '',
@@ -862,14 +957,7 @@ export const LandingPageView: React.FC<Props> = ({
       waTemplates.confirm
     );
 
-    lastSheetSnapshotRef.current = null;
-    setDbEditedInSession(false);
-    setIsEditingTrackedOrder(false);
-    setTrackedEditError(null);
-    setTrackedEditSuccess(null);
-    setSuccessModalData(null);
-    setLastOrderWhatsappUrl(whatsappUrl);
-    setTrackedOrder({
+    const initialTracked: TrackedOrderState = {
       orderNumber: orderNum,
       landingPageId: page.id,
       customerFirstName: fullName.trim().split(' ')[0],
@@ -880,7 +968,116 @@ export const LandingPageView: React.FC<Props> = ({
       bundleLabel: bundleDetails,
       total: finalTotalDisplay,
       status: 'new'
+    };
+
+    lastSheetSnapshotRef.current = null;
+    setDbEditedInSession(false);
+    setIsEditingTrackedOrder(false);
+    setTrackedEditError(null);
+    setTrackedEditSuccess(null);
+    setSuccessModalData(null);
+    setUpsellError(null);
+    setUpsellAppliedBanner(null);
+
+    if (activePostPurchaseUpsell) {
+      setUpsellOfferModalData({
+        orderNumber: orderNum,
+        bundleDetails,
+        subtotal: discountedProductPrice,
+        shippingFee: res.order.shippingFee,
+        total: finalTotalDisplay,
+        customerName: fullName.trim(),
+        wilayaName: selectedWilaya.nameAr,
+        commune: selectedCommune,
+        deliveryType,
+        whatsappUrl,
+        tracked: initialTracked
+      });
+      return;
+    }
+
+    setLastOrderWhatsappUrl(whatsappUrl);
+    setTrackedOrder(initialTracked);
+    setIsTrackingMode(true);
+    scrollToElementWhenReady('tracking-container');
+  };
+
+  const handleAcceptPostPurchaseUpsell = async () => {
+    if (!upsellOfferModalData || !activePostPurchaseUpsell || isApplyingUpsell) return;
+    setUpsellError(null);
+    setIsApplyingUpsell(true);
+    const res = await storage.appendOrderAddon({
+      storeId: store.id,
+      orderNumber: upsellOfferModalData.orderNumber,
+      kind: 'upsell',
+      title: activePostPurchaseUpsell.title,
+      price: activePostPurchaseUpsell.price,
+      imageUrl: activePostPurchaseUpsell.imageUrl,
+      targetLandingPageId: activePostPurchaseUpsell.targetLandingPageId,
+      fallbackOrder: {
+        bundleLabel: upsellOfferModalData.bundleDetails,
+        subtotal: upsellOfferModalData.subtotal,
+        shippingFee: upsellOfferModalData.shippingFee,
+        total: upsellOfferModalData.total,
+        status: 'new'
+      }
     });
+    setIsApplyingUpsell(false);
+
+    if (!res.success || !res.updated) {
+      setUpsellError(res.error || 'تعذر إضافة العرض الإضافي حالياً، يمكنك متابعة طلبك مباشرة');
+      return;
+    }
+
+    const updatedBundle = res.updated.bundleLabel;
+    const updatedSubtotal = res.updated.subtotal;
+    const updatedShipping = res.updated.shippingFee;
+    const updatedTotal = res.updated.total;
+
+    updateOrderInGoogleSheet(effectiveWebhook, {
+      orderId: upsellOfferModalData.orderNumber,
+      wilaya: upsellOfferModalData.wilayaName,
+      commune: upsellOfferModalData.commune,
+      deliveryType: upsellOfferModalData.deliveryType,
+      orderDetails: updatedBundle,
+      shippingCost: updatedShipping,
+      productPrice: updatedSubtotal
+    });
+
+    const refreshedWa = buildOrderConfirmationWhatsAppUrl(
+      effectiveWhatsapp,
+      store.name,
+      {
+        orderNumber: upsellOfferModalData.orderNumber,
+        customerName: upsellOfferModalData.customerName,
+        bundleDetails: updatedBundle,
+        deliveryType: upsellOfferModalData.deliveryType,
+        shippingCost: updatedShipping,
+        total: updatedTotal,
+        wilayaName: upsellOfferModalData.wilayaName,
+        commune: upsellOfferModalData.commune
+      },
+      waTemplates.confirm
+    );
+
+    setDbEditedInSession(true);
+    setLastOrderWhatsappUrl(refreshedWa);
+    setTrackedOrder({
+      ...upsellOfferModalData.tracked,
+      bundleLabel: updatedBundle,
+      total: updatedTotal
+    });
+    setUpsellOfferModalData(null);
+    setUpsellAppliedBanner('تمت إضافة العرض الإضافي إلى طلبك بنجاح بدون أي مصاريف شحن إضافية');
+    setIsTrackingMode(true);
+    scrollToElementWhenReady('tracking-container');
+  };
+
+  const handleDeclinePostPurchaseUpsell = () => {
+    if (!upsellOfferModalData) return;
+    setLastOrderWhatsappUrl(upsellOfferModalData.whatsappUrl);
+    setTrackedOrder(upsellOfferModalData.tracked);
+    setUpsellOfferModalData(null);
     setIsTrackingMode(true);
     scrollToElementWhenReady('tracking-container');
   };
@@ -1988,6 +2185,60 @@ export const LandingPageView: React.FC<Props> = ({
                     )}
                   </div>
 
+                  {/* Optional In-Form Order Bump Card */}
+                  {activeOrderBump && (
+                    <label
+                      className="flex items-start gap-3 p-3.5 rounded-2xl border-2 cursor-pointer transition-colors"
+                      style={{
+                        backgroundColor: orderBumpSelected ? theme.softTintColor : theme.surfaceColor,
+                        borderColor: orderBumpSelected ? theme.primaryColor : theme.borderColor
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={orderBumpSelected}
+                        onChange={e => setOrderBumpSelected(e.target.checked)}
+                        className="mt-1 w-4 h-4 rounded shrink-0 cursor-pointer"
+                        style={{ accentColor: theme.primaryColor }}
+                      />
+                      {activeOrderBump.imageUrl && (
+                        <div className="w-12 h-12 rounded-xl overflow-hidden border shrink-0 bg-white" style={{ borderColor: theme.borderColor }}>
+                          <SmartImage
+                            src={activeOrderBump.imageUrl}
+                            alt={activeOrderBump.title}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs sm:text-sm font-black flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: theme.primaryColor }} />
+                            <span>{activeOrderBump.title}</span>
+                          </span>
+                          <div className="flex items-center gap-1.5 tabular-nums shrink-0">
+                            {activeOrderBump.comparePrice && activeOrderBump.comparePrice > activeOrderBump.price && (
+                              <span className="text-[11px] line-through opacity-55">
+                                {formatDZD(activeOrderBump.comparePrice)}
+                              </span>
+                            )}
+                            <span
+                              className="text-xs sm:text-sm font-black"
+                              style={{ color: theme.primaryColor }}
+                            >
+                              + {formatDZD(activeOrderBump.price)}
+                            </span>
+                          </div>
+                        </div>
+                        {activeOrderBump.subtitle && (
+                          <p className={`text-[11px] leading-relaxed ${mutedTextClass}`}>
+                            {activeOrderBump.subtitle}
+                          </p>
+                        )}
+                      </div>
+                    </label>
+                  )}
+
                   {/* Summary */}
                   <div
                     className="p-4 rounded-xl border space-y-2 text-xs sm:text-sm tabular-nums"
@@ -2011,6 +2262,12 @@ export const LandingPageView: React.FC<Props> = ({
                         </motion.span>
                       </AnimatePresence>
                     </div>
+                    {orderBumpPrice > 0 && activeOrderBump && (
+                      <div className="flex justify-between font-bold" style={{ color: theme.primaryColor }}>
+                        <span>إضافة: {activeOrderBump.title}</span>
+                        <span>+ {formatDZD(orderBumpPrice)}</span>
+                      </div>
+                    )}
                     {activeDiscountAmount > 0 && appliedPromo && (
                       <div className="flex justify-between text-emerald-600 font-bold">
                         <span>الخصم ({appliedPromo.code}):</span>
@@ -2074,6 +2331,57 @@ export const LandingPageView: React.FC<Props> = ({
                   </motion.button>
                 </form>
               </div>
+
+              {/* Collapsible Product FAQ Accordion */}
+              {activeFaqs.length > 0 && (
+                <div
+                  className="mt-8 rounded-3xl p-6 sm:p-7 border shadow-sm space-y-3"
+                  style={{
+                    backgroundColor: theme.bgColor,
+                    borderColor: theme.borderColor
+                  }}
+                >
+                  <h3 className="text-base sm:text-lg font-black">الأسئلة الشائعة</h3>
+                  <div className="divide-y" style={{ borderColor: theme.borderColor }}>
+                    {activeFaqs.map(faq => {
+                      const isOpen = openFaqId === faq.id;
+                      return (
+                        <div key={faq.id} className="py-3 first:pt-1 last:pb-1">
+                          <button
+                            type="button"
+                            onClick={() => setOpenFaqId(isOpen ? null : faq.id)}
+                            aria-expanded={isOpen}
+                            className="w-full flex items-center justify-between gap-3 text-right font-bold text-xs sm:text-sm cursor-pointer"
+                          >
+                            <span>{faq.question}</span>
+                            <ChevronDown
+                              className={`w-4 h-4 shrink-0 transition-transform duration-200 ${
+                                isOpen ? 'rotate-180' : ''
+                              }`}
+                              style={{ color: theme.primaryColor }}
+                            />
+                          </button>
+                          <AnimatePresence initial={false}>
+                            {isOpen && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+                                className="overflow-hidden"
+                              >
+                                <p className={`pt-2.5 text-xs sm:text-sm leading-relaxed ${mutedTextClass}`}>
+                                  {faq.answer}
+                                </p>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </motion.div>
           ) : (
             /* Order Tracking Container */
@@ -2110,6 +2418,11 @@ export const LandingPageView: React.FC<Props> = ({
                   <p className={`text-xs ${mutedTextClass}`}>
                     شكراً لثقتك بـ {store.name}. يمكنك متابعة حالة طلبك أدناه
                   </p>
+                  {upsellAppliedBanner && (
+                    <div className="mt-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
+                      {upsellAppliedBanner}
+                    </div>
+                  )}
                 </div>
 
                 <div
@@ -2537,7 +2850,9 @@ export const LandingPageView: React.FC<Props> = ({
 
       {/* Footer */}
       <footer
-        className="py-8 border-t text-center space-y-3"
+        className={`py-8 border-t text-center space-y-3 ${
+          showMobileStickyBar ? 'pb-20 lg:pb-8' : ''
+        }`}
         style={{
           backgroundColor: theme.primaryHoverColor,
           borderColor: theme.primaryColor,
@@ -2551,6 +2866,173 @@ export const LandingPageView: React.FC<Props> = ({
           </p>
         </div>
       </footer>
+
+      {/* Slim Sticky Mobile Quick-Order Bar (Auto-hidden when #form-container is visible or in tracking mode) */}
+      <AnimatePresence>
+        {showMobileStickyBar && !isTrackingMode && !upsellOfferModalData && page.stock > 0 && (
+          <motion.div
+            key="mobile-sticky-cta"
+            initial={{ y: 72, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 72, opacity: 0 }}
+            transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+            className="lg:hidden fixed bottom-0 inset-x-0 z-40 border-t px-4 py-2.5 backdrop-blur-md shadow-[0_-6px_24px_rgba(15,23,42,0.12)]"
+            style={{
+              backgroundColor: theme.isDark
+                ? 'rgba(15, 23, 42, 0.96)'
+                : 'rgba(255, 255, 255, 0.96)',
+              borderColor: theme.borderColor
+            }}
+          >
+            <div className="max-w-lg mx-auto flex items-center justify-between gap-3">
+              <div className="min-w-0 leading-tight">
+                <div className={`text-[10px] font-bold truncate ${mutedTextClass}`}>
+                  {selectedOffer?.title || page.title}
+                </div>
+                <div
+                  className="text-base font-black tabular-nums"
+                  style={{ color: theme.primaryColor }}
+                >
+                  {formatDZD(discountedProductPrice)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollToElement('form-container')}
+                className="px-5 py-2.5 rounded-xl text-white font-black text-xs shadow-md flex items-center gap-1.5 shrink-0 cursor-pointer"
+                style={{ backgroundColor: theme.primaryColor }}
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span>اطلب الآن</span>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 1-Click Post-Purchase Upsell Modal */}
+      <AnimatePresence>
+        {upsellOfferModalData && activePostPurchaseUpsell && (
+          <motion.div
+            key="upsell-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-black/65 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <motion.div
+              key="upsell-modal-card"
+              initial={{ opacity: 0, scale: 0.95, y: 14 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2, ease: EASE_OUT_EXPO }}
+              className="bg-white text-slate-900 rounded-3xl p-6 max-w-md w-full text-right space-y-4 shadow-2xl border border-slate-100 my-6"
+            >
+              <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2 text-emerald-700 text-xs font-extrabold">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>تم تسجيل طلبك #{upsellOfferModalData.orderNumber} بنجاح</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDeclinePostPurchaseUpsell}
+                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  title="متابعة طلبي"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-xs font-extrabold flex items-center gap-1.5" style={{ color: theme.primaryColor }}>
+                  <Gift className="w-4 h-4" />
+                  <span>عرض حصري لطلبك الحالي — توصيل مجاني فوق نفس الطرد</span>
+                </div>
+                <h3 className="text-lg font-black text-slate-900 leading-snug">
+                  {activePostPurchaseUpsell.title}
+                </h3>
+                {activePostPurchaseUpsell.subtitle && (
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {activePostPurchaseUpsell.subtitle}
+                  </p>
+                )}
+              </div>
+
+              {activePostPurchaseUpsell.imageUrl && (
+                <div className="rounded-2xl overflow-hidden border border-slate-200 aspect-[16/10] bg-slate-50">
+                  <SmartImage
+                    src={activePostPurchaseUpsell.imageUrl}
+                    alt={activePostPurchaseUpsell.title}
+                    eager
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 tabular-nums">
+                <div>
+                  <div className="text-[11px] font-bold text-slate-500">السعر الإضافي الخاص:</div>
+                  <div className="flex items-baseline gap-2">
+                    <span
+                      className="text-xl font-black"
+                      style={{ color: theme.primaryColor }}
+                    >
+                      {formatDZD(activePostPurchaseUpsell.price)}
+                    </span>
+                    {activePostPurchaseUpsell.comparePrice &&
+                      activePostPurchaseUpsell.comparePrice > activePostPurchaseUpsell.price && (
+                        <span className="text-xs line-through text-slate-400">
+                          {formatDZD(activePostPurchaseUpsell.comparePrice)}
+                        </span>
+                      )}
+                  </div>
+                </div>
+                <div className="text-left text-[11px]">
+                  <div className="text-slate-500">الشحن الإضافي</div>
+                  <div className="font-black text-emerald-600">0 دج (مجاني)</div>
+                </div>
+              </div>
+
+              {upsellError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+                  {upsellError}
+                </div>
+              )}
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isApplyingUpsell}
+                  onClick={handleAcceptPostPurchaseUpsell}
+                  className="w-full py-3.5 px-4 rounded-xl text-white font-black text-sm shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  style={{ backgroundColor: theme.primaryColor }}
+                >
+                  {isApplyingUpsell ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>جاري الإضافة إلى طلبك...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>إضافة إلى طلبي الحالي بضغطة واحدة</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={isApplyingUpsell}
+                  onClick={handleDeclinePostPurchaseUpsell}
+                  className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50"
+                >
+                  لا شكراً، متابعة طلبي الحالي فقط
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Success Modal */}
       <AnimatePresence>

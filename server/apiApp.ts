@@ -3437,5 +3437,155 @@ export function createApiApp(): Express {
     }
   });
 
+  // Atomically append an Order Bump or 1-Click Post-Purchase Upsell to a freshly created order (status='new')
+  app.post('/api/orders/append-addon', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    const orderNumber = String(req.body?.orderNumber || '').replace(/^#/, '').trim().toUpperCase();
+    const kind = req.body?.kind === 'bump' ? 'bump' : 'upsell';
+    const title = String(req.body?.title || '').trim().slice(0, 160);
+    const price = Math.max(0, Math.round(Number(req.body?.price) || 0));
+    const imageUrl = req.body?.imageUrl ? String(req.body.imageUrl).trim().slice(0, 1024) : undefined;
+    const targetLandingPageId = req.body?.targetLandingPageId
+      ? String(req.body.targetLandingPageId).trim()
+      : undefined;
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRe.test(storeId) || !orderNumber || !title || price <= 0 || price > 500000) {
+      res.status(400).json({ ok: false, message: 'بيانات العرض الإضافي غير صالحة' });
+      return;
+    }
+
+    const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    if (!supabaseUrl || !serviceRoleKey) {
+      res.status(503).json({ ok: false, code: 'missing_service_key', message: 'Supabase service key not configured' });
+      return;
+    }
+
+    const restHeaders: Record<string, string> = {
+      apikey: serviceRoleKey,
+      ...(serviceRoleKey.startsWith('eyJ') ? { Authorization: `Bearer ${serviceRoleKey}` } : {}),
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    };
+
+    try {
+      const lookup = await fetchJsonWithTimeout(
+        `${supabaseUrl}/rest/v1/orders?store_id=eq.${encodeURIComponent(storeId)}&order_number=eq.${encodeURIComponent(orderNumber)}&limit=1`,
+        { method: 'GET', headers: restHeaders },
+        7000
+      );
+      if (!lookup.ok || !Array.isArray(lookup.json) || !lookup.json[0]) {
+        res.status(404).json({ ok: false, message: 'لم يتم العثور على الطلب لتحديثه' });
+        return;
+      }
+
+      const row = lookup.json[0];
+      if (row.status !== 'new') {
+        res.status(409).json({ ok: false, message: 'لا يمكن إضافة عرض بعد تأكيد الطلب أو شحنه' });
+        return;
+      }
+
+      const createdTs = new Date(row.created_at || 0).getTime();
+      if (createdTs > 0 && Date.now() - createdTs > 20 * 60 * 1000) {
+        res.status(409).json({ ok: false, message: 'انتهت مهلة إضافة العرض الإضافي لهذا الطلب' });
+        return;
+      }
+
+      const existingItems: any[] = Array.isArray(row.items) ? row.items : [];
+      const alreadyApplied = existingItems.some(it => it && it.addonKind === kind);
+      if (alreadyApplied) {
+        res.json({
+          ok: true,
+          alreadyApplied: true,
+          updated: {
+            orderNumber: row.order_number,
+            bundleLabel: row.bundle_label || '',
+            subtotal: Number(row.subtotal || 0),
+            shippingFee: Number(row.shipping_fee || 0),
+            total: Number(row.total || 0),
+            status: row.status
+          }
+        });
+        return;
+      }
+
+      const baseLabel = String(row.bundle_label || existingItems[0]?.title || 'الطلب').trim();
+      const addonTag = kind === 'bump' ? `عرض مكمّل: ${title}` : `عرض إضافي: ${title}`;
+      const nextBundleLabel = `${baseLabel} + ${title}`.slice(0, 260);
+      const nextSubtotal = Number(row.subtotal || 0) + price;
+      const shippingFee = Number(row.shipping_fee || 0);
+      const nextTotal = nextSubtotal + shippingFee;
+      const nowIso = new Date().toISOString();
+
+      const nextItems = [
+        ...existingItems,
+        {
+          productId: targetLandingPageId || `addon_${kind}`,
+          title,
+          price,
+          quantity: 1,
+          bundleQuantity: 0,
+          variantText: addonTag,
+          ...(imageUrl ? { imageUrl } : {}),
+          addonKind: kind
+        }
+      ];
+
+      const existingHistory: any[] = Array.isArray(row.status_history) ? row.status_history : [];
+      const nextHistory = [
+        ...existingHistory,
+        {
+          status: row.status,
+          timestamp: nowIso,
+          note: `تمت إضافة ${addonTag} (+${price} دج) بدون مصاريف شحن إضافية`
+        }
+      ];
+
+      const existingNotes = String(row.notes || '').trim();
+      const nextNotes = [existingNotes, `${addonTag} (+${price} دج)`]
+        .filter(Boolean)
+        .join(' | ')
+        .slice(0, 480);
+
+      const patchRes = await fetchJsonWithTimeout(
+        `${supabaseUrl}/rest/v1/orders?id=eq.${encodeURIComponent(row.id)}`,
+        {
+          method: 'PATCH',
+          headers: { ...restHeaders, Prefer: 'return=representation' },
+          body: JSON.stringify({
+            bundle_label: nextBundleLabel,
+            items: nextItems,
+            subtotal: nextSubtotal,
+            total: nextTotal,
+            notes: nextNotes,
+            status_history: nextHistory,
+            updated_at: nowIso
+          })
+        },
+        7000
+      );
+
+      if (!patchRes.ok) {
+        res.status(502).json({ ok: false, message: 'تعذر تحديث الطلب بالعرض الإضافي في قاعدة البيانات' });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        updated: {
+          orderNumber: row.order_number,
+          bundleLabel: nextBundleLabel,
+          subtotal: nextSubtotal,
+          shippingFee,
+          total: nextTotal,
+          status: row.status
+        }
+      });
+    } catch {
+      res.status(504).json({ ok: false, message: 'تعذر الاتصال بقاعدة البيانات حالياً' });
+    }
+  });
+
   return app;
 }

@@ -143,6 +143,33 @@ export interface PromoCoupon {
   createdAt?: string;
 }
 
+export interface LandingPageOrderBump {
+  enabled: boolean;
+  title: string;
+  subtitle?: string;
+  price: number; // DZD
+  comparePrice?: number; // DZD
+  costPrice?: number; // DZD
+  imageUrl?: string;
+}
+
+export interface LandingPageUpsell {
+  enabled: boolean;
+  title: string;
+  subtitle?: string;
+  price: number; // DZD
+  comparePrice?: number; // DZD
+  costPrice?: number; // DZD
+  imageUrl?: string;
+  targetLandingPageId?: string;
+}
+
+export interface LandingPageFaq {
+  id: string;
+  question: string;
+  answer: string;
+}
+
 export interface LandingPageIntegrations {
   pixelId?: string;
   tiktokPixelId?: string;
@@ -150,18 +177,9 @@ export interface LandingPageIntegrations {
   googleSheetWebhook?: string;
   variants?: ProductVariant[];
   reviews?: LandingPageReview[];
-  /** Real-scarcity tools: stock counter and a countdown to a real end date. */
-  urgency?: {
-    showStock?: boolean;
-    stockThreshold?: number; // show the counter when stock <= threshold
-    countdownEndsAt?: string; // ISO date; hidden once passed
-    countdownText?: string;
-  };
-  /** A/B test: a share of visitors sees the page whose slug is `variantSlug`. */
-  ab?: {
-    variantSlug?: string;
-    splitToB?: number; // 0..100, default 50
-  };
+  orderBump?: LandingPageOrderBump;
+  postPurchaseUpsell?: LandingPageUpsell;
+  faqs?: LandingPageFaq[];
 }
 
 export interface LandingPage {
@@ -179,6 +197,9 @@ export interface LandingPage {
   offers: LandingPageOffer[];
   variants?: ProductVariant[];
   reviews?: LandingPageReview[];
+  orderBump?: LandingPageOrderBump;
+  postPurchaseUpsell?: LandingPageUpsell;
+  faqs?: LandingPageFaq[];
   theme: LandingPageTheme;
   integrations: LandingPageIntegrations;
   isPublished: boolean;
@@ -214,9 +235,6 @@ export interface Store {
   logoUrl?: string;
   faviconUrl?: string;
   brandColor: string; // Hex e.g. #754b2d
-  storefrontTheme?: 'dark' | 'light';
-  storefrontHeadingFont?: string;
-  storefrontBodyFont?: string;
   freeShippingThreshold: number; // DZD (0 = disabled)
   planId: string;
   status: 'active' | 'suspended' | 'trial';

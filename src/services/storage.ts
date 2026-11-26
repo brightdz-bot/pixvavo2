@@ -22,6 +22,7 @@ import {
   deleteAbandonedOrderInGoogleSheet
 } from './integrations';
 import { DEFAULT_ASSETS } from '../data/defaultAssets';
+import { createLevitatingLampLandingPage, LEVITATING_LAMP_SLUG } from '../data/starterTemplates';
 import { ALGERIA_WILAYAS, LANDING_THEME_PRESETS } from '../data/wilayas';
 import {
   isRealSheetOrderRow,
@@ -326,6 +327,10 @@ const INITIAL_STORES: Store[] = [
 ];
 
 const INITIAL_LANDING_PAGES: LandingPage[] = [
+  createLevitatingLampLandingPage('store_bright_dz', {
+    id: 'lp_levitating_lamp',
+    whatsappNumber: '213798353165'
+  }),
   {
     id: 'lp_towel_holder',
     storeId: 'store_bright_dz',
@@ -627,6 +632,9 @@ function mapDbLandingPage(row: any): LandingPage {
       : Array.isArray(integrations.reviews)
       ? integrations.reviews
       : [],
+    orderBump: integrations.orderBump || undefined,
+    postPurchaseUpsell: integrations.postPurchaseUpsell || undefined,
+    faqs: Array.isArray(integrations.faqs) ? integrations.faqs : [],
     theme,
     integrations,
     isPublished: Boolean(row.is_published),
@@ -713,6 +721,28 @@ class StorageService {
       const parsedPages = rawPages ? JSON.parse(rawPages) : null;
       if (!Array.isArray(parsedPages)) {
         localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));
+      } else {
+        const seededFlagKey = 'brightdz_seeded_levitating_lamp_v1';
+        if (!localStorage.getItem(seededFlagKey)) {
+          const alreadyExists = parsedPages.some(
+            (p: LandingPage) =>
+              p?.id === 'lp_levitating_lamp' ||
+              (typeof p?.slug === 'string' && p.slug.toLowerCase().startsWith(LEVITATING_LAMP_SLUG))
+          );
+          if (!alreadyExists) {
+            const firstStoreId =
+              (parsedPages[0]?.storeId as string | undefined) || 'store_bright_dz';
+            const lampPage = createLevitatingLampLandingPage(firstStoreId, {
+              id: 'lp_levitating_lamp',
+              whatsappNumber: '213798353165'
+            });
+            localStorage.setItem(
+              LANDING_PAGES_KEY,
+              JSON.stringify([lampPage, ...parsedPages])
+            );
+          }
+          localStorage.setItem(seededFlagKey, '1');
+        }
       }
     } catch {
       localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(INITIAL_LANDING_PAGES));
@@ -1102,7 +1132,10 @@ class StorageService {
     const normalizedIntegrations = {
       ...(page.integrations || {}),
       variants: page.variants || [],
-      reviews: page.reviews || []
+      reviews: page.reviews || [],
+      orderBump: page.orderBump || undefined,
+      postPurchaseUpsell: page.postPurchaseUpsell || undefined,
+      faqs: page.faqs || []
     };
 
     if (this.useSupabase() && supabase) {
@@ -1160,6 +1193,7 @@ class StorageService {
     const saved: LandingPage = {
       ...page,
       slug: cleanSlug,
+      integrations: normalizedIntegrations,
       updatedAt: new Date().toISOString()
     };
     const idx = all.findIndex(p => p.id === page.id);
@@ -1297,6 +1331,11 @@ class StorageService {
     promoCode?: string;
     discount?: number;
     discountReason?: string;
+    orderBump?: {
+      title: string;
+      price: number;
+      imageUrl?: string;
+    };
     antiBot?: { honeypot?: string; fillTimeMs?: number };
   }): Promise<{ success: boolean; error?: string; order?: Order }> {
     // Reject obvious bot traps immediately before any network/DB calls
@@ -1325,6 +1364,9 @@ class StorageService {
     const noteParts = [
       params.notes?.trim() || '',
       params.variantLabel?.trim() ? `المواصفات: ${params.variantLabel.trim()}` : '',
+      params.orderBump && params.orderBump.price > 0 && params.orderBump.title.trim()
+        ? `عرض مكمّل: ${params.orderBump.title.trim()} (+${params.orderBump.price} دج)`
+        : '',
       params.promoCode?.trim()
         ? `كوبون خصم: ${params.promoCode.trim().toUpperCase()}${params.discount ? ` (-${params.discount} دج)` : ''}`
         : ''
@@ -1415,37 +1457,67 @@ class StorageService {
         return { success: false, error: error.message };
       }
 
+      let createdOrder: Order = {
+        id: data.id,
+        orderNumber: data.orderNumber,
+        storeId: data.storeId,
+        landingPageId: data.landingPageId || params.landingPageId,
+        bundleLabel: data.bundleLabel,
+        customerName: data.customerName,
+        customerPhone: cleanCustomerPhone,
+        wilayaId: params.wilayaId,
+        wilayaName: data.wilayaName,
+        commune: data.commune || params.commune,
+        deliveryType: data.deliveryType || deliveryType,
+        address: params.address,
+        items: (params.items || []).map(it => ({
+          productId: it.productId,
+          title: data.bundleLabel || '',
+          price: Number(data.subtotal),
+          quantity: it.quantity,
+          variantText: it.variantText
+        })),
+        subtotal: Number(data.subtotal),
+        shippingFee: Number(data.shippingFee),
+        total: Number(data.total),
+        status: 'new',
+        statusHistory: [{ status: 'new', timestamp: new Date().toISOString() }],
+        paymentMethod: 'cod',
+        notes: mergedNotes,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (params.orderBump && params.orderBump.price > 0 && params.orderBump.title.trim()) {
+        const bumpRes = await this.appendOrderAddon({
+          storeId: createdOrder.storeId,
+          orderNumber: createdOrder.orderNumber,
+          kind: 'bump',
+          title: params.orderBump.title.trim(),
+          price: params.orderBump.price,
+          imageUrl: params.orderBump.imageUrl,
+          fallbackOrder: {
+            bundleLabel: createdOrder.bundleLabel || '',
+            subtotal: createdOrder.subtotal,
+            shippingFee: createdOrder.shippingFee,
+            total: createdOrder.total,
+            status: createdOrder.status
+          }
+        });
+        if (bumpRes.success && bumpRes.updated) {
+          createdOrder = {
+            ...createdOrder,
+            bundleLabel: bumpRes.updated.bundleLabel,
+            subtotal: bumpRes.updated.subtotal,
+            shippingFee: bumpRes.updated.shippingFee,
+            total: bumpRes.updated.total
+          };
+        }
+      }
+
       return {
         success: true,
-        order: {
-          id: data.id,
-          orderNumber: data.orderNumber,
-          storeId: data.storeId,
-          landingPageId: data.landingPageId || params.landingPageId,
-          bundleLabel: data.bundleLabel,
-          customerName: data.customerName,
-          customerPhone: cleanCustomerPhone,
-          wilayaId: params.wilayaId,
-          wilayaName: data.wilayaName,
-          commune: data.commune || params.commune,
-          deliveryType: data.deliveryType || deliveryType,
-          address: params.address,
-          items: (params.items || []).map(it => ({
-            productId: it.productId,
-            title: data.bundleLabel || '',
-            price: Number(data.subtotal),
-            quantity: it.quantity,
-            variantText: it.variantText
-          })),
-          subtotal: Number(data.subtotal),
-          shippingFee: Number(data.shippingFee),
-          total: Number(data.total),
-          status: 'new',
-          statusHistory: [{ status: 'new', timestamp: new Date().toISOString() }],
-          paymentMethod: 'cod',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
+        order: createdOrder
       };
     }
 
@@ -1479,20 +1551,39 @@ class StorageService {
       page.updatedAt = new Date().toISOString();
       localStorage.setItem(LANDING_PAGES_KEY, JSON.stringify(pages));
 
-      const discountVal = Math.max(0, Math.min(offer.price, Number(params.discount) || 0));
-      subtotal = Math.max(0, offer.price - discountVal);
+      const bumpPrice =
+        params.orderBump && params.orderBump.price > 0 && params.orderBump.title.trim()
+          ? Math.round(params.orderBump.price)
+          : 0;
+      const rawSubtotal = offer.price + bumpPrice;
+      const discountVal = Math.max(0, Math.min(rawSubtotal, Number(params.discount) || 0));
+      subtotal = Math.max(0, rawSubtotal - discountVal);
       const variantSuffix = params.variantLabel?.trim() ? ` [${params.variantLabel.trim()}]` : '';
-      bundleLabel = `${offer.title}${variantSuffix} (الكمية: ${bundleQty})`;
+      const bumpSuffix =
+        bumpPrice > 0 && params.orderBump?.title.trim()
+          ? ` + ${params.orderBump.title.trim()}`
+          : '';
+      bundleLabel = `${offer.title}${variantSuffix} (الكمية: ${bundleQty})${bumpSuffix}`;
       orderItems = [
         {
           productId: page.id,
           title: page.title,
-          price: subtotal,
+          price: Math.max(0, offer.price - discountVal),
           quantity: 1,
-          variantText: bundleLabel,
+          variantText: `${offer.title}${variantSuffix} (الكمية: ${bundleQty})`,
           imageUrl: page.mainImage
         }
       ];
+      if (bumpPrice > 0 && params.orderBump?.title.trim()) {
+        orderItems.push({
+          productId: 'addon_bump',
+          title: params.orderBump.title.trim(),
+          price: bumpPrice,
+          quantity: 1,
+          variantText: `عرض مكمّل: ${params.orderBump.title.trim()}`,
+          imageUrl: params.orderBump.imageUrl
+        });
+      }
     } else {
       orderItems = (params.items || []).map(it => {
         const p = this.getLocalProducts().find(x => x.id === it.productId);
@@ -1810,6 +1901,170 @@ class StorageService {
         deliveryType,
         subtotal,
         shippingFee,
+        total: order.total,
+        status: order.status
+      }
+    };
+  }
+
+  async appendOrderAddon(params: {
+    storeId: string;
+    orderNumber: string;
+    kind: 'bump' | 'upsell';
+    title: string;
+    price: number;
+    imageUrl?: string;
+    targetLandingPageId?: string;
+    fallbackOrder?: {
+      bundleLabel: string;
+      subtotal: number;
+      shippingFee: number;
+      total: number;
+      status: OrderStatus;
+    };
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    updated?: {
+      orderNumber: string;
+      bundleLabel: string;
+      subtotal: number;
+      shippingFee: number;
+      total: number;
+      status: OrderStatus;
+    };
+  }> {
+    const cleanNum = params.orderNumber.replace(/^#/, '').trim().toUpperCase();
+    const cleanTitle = params.title.trim();
+    const cleanPrice = Math.max(0, Math.round(Number(params.price) || 0));
+    if (!cleanNum || !cleanTitle || cleanPrice <= 0) {
+      return { success: false, error: 'بيانات العرض الإضافي غير صالحة' };
+    }
+
+    if (this.useSupabase() && supabase && isUuid(params.storeId)) {
+      try {
+        const res = await fetch('/api/orders/append-addon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId: params.storeId,
+            orderNumber: cleanNum,
+            kind: params.kind,
+            title: cleanTitle,
+            price: cleanPrice,
+            imageUrl: params.imageUrl,
+            targetLandingPageId: params.targetLandingPageId
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.ok && data?.updated) {
+          return {
+            success: true,
+            updated: {
+              orderNumber: data.updated.orderNumber,
+              bundleLabel: data.updated.bundleLabel,
+              subtotal: Number(data.updated.subtotal || 0),
+              shippingFee: Number(data.updated.shippingFee || 0),
+              total: Number(data.updated.total || 0),
+              status: data.updated.status as OrderStatus
+            }
+          };
+        }
+        // Graceful fallback when server service role key isn't configured in dev/preview
+        if (data?.code === 'missing_service_key' && params.fallbackOrder) {
+          const nextBundle = `${params.fallbackOrder.bundleLabel} + ${cleanTitle}`;
+          const nextSubtotal = params.fallbackOrder.subtotal + cleanPrice;
+          return {
+            success: true,
+            updated: {
+              orderNumber: cleanNum,
+              bundleLabel: nextBundle,
+              subtotal: nextSubtotal,
+              shippingFee: params.fallbackOrder.shippingFee,
+              total: nextSubtotal + params.fallbackOrder.shippingFee,
+              status: params.fallbackOrder.status
+            }
+          };
+        }
+        return {
+          success: false,
+          error: data?.message || 'تعذر إضافة العرض الإضافي إلى الطلب'
+        };
+      } catch {
+        if (params.fallbackOrder) {
+          const nextBundle = `${params.fallbackOrder.bundleLabel} + ${cleanTitle}`;
+          const nextSubtotal = params.fallbackOrder.subtotal + cleanPrice;
+          return {
+            success: true,
+            updated: {
+              orderNumber: cleanNum,
+              bundleLabel: nextBundle,
+              subtotal: nextSubtotal,
+              shippingFee: params.fallbackOrder.shippingFee,
+              total: nextSubtotal + params.fallbackOrder.shippingFee,
+              status: params.fallbackOrder.status
+            }
+          };
+        }
+        return { success: false, error: 'تعذر الاتصال بالخادم لتحديث الطلب' };
+      }
+    }
+
+    // Local mode
+    const all = this.getLocalOrders();
+    const order = all.find(o => o.orderNumber.toUpperCase() === cleanNum);
+    if (!order) return { success: false, error: 'الطلب غير موجود' };
+    if (order.status !== 'new') {
+      return { success: false, error: 'لا يمكن إضافة عرض بعد تأكيد الطلب أو شحنه' };
+    }
+
+    const addonId = params.targetLandingPageId || `addon_${params.kind}`;
+    const addonTag = params.kind === 'bump' ? `عرض مكمّل: ${cleanTitle}` : `عرض إضافي: ${cleanTitle}`;
+    const alreadyAdded = order.items.some(
+      it => it.variantText === addonTag || (it.productId === addonId && it.title === cleanTitle)
+    );
+    if (alreadyAdded) {
+      return {
+        success: true,
+        updated: {
+          orderNumber: order.orderNumber,
+          bundleLabel: order.bundleLabel || '',
+          subtotal: order.subtotal,
+          shippingFee: order.shippingFee,
+          total: order.total,
+          status: order.status
+        }
+      };
+    }
+
+    const nextBundle = `${order.bundleLabel || order.items[0]?.title || 'الطلب'} + ${cleanTitle}`;
+    order.bundleLabel = nextBundle;
+    order.subtotal += cleanPrice;
+    order.total = order.subtotal + order.shippingFee;
+    order.items.push({
+      productId: addonId,
+      title: cleanTitle,
+      price: cleanPrice,
+      quantity: 1,
+      variantText: addonTag,
+      imageUrl: params.imageUrl
+    });
+    const nowIso = new Date().toISOString();
+    order.updatedAt = nowIso;
+    order.statusHistory.push({
+      status: order.status,
+      timestamp: nowIso,
+      note: `تمت إضافة ${addonTag} (+${cleanPrice} دج) بدون مصاريف شحن إضافية`
+    });
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(all));
+
+    return {
+      success: true,
+      updated: {
+        orderNumber: order.orderNumber,
+        bundleLabel: order.bundleLabel,
+        subtotal: order.subtotal,
+        shippingFee: order.shippingFee,
         total: order.total,
         status: order.status
       }

@@ -18,6 +18,7 @@ import {
   normalizeWhatsAppNumber
 } from '../../services/integrations';
 import { ORDERS_SQL_MIGRATION_SNIPPET } from '../../services/storage';
+import { Code128Barcode } from '../common/Code128Barcode';
 import {
   Search,
   Eye,
@@ -158,6 +159,7 @@ export const OrdersTab: React.FC<Props> = ({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const [printSlipOrders, setPrintSlipOrders] = useState<Order[]>([]);
+  const [slipFormat, setSlipFormat] = useState<'thermal' | 'a4'>('thermal');
   const [trackingCodeInput, setTrackingCodeInput] = useState<string>('');
   const [statusNoteInput, setStatusNoteInput] = useState<string>('');
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
@@ -1913,25 +1915,60 @@ export const OrdersTab: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Printable Slips Modal (Single or Batch) */}
+      {/* Printable Slips Modal (Single or Batch — Thermal 10x15cm & A4 with Code-128 Barcode) */}
       {printSlipOrders.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto print:static print:p-0 print:bg-white">
-          <div className="relative w-full max-w-2xl bg-white text-slate-900 p-6 md:p-8 rounded-2xl shadow-2xl text-right space-y-6 border border-slate-300 my-8 max-h-[92vh] overflow-y-auto print:max-h-none print:overflow-visible print:shadow-none print:border-0 print:p-0">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-300 print:hidden">
-              <h3 className="text-base font-bold flex items-center gap-2">
-                <Printer className="w-4 h-4 text-emerald-600" />
-                <span>طباعة بوليصات التوصيل ({printSlipOrders.length})</span>
-              </h3>
-              <div className="flex items-center gap-2">
+          <div
+            className={`relative w-full bg-white text-slate-900 p-5 md:p-7 rounded-2xl shadow-2xl text-right space-y-5 border border-slate-300 my-8 max-h-[92vh] overflow-y-auto print:max-h-none print:overflow-visible print:shadow-none print:border-0 print:p-0 print:my-0 ${
+              slipFormat === 'thermal' ? 'max-w-xl' : 'max-w-2xl'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 print:hidden">
+              <div>
+                <h3 className="text-base font-black flex items-center gap-2">
+                  <Printer className="w-4 h-4 text-emerald-600" />
+                  <span>طباعة بوليصات التوصيل بالباركود ({printSlipOrders.length})</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  اختر مقاس الطابعة الحرارية للطرود أو ورق عادي مع باركود قابل للمسح الضوئي
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100 p-0.5 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setSlipFormat('thermal')}
+                    className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      slipFormat === 'thermal'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    ملصق حراري 10×15 سم
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSlipFormat('a4')}
+                    className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      slipFormat === 'a4'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    ورق عادي A4
+                  </button>
+                </div>
                 <button
+                  type="button"
                   onClick={() => window.print()}
-                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold cursor-pointer"
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold cursor-pointer"
                 >
                   طباعة الكل
                 </button>
                 <button
+                  type="button"
                   onClick={() => setPrintSlipOrders([])}
-                  className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-bold cursor-pointer"
                 >
                   إغلاق
                 </button>
@@ -1939,68 +1976,182 @@ export const OrdersTab: React.FC<Props> = ({
             </div>
 
             <div className="space-y-6">
-              {printSlipOrders.map((slip, idx) => (
-                <div
-                  key={slip.id}
-                  className={`border-2 border-slate-800 p-5 rounded-lg space-y-4 text-xs bg-white ${
-                    idx < printSlipOrders.length - 1 ? 'print:break-after-page' : ''
-                  }`}
-                >
-                  <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3">
-                    <div>
-                      <h1 className="text-lg font-black">{store.name} — دفع عند الاستلام</h1>
-                      <div className="text-[11px] text-slate-600">
-                        {slip.deliveryType === 'stop' ? 'مكتب الشحن Stop Desk' : 'توصيل للمنزل'}
+              {printSlipOrders.map((slip, idx) => {
+                const barcodeValue = slip.trackingCode?.trim() || slip.orderNumber;
+                const pageBreakClass =
+                  idx < printSlipOrders.length - 1 ? 'print:break-after-page' : '';
+
+                if (slipFormat === 'thermal') {
+                  return (
+                    <div
+                      key={slip.id}
+                      className={`thermal-slip-page w-full max-w-[380px] mx-auto border-2 border-slate-900 rounded-lg p-3.5 space-y-3 text-xs bg-white ${pageBreakClass}`}
+                    >
+                      {/* Top Header */}
+                      <div className="flex items-start justify-between gap-2 border-b-2 border-slate-900 pb-2">
+                        <div className="min-w-0">
+                          <div className="text-base font-black leading-tight truncate">
+                            {store.name}
+                          </div>
+                          <div className="text-[10px] font-semibold text-slate-600 font-mono" dir="ltr">
+                            {store.phone || store.defaultWhatsapp || ''}
+                          </div>
+                        </div>
+                        <div className="text-left shrink-0">
+                          <div className="px-2 py-0.5 bg-slate-900 text-white text-[10px] font-black rounded">
+                            {slip.deliveryType === 'stop' ? 'STOP DESK' : 'توصيل للمنزل'}
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-mono mt-0.5 tabular-nums">
+                            {new Date(slip.createdAt).toLocaleDateString('ar-DZ')}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-left font-mono">
-                      <div className="text-sm font-black">#{slip.orderNumber}</div>
-                      {slip.trackingCode && <div className="text-[11px]">{slip.trackingCode}</div>}
-                      {slip.courierLabelUrl && (
-                        <a
-                          href={slip.courierLabelUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[10px] text-blue-600 underline print:hidden"
+
+                      {/* Scannable Code-128 Barcode */}
+                      <div className="py-2 px-2 border border-slate-300 rounded bg-white">
+                        <Code128Barcode value={barcodeValue} height={44} />
+                        {slip.trackingCode && (
+                          <div className="text-center text-[10px] text-slate-500 font-mono mt-0.5">
+                            الطلب: #{slip.orderNumber}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Recipient Block */}
+                      <div className="p-2.5 rounded border border-slate-900 space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-500">
+                          <span>المستلم</span>
+                          <span className="font-mono font-black text-slate-900">
+                            الولاية {slip.wilayaId}
+                          </span>
+                        </div>
+                        <div className="text-sm font-black text-slate-900">{slip.customerName}</div>
+                        <div
+                          dir="ltr"
+                          className="font-mono text-sm font-black text-slate-900 text-right tabular-nums"
                         >
-                          بوليصة شركة الشحن PDF
-                        </a>
+                          {slip.customerPhone}
+                        </div>
+                        <div className="text-xs font-bold text-slate-800">
+                          {slip.wilayaName}
+                          {slip.commune ? ` — ${slip.commune}` : ''}
+                        </div>
+                      </div>
+
+                      {/* Packing Contents */}
+                      <div className="p-2.5 rounded border border-slate-300 bg-slate-50 space-y-0.5">
+                        <div className="text-[10px] font-bold text-slate-500">محتوى الطرد:</div>
+                        <div className="text-[11px] font-bold text-slate-900 leading-snug">
+                          {slip.bundleLabel || slip.items.map(it => it.title).join(' + ')}
+                        </div>
+                      </div>
+
+                      {/* Bold COD Box */}
+                      <div className="p-2.5 rounded border-2 border-slate-900 bg-slate-900 text-white flex items-center justify-between">
+                        <div className="text-[11px] font-bold">الدفع عند الاستلام (COD)</div>
+                        <div className="text-lg font-black tabular-nums">
+                          {formatDZD(slip.total)}
+                        </div>
+                      </div>
+
+                      {slip.courierLabelUrl && (
+                        <div className="text-center print:hidden">
+                          <a
+                            href={slip.courierLabelUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] text-blue-600 font-bold underline"
+                          >
+                            فتح البوليصة الرسمية PDF من شركة الشحن
+                          </a>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  );
+                }
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-3 bg-slate-100 rounded">
-                      <div className="font-bold text-slate-500 text-[10px] mb-1">المرسل:</div>
-                      <div className="font-bold">{store.name}</div>
-                      <div>{store.phone || store.defaultWhatsapp || ''}</div>
+                return (
+                  <div
+                    key={slip.id}
+                    className={`a4-slip-page border-2 border-slate-800 p-5 rounded-xl space-y-4 text-xs bg-white ${pageBreakClass}`}
+                  >
+                    <div className="flex flex-wrap justify-between items-center gap-3 border-b-2 border-slate-800 pb-3">
+                      <div>
+                        <h1 className="text-lg font-black">{store.name} — بوليصة توصيل</h1>
+                        <div className="text-[11px] font-semibold text-slate-600">
+                          {slip.deliveryType === 'stop' ? 'استلام من مكتب الشحن (Stop Desk)' : 'توصيل للمنزل'} ·{' '}
+                          {new Date(slip.createdAt).toLocaleDateString('ar-DZ')}
+                        </div>
+                      </div>
+                      <div className="text-left">
+                        <Code128Barcode value={barcodeValue} height={46} />
+                        {slip.courierLabelUrl && (
+                          <a
+                            href={slip.courierLabelUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block text-center text-[10px] text-blue-600 underline mt-1 print:hidden"
+                          >
+                            بوليصة شركة الشحن PDF
+                          </a>
+                        )}
+                      </div>
                     </div>
-                    <div className="p-3 bg-slate-100 rounded">
-                      <div className="font-bold text-slate-500 text-[10px] mb-1">المستلم:</div>
-                      <div className="font-bold text-sm">{slip.customerName}</div>
-                      <div className="font-mono font-bold text-emerald-700">{slip.customerPhone}</div>
-                      <div className="font-bold">
-                        {slip.wilayaName}
-                        {slip.commune ? ` - ${slip.commune}` : ''}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-0.5">
+                        <div className="font-bold text-slate-500 text-[10px] mb-1">المرسل:</div>
+                        <div className="font-black text-sm">{store.name}</div>
+                        <div dir="ltr" className="font-mono text-right text-slate-700">
+                          {store.phone || store.defaultWhatsapp || ''}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          طلب #{slip.orderNumber}
+                        </div>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-0.5">
+                        <div className="font-bold text-slate-500 text-[10px] mb-1">المستلم:</div>
+                        <div className="font-black text-sm">{slip.customerName}</div>
+                        <div
+                          dir="ltr"
+                          className="font-mono font-black text-emerald-700 text-right tabular-nums"
+                        >
+                          {slip.customerPhone}
+                        </div>
+                        <div className="font-bold text-slate-800">
+                          ({slip.wilayaId}) {slip.wilayaName}
+                          {slip.commune ? ` - ${slip.commune}` : ''}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="border border-slate-300 rounded-lg p-3 space-y-1.5">
+                      <div className="font-bold text-[11px] text-slate-500">تفاصيل الطرد والمنتجات:</div>
+                      <div className="font-bold text-slate-900">
+                        {slip.bundleLabel || slip.items.map(it => it.title).join(' + ')}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600 pt-1 border-t border-slate-200 tabular-nums">
+                        <span>المنتجات: {formatDZD(slip.subtotal)}</span>
+                        <span>التوصيل: {slip.shippingFee === 0 ? 'مجاني' : formatDZD(slip.shippingFee)}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-emerald-50 border-2 border-emerald-600 rounded-lg flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-black text-emerald-900">
+                          المبلغ المطلوب تحصيله عند الاستلام (COD)
+                        </div>
+                        <div className="text-[11px] text-emerald-700">
+                          يُسمح للزبون بالمعاينة قبل الدفع
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black text-emerald-700 tabular-nums">
+                        {formatDZD(slip.total)}
                       </div>
                     </div>
                   </div>
-
-                  <div className="border border-slate-300 rounded p-2">
-                    <div className="font-bold text-[11px] mb-1">الطلب:</div>
-                    <div>{slip.bundleLabel || slip.items.map(it => it.title).join(', ')}</div>
-                  </div>
-
-                  <div className="p-4 bg-emerald-50 border-2 border-emerald-600 rounded text-center">
-                    <div className="text-xs font-bold text-emerald-800">
-                      المبلغ المطلوب عند الاستلام (COD):
-                    </div>
-                    <div className="text-2xl font-black text-emerald-700 tabular-nums mt-1">
-                      {formatDZD(slip.total)}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
