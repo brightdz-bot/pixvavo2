@@ -18,6 +18,11 @@ import {
   mountChargilyRawWebhookRoute,
   mountPlatformRoutes
 } from './platformRoutes.ts';
+import {
+  dispatchMerchantAlert,
+  testMerchantAlertChannel
+} from './merchantAlerts.ts';
+import type { MerchantAlertChannel, MerchantAlertEventType } from './merchantAlerts.ts';
 
 export type CourierProvider =
   | 'none'
@@ -81,6 +86,22 @@ export interface ServerStoreApiConfig {
   baridimobRip?: string;
   baridimobAccountName?: string;
   baridimobInstructions?: string;
+  merchantAlertsOnNewOrder?: boolean;
+  merchantAlertsOnPayment?: boolean;
+  merchantAlertsOnAbandoned?: boolean;
+  telegramAlertsEnabled?: boolean;
+  telegramBotToken?: string;
+  telegramChatIds?: string;
+  merchantWhatsappAlertsEnabled?: boolean;
+  merchantWhatsappMode?: 'store_api' | 'callmebot';
+  merchantWhatsappRecipients?: string;
+  smsAlertsEnabled?: boolean;
+  smsProvider?: 'twilio' | 'vonage' | 'webhook';
+  smsAccountSid?: string;
+  smsAuthToken?: string;
+  smsFromNumber?: string;
+  smsWebhookUrl?: string;
+  smsRecipients?: string;
 }
 
 const RUNTIME_CONFIG_PATH = process.env.VERCEL
@@ -690,7 +711,25 @@ async function resolveConfigAsync(body: any): Promise<ServerStoreApiConfig> {
     whatsappTemplateName: incoming.whatsappTemplateName ?? cached?.whatsappTemplateName ?? '',
     whatsappAutoSendOnOrder: incoming.whatsappAutoSendOnOrder ?? cached?.whatsappAutoSendOnOrder ?? false,
     whatsappAutoSendOnShipping: incoming.whatsappAutoSendOnShipping ?? cached?.whatsappAutoSendOnShipping ?? false,
-    googleSheetWebhook: incoming.googleSheetWebhook ?? cached?.googleSheetWebhook ?? ''
+    googleSheetWebhook: incoming.googleSheetWebhook ?? cached?.googleSheetWebhook ?? '',
+    merchantAlertsOnNewOrder: incoming.merchantAlertsOnNewOrder ?? cached?.merchantAlertsOnNewOrder ?? true,
+    merchantAlertsOnPayment: incoming.merchantAlertsOnPayment ?? cached?.merchantAlertsOnPayment ?? true,
+    merchantAlertsOnAbandoned: incoming.merchantAlertsOnAbandoned ?? cached?.merchantAlertsOnAbandoned ?? true,
+    telegramAlertsEnabled: incoming.telegramAlertsEnabled ?? cached?.telegramAlertsEnabled ?? false,
+    telegramBotToken: incoming.telegramBotToken ?? cached?.telegramBotToken ?? '',
+    telegramChatIds: incoming.telegramChatIds ?? cached?.telegramChatIds ?? '',
+    merchantWhatsappAlertsEnabled:
+      incoming.merchantWhatsappAlertsEnabled ?? cached?.merchantWhatsappAlertsEnabled ?? false,
+    merchantWhatsappMode: incoming.merchantWhatsappMode || cached?.merchantWhatsappMode || 'store_api',
+    merchantWhatsappRecipients:
+      incoming.merchantWhatsappRecipients ?? cached?.merchantWhatsappRecipients ?? '',
+    smsAlertsEnabled: incoming.smsAlertsEnabled ?? cached?.smsAlertsEnabled ?? false,
+    smsProvider: incoming.smsProvider || cached?.smsProvider || 'twilio',
+    smsAccountSid: incoming.smsAccountSid ?? cached?.smsAccountSid ?? '',
+    smsAuthToken: incoming.smsAuthToken ?? cached?.smsAuthToken ?? '',
+    smsFromNumber: incoming.smsFromNumber ?? cached?.smsFromNumber ?? '',
+    smsWebhookUrl: incoming.smsWebhookUrl ?? cached?.smsWebhookUrl ?? '',
+    smsRecipients: incoming.smsRecipients ?? cached?.smsRecipients ?? ''
   };
 }
 
@@ -889,8 +928,36 @@ async function dispatchWhatsAppMessage(
 export function createApiApp(): Express {
   const app = express();
   app.use(createGlobalApiRateLimiter());
+  const onPaymentAlert = (alertData: {
+    storeId: string;
+    orderNumber: string;
+    paymentMethod: 'chargily' | 'baridimob';
+    paymentStatus: string;
+    amountDZD: number;
+    paymentReference?: string;
+  }) => {
+    void getOrFetchServerConfig(alertData.storeId)
+      .then(cfg =>
+        dispatchMerchantAlert(
+          cfg,
+          {
+            storeId: alertData.storeId,
+            eventType: 'payment_received',
+            dedupeKey: `${alertData.storeId}:payment:${alertData.orderNumber}:${alertData.paymentStatus}`,
+            orderNumber: alertData.orderNumber,
+            paymentMethod: alertData.paymentMethod,
+            paymentStatus: alertData.paymentStatus,
+            total: alertData.amountDZD,
+            paymentReference: alertData.paymentReference
+          },
+          dispatchWhatsAppMessage
+        )
+      )
+      .catch(() => {});
+  };
+
   // Mount Chargily webhook BEFORE express.json() so HMAC-SHA256 verifies the exact raw body bytes
-  mountChargilyRawWebhookRoute(app, { getConfig: getOrFetchServerConfig });
+  mountChargilyRawWebhookRoute(app, { getConfig: getOrFetchServerConfig, onPaymentAlert });
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
@@ -2180,6 +2247,69 @@ export function createApiApp(): Express {
     res.json(result);
   });
 
+  // 6b. Merchant Instant Alerts (Telegram + WhatsApp + SMS)
+  app.post('/api/integrations/merchant-alert', async (req: Request, res: Response) => {
+    const storeId = String(req.body?.storeId || '').trim();
+    if (!storeId) {
+      res.status(400).json({ ok: false, message: 'Missing storeId' });
+      return;
+    }
+    const rawEvent = String(req.body?.eventType || 'new_order').trim();
+    const allowedEvents: MerchantAlertEventType[] = [
+      'new_order',
+      'payment_received',
+      'abandoned_order'
+    ];
+    const eventType: MerchantAlertEventType = allowedEvents.includes(
+      rawEvent as MerchantAlertEventType
+    )
+      ? (rawEvent as MerchantAlertEventType)
+      : 'new_order';
+
+    const cfg = await getOrFetchServerConfig(storeId);
+    const result = await dispatchMerchantAlert(
+      cfg,
+      {
+        storeId,
+        storeName: String(req.body?.storeName || '').trim().slice(0, 120),
+        eventType,
+        dedupeKey: String(req.body?.dedupeKey || '').trim().slice(0, 140) || undefined,
+        orderNumber: String(req.body?.orderNumber || '').trim().slice(0, 60) || undefined,
+        customerName: String(req.body?.customerName || '').trim().slice(0, 100) || undefined,
+        customerPhone: String(req.body?.customerPhone || '').trim().slice(0, 40) || undefined,
+        wilayaName: String(req.body?.wilayaName || '').trim().slice(0, 80) || undefined,
+        commune: String(req.body?.commune || '').trim().slice(0, 100) || undefined,
+        deliveryType: req.body?.deliveryType === 'stop' ? 'stop' : 'home',
+        bundleDetails: String(req.body?.bundleDetails || '').trim().slice(0, 240) || undefined,
+        total: Math.max(0, Number(req.body?.total) || 0),
+        paymentMethod:
+          req.body?.paymentMethod === 'chargily' || req.body?.paymentMethod === 'baridimob'
+            ? req.body.paymentMethod
+            : 'cod',
+        paymentStatus: String(req.body?.paymentStatus || '').trim().slice(0, 60) || undefined,
+        paymentReference: String(req.body?.paymentReference || '').trim().slice(0, 120) || undefined
+      },
+      dispatchWhatsAppMessage
+    );
+    res.json(result);
+  });
+
+  app.post('/api/integrations/test-merchant-alert', async (req: Request, res: Response) => {
+    const rawChannel = String(req.body?.channel || '').trim();
+    const channel: MerchantAlertChannel | null =
+      rawChannel === 'telegram' || rawChannel === 'whatsapp' || rawChannel === 'sms'
+        ? rawChannel
+        : null;
+    if (!channel) {
+      res.status(400).json({ ok: false, message: 'قناة الاختبار غير صالحة' });
+      return;
+    }
+    const cfg = await resolveConfigAsync(req.body);
+    const storeName = String(req.body?.storeName || 'متجرك').trim().slice(0, 120);
+    const result = await testMerchantAlertChannel(cfg, channel, storeName, dispatchWhatsAppMessage);
+    res.json(result);
+  });
+
   // 7. Anti-Fraud COD Pre-Check (Bot/Format Validation + IP Rate Limit + Blacklist + Daily Order Limit)
   app.post('/api/orders/fraud-check', async (req: Request, res: Response) => {
     const storeId = String(req.body?.storeId || '').trim();
@@ -3089,6 +3219,30 @@ export function createApiApp(): Express {
         }
       }
 
+      if (!existing) {
+        void getOrFetchServerConfig(storeId)
+          .then(cfg =>
+            dispatchMerchantAlert(
+              cfg,
+              {
+                storeId,
+                storeName: String(body?.storeName || '').trim().slice(0, 120) || undefined,
+                eventType: 'abandoned_order',
+                dedupeKey: `${storeId}:abandoned:${sessionId}`,
+                customerName: nextRecord.customerName,
+                customerPhone: nextRecord.customerPhone,
+                wilayaName: nextRecord.wilayaName,
+                commune: nextRecord.commune,
+                deliveryType: nextRecord.deliveryType,
+                bundleDetails: nextRecord.bundleLabel || nextRecord.landingPageTitle,
+                total: nextRecord.total
+              },
+              dispatchWhatsAppMessage
+            )
+          )
+          .catch(() => {});
+      }
+
       res.json({ ok: true, id: nextRecord.id, sessionId });
     }
   );
@@ -3629,7 +3783,7 @@ export function createApiApp(): Express {
     }
   });
 
-  mountPlatformRoutes(app, { getConfig: getOrFetchServerConfig });
+  mountPlatformRoutes(app, { getConfig: getOrFetchServerConfig, onPaymentAlert });
 
   return app;
 }

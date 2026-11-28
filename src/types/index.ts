@@ -276,9 +276,13 @@ export type CourierProvider = 'none' | 'ecotrack' | 'yalidine' | 'zrexpress' | '
 
 export type WhatsAppApiProvider = 'none' | 'meta_cloud' | 'evolution' | 'webhook';
 
+export type MerchantAlertWhatsAppMode = 'store_api' | 'callmebot';
+
+export type MerchantAlertSmsProvider = 'twilio' | 'vonage' | 'webhook';
+
 export interface ApiDiagnosticLog {
   id: string;
-  service: 'courier' | 'meta_capi' | 'tiktok' | 'google_sheet' | 'whatsapp';
+  service: 'courier' | 'meta_capi' | 'tiktok' | 'google_sheet' | 'whatsapp' | 'merchant_alert';
   action: string;
   status: 'success' | 'error';
   message: string;
@@ -340,6 +344,23 @@ export interface StoreApiConfig {
   baridimobRip?: string;
   baridimobAccountName?: string;
   baridimobInstructions?: string;
+  // Merchant Instant Alerts (Telegram, WhatsApp, SMS)
+  merchantAlertsOnNewOrder?: boolean;
+  merchantAlertsOnPayment?: boolean;
+  merchantAlertsOnAbandoned?: boolean;
+  telegramAlertsEnabled?: boolean;
+  telegramBotToken?: string;
+  telegramChatIds?: string;
+  merchantWhatsappAlertsEnabled?: boolean;
+  merchantWhatsappMode?: MerchantAlertWhatsAppMode;
+  merchantWhatsappRecipients?: string;
+  smsAlertsEnabled?: boolean;
+  smsProvider?: MerchantAlertSmsProvider;
+  smsAccountSid?: string;
+  smsAuthToken?: string;
+  smsFromNumber?: string;
+  smsWebhookUrl?: string;
+  smsRecipients?: string;
   diagnosticLogs: ApiDiagnosticLog[];
   updatedAt?: string;
 }

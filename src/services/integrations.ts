@@ -1507,6 +1507,57 @@ export function triggerAutoOrderWhatsApp(params: {
   }).catch(() => {});
 }
 
+export function triggerMerchantOrderAlert(params: {
+  storeId: string;
+  storeName: string;
+  eventType: 'new_order' | 'payment_received' | 'abandoned_order';
+  dedupeKey?: string;
+  orderNumber?: string;
+  customerName?: string;
+  customerPhone?: string;
+  wilayaName?: string;
+  commune?: string;
+  deliveryType?: 'home' | 'stop';
+  bundleDetails?: string;
+  total?: number;
+  paymentMethod?: 'cod' | 'chargily' | 'baridimob';
+  paymentStatus?: string;
+  paymentReference?: string;
+}): void {
+  if (!params.storeId || typeof fetch === 'undefined') return;
+  void fetch('/api/integrations/merchant-alert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  }).catch(() => {});
+}
+
+export async function testMerchantAlertChannel(params: {
+  storeId: string;
+  storeName: string;
+  channel: 'telegram' | 'whatsapp' | 'sms';
+  config: StoreApiConfig;
+}): Promise<{ ok: boolean; message: string; latencyMs?: number }> {
+  try {
+    const res = await fetch('/api/integrations/test-merchant-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    const data = await res.json().catch(() => null);
+    if (!data) {
+      return { ok: false, message: 'تعذر قراءة استجابة الخادم' };
+    }
+    return {
+      ok: Boolean(data.ok),
+      message: String(data.message || (data.ok ? 'تم الإرسال بنجاح' : 'تعذر الإرسال')),
+      latencyMs: typeof data.latencyMs === 'number' ? data.latencyMs : undefined
+    };
+  } catch {
+    return { ok: false, message: 'تعذر الاتصال بالخادم لاختبار التنبيه' };
+  }
+}
+
 export interface StoreAppsScriptOptions {
   name?: string;
   phone?: string;

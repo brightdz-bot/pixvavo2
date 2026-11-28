@@ -22,6 +22,14 @@ export interface PlatformStoreConfigGetter {
     baridimobAccountName?: string;
     baridimobInstructions?: string;
   } | undefined>;
+  onPaymentAlert?: (payload: {
+    storeId: string;
+    orderNumber: string;
+    paymentMethod: 'chargily' | 'baridimob';
+    paymentStatus: string;
+    amountDZD: number;
+    paymentReference?: string;
+  }) => void;
 }
 
 interface StoredTeamMember {
@@ -588,6 +596,17 @@ export function mountChargilyRawWebhookRoute(
           payment_status: nextStatus,
           payment_reference: String(checkout?.id || '')
         });
+
+        if (nextStatus === 'paid') {
+          configGetter.onPaymentAlert?.({
+            storeId,
+            orderNumber,
+            paymentMethod: 'chargily',
+            paymentStatus: 'paid',
+            amountDZD: Number(checkout?.amount || existing?.amountDZD || 0),
+            paymentReference: String(checkout?.id || '')
+          });
+        }
       }
 
       res.status(200).json({ ok: true, received: true });
@@ -1540,6 +1559,15 @@ export function mountPlatformRoutes(
       payment_status: 'pending_verification',
       payment_reference: transactionRef || null,
       payment_receipt_url: receiptImageUrl || null
+    });
+
+    configGetter.onPaymentAlert?.({
+      storeId,
+      orderNumber,
+      paymentMethod: 'baridimob',
+      paymentStatus: 'pending_verification',
+      amountDZD,
+      paymentReference: transactionRef || undefined
     });
 
     res.json({ ok: true, payment: platformState.orderPayments[key] });

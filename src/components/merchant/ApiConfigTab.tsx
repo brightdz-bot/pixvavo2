@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   ApiDiagnosticLog,
   CourierProvider,
+  MerchantAlertSmsProvider,
+  MerchantAlertWhatsAppMode,
   Store,
   StoreApiConfig,
   WhatsAppApiProvider
@@ -13,6 +15,7 @@ import {
   sendWhatsAppViaApi,
   testCourierApi,
   testGoogleSheetApi,
+  testMerchantAlertChannel,
   testTrackingServerEvent
 } from '../../services/integrations';
 import {
@@ -37,7 +40,9 @@ import {
   Send,
   CreditCard,
   Wallet,
-  Lock
+  Lock,
+  Bell,
+  Smartphone
 } from 'lucide-react';
 
 interface Props {
@@ -102,6 +107,8 @@ export const ApiConfigTab: React.FC<Props> = ({
   const [showTikTokToken, setShowTikTokToken] = useState(false);
   const [showWaToken, setShowWaToken] = useState(false);
   const [showChargilyKey, setShowChargilyKey] = useState(false);
+  const [showTelegramToken, setShowTelegramToken] = useState(false);
+  const [showSmsSecret, setShowSmsSecret] = useState(false);
 
   // Test states & feedback
   const [testingKey, setTestingKey] = useState<string | null>(null);
@@ -110,7 +117,47 @@ export const ApiConfigTab: React.FC<Props> = ({
   const [tiktokFeedback, setTiktokFeedback] = useState<TestFeedback>(null);
   const [sheetFeedback, setSheetFeedback] = useState<TestFeedback>(null);
   const [waFeedback, setWaFeedback] = useState<TestFeedback>(null);
+  const [telegramFeedback, setTelegramFeedback] = useState<TestFeedback>(null);
+  const [merchantWaFeedback, setMerchantWaFeedback] = useState<TestFeedback>(null);
+  const [smsFeedback, setSmsFeedback] = useState<TestFeedback>(null);
   const [waTestPhone, setWaTestPhone] = useState<string>(store.defaultWhatsapp || store.phone || '');
+
+  const countRecipients = (raw?: string) =>
+    String(raw || '')
+      .split(/[\n,;]+/)
+      .map(s => s.trim())
+      .filter(Boolean).length;
+
+  const handleTestMerchantAlert = async (channel: 'telegram' | 'whatsapp' | 'sms') => {
+    const key = `alert_${channel}`;
+    setTestingKey(key);
+    if (channel === 'telegram') setTelegramFeedback(null);
+    if (channel === 'whatsapp') setMerchantWaFeedback(null);
+    if (channel === 'sms') setSmsFeedback(null);
+
+    const res = await testMerchantAlertChannel({
+      storeId: store.id,
+      storeName: store.name,
+      channel,
+      config: form
+    });
+
+    if (channel === 'telegram') setTelegramFeedback(res);
+    if (channel === 'whatsapp') setMerchantWaFeedback(res);
+    if (channel === 'sms') setSmsFeedback(res);
+
+    const channelLabel =
+      channel === 'telegram' ? 'تيليغرام' : channel === 'whatsapp' ? 'واتساب التاجر' : 'الرسائل القصيرة SMS';
+    const updated = appendLogLocal(
+      'merchant_alert',
+      `اختبار تنبيه ${channelLabel}`,
+      res.ok,
+      res.message,
+      res.latencyMs
+    );
+    await onSaveConfig(updated);
+    setTestingKey(null);
+  };
 
   const [showAppsScriptCode, setShowAppsScriptCode] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -1081,6 +1128,478 @@ export const ApiConfigTab: React.FC<Props> = ({
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                   />
                 </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* 7. MERCHANT INSTANT ALERTS (TELEGRAM + WHATSAPP + SMS) */}
+        <section className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-5">
+          <div>
+            <h3 className="text-sm font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+              <Bell className="w-4 h-4 text-emerald-600" />
+              <span>7. تنبيهات التاجر الفورية (تيليغرام + واتساب + الرسائل القصيرة SMS)</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              استلم رسالة فورية على هاتفك أو مجموعة فريق العمل فور دخول طلبية جديدة أو وصول دفع إلكتروني أو طلبية متروكة. جميع المفاتيح تُحفظ على الخادم فقط.
+            </p>
+          </div>
+
+          {/* Event Toggles */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-2.5">
+            <div className="text-xs font-extrabold text-slate-800 dark:text-slate-100">
+              الأحداث التي تُرسل عنها إشعارات فورية:
+            </div>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.merchantAlertsOnNewOrder !== false}
+                  onChange={e =>
+                    setForm({ ...form, merchantAlertsOnNewOrder: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>طلبية جديدة</span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.merchantAlertsOnPayment !== false}
+                  onChange={e =>
+                    setForm({ ...form, merchantAlertsOnPayment: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>وصل أو تأكيد دفع إلكتروني</span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.merchantAlertsOnAbandoned !== false}
+                  onChange={e =>
+                    setForm({ ...form, merchantAlertsOnAbandoned: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>طلبية متروكة (مرّة واحدة لكل جلسة)</span>
+              </label>
+            </div>
+          </div>
+
+          {/* 7A. Telegram Bot Alerts */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5 text-sky-600" />
+                  <span>تنبيهات تيليغرام (مجاني وفوري — يدعم عدة حسابات أو مجموعات)</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  أنشئ بوت عبر BotFather واحصل على معرف المحادثة (Chat ID) الخاص بك أو بمجموعة فريق التأكيد.
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.telegramAlertsEnabled)}
+                  onChange={e => setForm({ ...form, telegramAlertsEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>{form.telegramAlertsEnabled ? 'مفعّل' : 'معطّل'}</span>
+              </label>
+            </div>
+
+            {form.telegramAlertsEnabled && (
+              <div className="space-y-3 pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">رمز البوت (Telegram Bot Token)</label>
+                    <div className="relative">
+                      <input
+                        type={showTelegramToken ? 'text' : 'password'}
+                        dir="ltr"
+                        value={form.telegramBotToken || ''}
+                        onChange={e => setForm({ ...form, telegramBotToken: e.target.value })}
+                        placeholder="123456789:AAH..."
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowTelegramToken(!showTelegramToken)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
+                      >
+                        {showTelegramToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold">معرفات المحادثات / المجموعات (Chat IDs)</label>
+                      <span className="text-[11px] text-slate-500 tabular-nums">
+                        المستلمون: {countRecipients(form.telegramChatIds)}
+                      </span>
+                    </div>
+                    <textarea
+                      rows={2}
+                      dir="ltr"
+                      value={form.telegramChatIds || ''}
+                      onChange={e => setForm({ ...form, telegramChatIds: e.target.value })}
+                      placeholder={"123456789\n-1009876543210"}
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      افصل بين المعرفات بفاصلة أو سطر جديد (لا تنسَ الضغط على Start في البوت أولاً).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    disabled={testingKey === 'alert_telegram'}
+                    onClick={() => handleTestMerchantAlert('telegram')}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    {testingKey === 'alert_telegram' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>إرسال رسالة تجريبية إلى تيليغرام</span>
+                  </button>
+                </div>
+
+                {telegramFeedback && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+                      telegramFeedback.ok
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                    }`}
+                  >
+                    <span>{telegramFeedback.message}</span>
+                    {telegramFeedback.latencyMs !== undefined && (
+                      <span className="font-mono text-[10px] tabular-nums">
+                        {telegramFeedback.latencyMs}ms
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 7B. Merchant WhatsApp Alerts */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
+                  <span>تنبيهات واتساب للتاجر والفريق (عدة أرقام)</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  استقبل تنبيه الطلبات مباشرة على أرقام واتساب الخاصة بك أو بموظفي التأكيد.
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.merchantWhatsappAlertsEnabled)}
+                  onChange={e =>
+                    setForm({ ...form, merchantWhatsappAlertsEnabled: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>{form.merchantWhatsappAlertsEnabled ? 'مفعّل' : 'معطّل'}</span>
+              </label>
+            </div>
+
+            {form.merchantWhatsappAlertsEnabled && (
+              <div className="space-y-3 pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {(
+                    [
+                      {
+                        id: 'store_api',
+                        title: 'عبر ربط واتساب المتجر (القسم 5)',
+                        desc: 'يستخدم Meta Cloud أو Evolution أو Webhook المهيأ أعلاه'
+                      },
+                      {
+                        id: 'callmebot',
+                        title: 'تنبيه شخصي مجاني (CallMeBot)',
+                        desc: 'بدون حساب أعمال — فقط الرقم ومفتاح التنبيه لكل مستلم'
+                      }
+                    ] as Array<{ id: MerchantAlertWhatsAppMode; title: string; desc: string }>
+                  ).map(opt => (
+                    <button
+                      type="button"
+                      key={opt.id}
+                      onClick={() => {
+                        setForm(prev => ({ ...prev, merchantWhatsappMode: opt.id }));
+                        setMerchantWaFeedback(null);
+                      }}
+                      className={`p-3 rounded-xl border text-right transition-colors cursor-pointer ${
+                        (form.merchantWhatsappMode || 'store_api') === opt.id
+                          ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/30'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">{opt.title}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold">
+                      {(form.merchantWhatsappMode || 'store_api') === 'callmebot'
+                        ? 'الأرقام ومفاتيح التنبيه (كل مستلم بصيغة الرقم:المفتاح)'
+                        : 'أرقام واتساب المستلمة (رقم التاجر وفريق العمل)'}
+                    </label>
+                    <span className="text-[11px] text-slate-500 tabular-nums">
+                      المستلمون: {countRecipients(form.merchantWhatsappRecipients)}
+                    </span>
+                  </div>
+                  <textarea
+                    rows={2}
+                    dir="ltr"
+                    value={form.merchantWhatsappRecipients || ''}
+                    onChange={e =>
+                      setForm({ ...form, merchantWhatsappRecipients: e.target.value })
+                    }
+                    placeholder={
+                      (form.merchantWhatsappMode || 'store_api') === 'callmebot'
+                        ? '213550123456:1234567\n213770987654:7654321'
+                        : '0550123456\n0770987654'
+                    }
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {(form.merchantWhatsappMode || 'store_api') === 'callmebot'
+                      ? 'افصل بين كل مستلم وآخر بسطر جديد أو فاصلة بصيغة 213XXXXXXXXX:APIKEY.'
+                      : 'افصل بين الأرقام بفاصلة أو سطر جديد، ويُحوّل الرقم الجزائري تلقائياً إلى الصيغة الدولية.'}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={testingKey === 'alert_whatsapp'}
+                  onClick={() => handleTestMerchantAlert('whatsapp')}
+                  className="px-4 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  {testingKey === 'alert_whatsapp' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>إرسال رسالة تجريبية إلى واتساب التاجر</span>
+                </button>
+
+                {merchantWaFeedback && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+                      merchantWaFeedback.ok
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                    }`}
+                  >
+                    <span>{merchantWaFeedback.message}</span>
+                    {merchantWaFeedback.latencyMs !== undefined && (
+                      <span className="font-mono text-[10px] tabular-nums">
+                        {merchantWaFeedback.latencyMs}ms
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 7C. SMS Alerts */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/70 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>تنبيهات الرسائل القصيرة SMS (تصل حتى بدون إنترنت)</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  يدعم Twilio و Vonage أو أي بوابة رسائل جزائرية / تطبيق بوابة SMS عبر الهاتف (Webhook).
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-bold shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.smsAlertsEnabled)}
+                  onChange={e => setForm({ ...form, smsAlertsEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-600 rounded"
+                />
+                <span>{form.smsAlertsEnabled ? 'مفعّل' : 'معطّل'}</span>
+              </label>
+            </div>
+
+            {form.smsAlertsEnabled && (
+              <div className="space-y-4 pt-2 border-t border-slate-200/80 dark:border-slate-700/60">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {(
+                    [
+                      { id: 'twilio', name: 'Twilio SMS', sub: 'بوابة دولية موثوقة' },
+                      { id: 'vonage', name: 'Vonage (Nexmo)', sub: 'يدعم العربية Unicode' },
+                      { id: 'webhook', name: 'بوابة مخصصة / أندرويد', sub: 'مزود محلي أو رابط HTTP' }
+                    ] as Array<{ id: MerchantAlertSmsProvider; name: string; sub: string }>
+                  ).map(opt => (
+                    <button
+                      type="button"
+                      key={opt.id}
+                      onClick={() => {
+                        setForm(prev => ({ ...prev, smsProvider: opt.id }));
+                        setSmsFeedback(null);
+                      }}
+                      className={`p-3 rounded-xl border text-right transition-colors cursor-pointer ${
+                        (form.smsProvider || 'twilio') === opt.id
+                          ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/30'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">{opt.name}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">{opt.sub}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {(form.smsProvider || 'twilio') === 'webhook' ? (
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold mb-1">
+                        رابط بوابة الرسائل القصيرة (SMS Webhook URL)
+                      </label>
+                      <input
+                        type="url"
+                        dir="ltr"
+                        value={form.smsWebhookUrl || ''}
+                        onChange={e => setForm({ ...form, smsWebhookUrl: e.target.value })}
+                        placeholder="https://your-sms-gateway.example.com/send"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-xs font-bold mb-1">
+                        {(form.smsProvider || 'twilio') === 'twilio'
+                          ? 'Account SID'
+                          : 'Vonage API Key'}
+                      </label>
+                      <input
+                        type="text"
+                        dir="ltr"
+                        value={form.smsAccountSid || ''}
+                        onChange={e => setForm({ ...form, smsAccountSid: e.target.value })}
+                        placeholder={
+                          (form.smsProvider || 'twilio') === 'twilio' ? 'ACxxxxxxxx...' : 'API Key'
+                        }
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold mb-1">
+                      {(form.smsProvider || 'twilio') === 'twilio'
+                        ? 'Auth Token'
+                        : (form.smsProvider || 'twilio') === 'vonage'
+                          ? 'API Secret'
+                          : 'رمز التوثيق السري (اختياري)'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showSmsSecret ? 'text' : 'password'}
+                        dir="ltr"
+                        value={form.smsAuthToken || ''}
+                        onChange={e => setForm({ ...form, smsAuthToken: e.target.value })}
+                        placeholder="••••••••••••"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSmsSecret(!showSmsSecret)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
+                      >
+                        {showSmsSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold mb-1">
+                      {(form.smsProvider || 'twilio') === 'twilio'
+                        ? 'رقم المرسل (From Number)'
+                        : 'اسم أو رقم المرسل (Sender ID)'}
+                    </label>
+                    <input
+                      type="text"
+                      dir="ltr"
+                      value={form.smsFromNumber || ''}
+                      onChange={e => setForm({ ...form, smsFromNumber: e.target.value })}
+                      placeholder={
+                        (form.smsProvider || 'twilio') === 'twilio' ? '+15017122661' : 'MyStore'
+                      }
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold">
+                        أرقام الهواتف المستلمة للرسائل القصيرة (تُنسق تلقائياً للجزائر +213)
+                      </label>
+                      <span className="text-[11px] text-slate-500 tabular-nums">
+                        المستلمون: {countRecipients(form.smsRecipients)}
+                      </span>
+                    </div>
+                    <textarea
+                      rows={2}
+                      dir="ltr"
+                      value={form.smsRecipients || ''}
+                      onChange={e => setForm({ ...form, smsRecipients: e.target.value })}
+                      placeholder={'0550123456\n0661234567'}
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={testingKey === 'alert_sms'}
+                  onClick={() => handleTestMerchantAlert('sms')}
+                  className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                >
+                  {testingKey === 'alert_sms' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>إرسال رسالة SMS تجريبية الآن</span>
+                </button>
+
+                {smsFeedback && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+                      smsFeedback.ok
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                    }`}
+                  >
+                    <span>{smsFeedback.message}</span>
+                    {smsFeedback.latencyMs !== undefined && (
+                      <span className="font-mono text-[10px] tabular-nums">
+                        {smsFeedback.latencyMs}ms
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

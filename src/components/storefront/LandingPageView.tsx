@@ -21,7 +21,8 @@ import {
   fetchOrderFromGoogleSheet,
   buildOrderConfirmationWhatsAppUrl,
   buildOrderTrackingWhatsAppUrl,
-  triggerAutoOrderWhatsApp
+  triggerAutoOrderWhatsApp,
+  triggerMerchantOrderAlert
 } from '../../services/integrations';
 import { validateAlgerianPhone, validateCustomerName } from '../../utils/orderValidation';
 import { SmartImage } from '../common/SmartImage';
@@ -1047,6 +1048,22 @@ export const LandingPageView: React.FC<Props> = ({
       total: finalTotalDisplay,
       wilayaName: selectedWilaya.nameAr,
       commune: selectedCommune
+    });
+
+    triggerMerchantOrderAlert({
+      storeId: store.id,
+      storeName: store.name,
+      eventType: 'new_order',
+      dedupeKey: `${store.id}:order:${orderNum}`,
+      orderNumber: orderNum,
+      customerName: cleanName,
+      customerPhone: cleanPhone,
+      wilayaName: selectedWilaya.nameAr,
+      commune: selectedCommune,
+      deliveryType,
+      bundleDetails,
+      total: finalTotalDisplay,
+      paymentMethod
     });
 
     sendOrderToGoogleSheet(effectiveWebhook, {

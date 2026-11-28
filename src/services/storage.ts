@@ -2635,6 +2635,22 @@ class StorageService {
       baridimobRip: '',
       baridimobAccountName: '',
       baridimobInstructions: '',
+      merchantAlertsOnNewOrder: true,
+      merchantAlertsOnPayment: true,
+      merchantAlertsOnAbandoned: true,
+      telegramAlertsEnabled: false,
+      telegramBotToken: '',
+      telegramChatIds: '',
+      merchantWhatsappAlertsEnabled: false,
+      merchantWhatsappMode: 'store_api',
+      merchantWhatsappRecipients: '',
+      smsAlertsEnabled: false,
+      smsProvider: 'twilio',
+      smsAccountSid: '',
+      smsAuthToken: '',
+      smsFromNumber: '',
+      smsWebhookUrl: '',
+      smsRecipients: '',
       diagnosticLogs: []
     };
   }
